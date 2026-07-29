@@ -76,3 +76,6 @@ jobs:
 
       - name: Frontend type check / build
         run: pnpm --dir apps/desktop-tauri run build
+
+      - name: Interaction guard script tests
+        run: node --test .github/scripts/interaction-guard.test.mjs

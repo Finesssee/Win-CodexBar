@@ -13,11 +13,15 @@ permissions:
 
 jobs:
   guard:
-    if: vars.CI_BUDGET_MODE != 'off'
+    # Skip maintainer-authored events entirely: no runner spin-up, no
+    # billed minutes. The guard only exists for untrusted authors.
+    if: >-
+      vars.CI_BUDGET_MODE != 'off' &&
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+        github.event.pull_request.author_association || github.event.issue.author_association)
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
-      - run: node --test .github/scripts/interaction-guard.test.mjs
       - run: node .github/scripts/interaction-guard.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

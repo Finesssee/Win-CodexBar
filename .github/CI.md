@@ -16,10 +16,8 @@ Exact commands run, in order:
 
 ```powershell
 cargo fmt --all --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml
-cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
 ```

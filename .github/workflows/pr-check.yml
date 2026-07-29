@@ -32,6 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Remove unused preinstalled Rust targets
+        run: rustup target remove x86_64-pc-windows-gnu i686-pc-windows-msvc
+        continue-on-error: true
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -41,9 +45,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            rust
-            apps/desktop-tauri/src-tauri
+          workspaces: .
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

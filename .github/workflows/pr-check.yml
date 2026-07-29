@@ -65,17 +65,11 @@ jobs:
       - name: Rust format check
         run: cargo fmt --all --check
 
-      - name: Shared Rust clippy
-        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - name: Rust clippy (workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Tauri Rust clippy
-        run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      - name: Shared Rust tests
-        run: cargo test --manifest-path rust/Cargo.toml
-
-      - name: Tauri Rust tests
-        run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
+      - name: Rust tests (workspace)
+        run: cargo test --workspace
 
       - name: Frontend tests
         run: pnpm --dir apps/desktop-tauri test

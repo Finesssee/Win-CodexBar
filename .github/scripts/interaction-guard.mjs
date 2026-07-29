@@ -4,6 +4,8 @@ const limits = {
   issue: { count: 10, label: "issues" },
   pull_request: { count: 4, label: "pull requests" },
 };
+// Must match the fromJSON list in the guard job's `if:` in
+// .github/workflows/interaction-guard.yml.
 const trustedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 export function isTrustedAuthor(authorAssociation) {
@@ -16,11 +18,7 @@ export function closePayload(kind) {
   return kind === "pull_request" ? { state: "closed" } : { state: "closed", state_reason: "not_planned" };
 }
 
-export function evaluateInteraction({ kind, authorAssociation, userCreatedAt, now, recentCount }) {
-  if (isTrustedAuthor(authorAssociation)) {
-    return { allowed: true };
-  }
-
+export function evaluateInteraction({ kind, userCreatedAt, now, recentCount }) {
   const created = Date.parse(userCreatedAt);
   const current = Date.parse(now);
   if (!Number.isFinite(created) || !Number.isFinite(current)) {
@@ -107,7 +105,6 @@ async function main() {
   const recent = await github(`/search/issues?q=${query}&per_page=1`);
   const result = evaluateInteraction({
     kind: target.kind,
-    authorAssociation: target.authorAssociation,
     userCreatedAt: user.created_at,
     now,
     recentCount: recent.total_count,

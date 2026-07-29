@@ -56,22 +56,13 @@ test("blocks the 5th pull request in 7 days", () => {
   assert.match(result.reason, /4 pull requests per 7 days/);
 });
 
-test("exempts maintainers even when over the limits", () => {
+test("trusts maintainer associations", () => {
   for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR"]) {
-    const result = evaluateInteraction({
-      kind: "pull_request",
-      author: "maintainer",
-      authorAssociation,
-      userCreatedAt: "2026-07-01T00:00:00.000Z",
-      now,
-      recentCount: 50,
-    });
-
-    assert.equal(result.allowed, true);
+    assert.equal(isTrustedAuthor(authorAssociation), true);
   }
 });
 
-test("does not exempt untrusted associations", () => {
+test("does not trust other associations", () => {
   assert.equal(isTrustedAuthor("CONTRIBUTOR"), false);
   assert.equal(isTrustedAuthor("NONE"), false);
   assert.equal(isTrustedAuthor(undefined), false);

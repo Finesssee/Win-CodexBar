@@ -6,6 +6,7 @@ import type {
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
+  SessionEquivalentForecastSnapshot,
 } from "../types/bridge";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
@@ -95,6 +96,23 @@ function formatReserveDescription(
       .replace("{}", String(h % 24));
   }
   return t("PanelReserveRunsOutInHours").replace("{}", String(h));
+}
+
+/** Upstream session-quota estimate: "Estimated: {n} session quota(s) left". */
+function formatSessionEquivalentEstimate(
+  forecast: SessionEquivalentForecastSnapshot | null | undefined,
+): string | null {
+  if (!forecast) return null;
+  const raw = forecast.estimatedWindowsToExhaustWeekly;
+  if (!Number.isFinite(raw)) return null;
+  const rounded = Math.round(Math.min(Math.max(raw, 0), 1_000_000) * 10) / 10;
+  const display =
+    Number.isInteger(rounded) || Math.abs(rounded - Math.round(rounded)) < 1e-9
+      ? String(Math.round(rounded))
+      : rounded.toFixed(1);
+  const unit =
+    rounded > 0 && rounded <= 1 ? "session quota" : "session quotas";
+  return `Estimated: ${display} ${unit} left`;
 }
 
 function formatCurrency(amount: number, code: string): string {
@@ -278,6 +296,7 @@ interface MetricEntry {
   label: string;
   snap: RateWindowSnapshot;
   resetFormatMode?: ResetTimeFormatMode;
+  sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }
 
 type MetricPaceView =
@@ -316,6 +335,7 @@ function MetricRow({
   expanded,
   onToggleExpanded,
   resetFormatMode,
+  sessionEquivalentForecast,
 }: {
   title: string;
   snap: RateWindowSnapshot;
@@ -326,6 +346,7 @@ function MetricRow({
   expanded: boolean;
   onToggleExpanded: () => void;
   resetFormatMode?: ResetTimeFormatMode;
+  sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }) {
   const { t } = useLocale();
   const isInformational = snap.isInformational === true;
@@ -352,6 +373,7 @@ function MetricRow({
     resetText !== null;
   const paceView = getMetricPaceView(snap);
   const reserveDescription = formatReserveDescription(snap, t);
+  const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
   const formatBudget = (value: number) =>
     value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value).toString();
   return (
@@ -415,6 +437,11 @@ function MetricRow({
           {reserveDescription && (
             <span className="menu-metric__reset">{reserveDescription}</span>
           )}
+        </div>
+      )}
+      {!isInformational && forecastText && (
+        <div className="menu-metric__row menu-metric__forecast">
+          <span className="menu-metric__pct">{forecastText}</span>
         </div>
       )}
     </div>
@@ -506,6 +533,7 @@ export default function MenuCard({
       id: "secondary",
       label: localizeWindowLabel(provider.secondaryLabel, t) || t("DetailWindowSecondary"),
       snap: provider.secondary,
+      sessionEquivalentForecast: provider.sessionEquivalentForecast,
     });
   if (provider.modelSpecific)
     metrics.push({
@@ -599,6 +627,7 @@ export default function MenuCard({
                   showAsUsed={showAsUsed}
                   expanded={expandedPaceWindow === m.id}
                   resetFormatMode={m.resetFormatMode}
+                  sessionEquivalentForecast={m.sessionEquivalentForecast}
                   onToggleExpanded={() => {
                     setExpandedPaceWindow((current) =>
                       current === m.id ? null : m.id,

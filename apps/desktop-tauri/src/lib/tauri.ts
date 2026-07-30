@@ -32,6 +32,7 @@ import type {
   SessionFocusResult,
   TrayVisibilityStatusDto,
   UsageSpendSummary,
+  CodexLocalProjectUsageSnapshot,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -233,6 +234,16 @@ export function getProviderLocalUsageSummary(
 
 export function getUsageSpendSummary(): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary");
+}
+
+export function getCodexWorkspacesSnapshot(options?: {
+  forceRefresh?: boolean;
+  historyDays?: number;
+}): Promise<CodexLocalProjectUsageSnapshot> {
+  return invoke<CodexLocalProjectUsageSnapshot>("get_codex_workspaces_snapshot", {
+    forceRefresh: options?.forceRefresh ?? null,
+    historyDays: options?.historyDays ?? null,
+  });
 }
 
 // ── Token account bridge ─────────────────────────────────────────────

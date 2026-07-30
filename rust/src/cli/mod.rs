@@ -19,6 +19,7 @@ pub mod serve;
 pub mod sessions;
 pub mod tty_runner;
 pub mod usage;
+pub mod workspaces;
 
 use clap::{Parser, Subcommand};
 
@@ -93,6 +94,9 @@ pub enum Commands {
 
     /// List, enable, disable, or test external hooks
     Hooks(hooks::HooksArgs),
+
+    /// List local Codex project/workspace usage
+    Workspaces(workspaces::WorkspacesArgs),
 }
 
 #[cfg(test)]

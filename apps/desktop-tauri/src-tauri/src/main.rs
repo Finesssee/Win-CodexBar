@@ -180,6 +180,7 @@ fn main() {
             commands::get_provider_chart_data,
             commands::get_provider_local_usage_summary,
             commands::get_usage_spend_summary,
+            commands::get_codex_workspaces_snapshot,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
             commands::get_provider_cookie_source_options,

@@ -797,7 +797,11 @@ impl Settings {
     }
 
     pub fn set_api_region(&mut self, id: ProviderId, region: impl Into<String>) {
-        self.provider_config_mut(id).api_region = Some(region.into());
+        let region = region.into();
+        if id == ProviderId::AlibabaTokenPlan {
+            self.alibaba_token_plan_region = region.clone();
+        }
+        self.provider_config_mut(id).api_region = Some(region);
     }
 
     /// Manual cookie header for `id`, or `""` if unset.

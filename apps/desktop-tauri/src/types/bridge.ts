@@ -200,6 +200,12 @@ export interface SettingsSnapshot {
   floatBarShowCost: boolean;
   /** Promote the tray icon out of the Windows hidden-icons overflow (Win11 only). */
   promoteTrayIcon?: boolean;
+  /** When true, show Claude Daily Routines quota row (default true). */
+  claudeDailyRoutinesUsageVisible: boolean;
+  /** Alibaba Token Plan region: cn | intl | cn-personal | intl-personal. */
+  alibabaTokenPlanRegion: string;
+  /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
+  weeklyProgressWorkDays?: number | null;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -261,6 +267,9 @@ export interface SettingsUpdate {
   floatBarShowResetInline?: boolean;
   floatBarShowCost?: boolean;
   promoteTrayIcon?: boolean;
+  claudeDailyRoutinesUsageVisible?: boolean;
+  alibabaTokenPlanRegion?: string;
+  weeklyProgressWorkDays?: number | null;
 }
 
 export interface UsageThresholdOverride {

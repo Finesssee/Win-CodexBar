@@ -512,6 +512,9 @@ pub struct SettingsSnapshot {
     float_bar_show_reset_inline: bool,
     float_bar_show_cost: bool,
     promote_tray_icon: bool,
+    claude_daily_routines_usage_visible: bool,
+    alibaba_token_plan_region: String,
+    weekly_progress_work_days: Option<u8>,
 }
 
 #[tauri::command]
@@ -612,6 +615,9 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
             float_bar_show_cost: settings.float_bar_show_cost,
             promote_tray_icon: settings.promote_tray_icon,
+            claude_daily_routines_usage_visible: settings.claude_daily_routines_usage_visible,
+            alibaba_token_plan_region: settings.alibaba_token_plan_region,
+            weekly_progress_work_days: settings.weekly_progress_work_days,
         }
     }
 }

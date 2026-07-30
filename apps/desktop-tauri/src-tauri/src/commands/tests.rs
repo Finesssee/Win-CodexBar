@@ -1150,6 +1150,23 @@ fn region_options_for_regional_provider() {
 }
 
 #[test]
+fn alibaba_token_plan_region_options() {
+    let opts = super::region_options_for("alibabatokenplan");
+    let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
+    let labels: Vec<_> = opts.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(values, vec!["cn", "intl", "cn-personal", "intl-personal"]);
+    assert_eq!(
+        labels,
+        vec![
+            "China Team",
+            "International Team",
+            "China Personal/Solo",
+            "International Personal/Solo"
+        ]
+    );
+}
+
+#[test]
 fn minimax_region_options_match_upstream_hosts() {
     let opts = super::region_options_for("minimax");
     let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();

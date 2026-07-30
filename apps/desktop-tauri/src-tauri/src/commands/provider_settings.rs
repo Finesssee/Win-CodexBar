@@ -127,6 +127,7 @@ fn region_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     use codexbar::core::ProviderId;
     Some(match provider_id {
         "alibaba" => ProviderId::Alibaba,
+        "alibabatokenplan" => ProviderId::AlibabaTokenPlan,
         "zai" => ProviderId::Zai,
         "minimax" => ProviderId::MiniMax,
         _ => return None,
@@ -586,6 +587,14 @@ pub fn region_options_for(provider_id: &str) -> Vec<RegionOption> {
                     .to_string(),
             },
         ],
+        "alibabatokenplan" => codexbar::providers::AlibabaTokenPlanRegion::ALL
+            .iter()
+            .copied()
+            .map(|region| RegionOption {
+                value: region.as_str().to_string(),
+                label: region.display_name().to_string(),
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }

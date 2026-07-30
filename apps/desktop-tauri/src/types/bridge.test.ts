@@ -86,6 +86,9 @@ describe("Language type", () => {
       floatBarDarkText: false,
       floatBarShowResetInline: false,
       floatBarShowCost: false,
+      claudeDailyRoutinesUsageVisible: true,
+      alibabaTokenPlanRegion: "cn",
+      weeklyProgressWorkDays: null,
     };
     expect(snap.uiLanguage).toBe("spanish");
 

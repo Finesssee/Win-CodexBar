@@ -137,6 +137,9 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarDarkText: false,
     floatBarShowResetInline: false,
     floatBarShowCost: false,
+    claudeDailyRoutinesUsageVisible: true,
+    alibabaTokenPlanRegion: "cn",
+    weeklyProgressWorkDays: null,
     ...overrides,
   };
 }

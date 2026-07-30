@@ -18,6 +18,17 @@ pub enum AlibabaTokenPlanRegion {
 }
 
 impl AlibabaTokenPlanRegion {
+    pub const ALL: [Self; 4] = [Self::Cn, Self::Intl, Self::CnPersonal, Self::IntlPersonal];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Cn => "China Team",
+            Self::Intl => "International Team",
+            Self::CnPersonal => "China Personal/Solo",
+            Self::IntlPersonal => "International Personal/Solo",
+        }
+    }
+
     /// Serde/settings raw string exactly as persisted.
     pub fn as_str(self) -> &'static str {
         match self {

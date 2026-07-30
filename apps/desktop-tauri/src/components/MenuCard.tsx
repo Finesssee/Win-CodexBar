@@ -654,30 +654,63 @@ export default function MenuCard({
           {provider.cost && (
             <section className="menu-card__group menu-card__cost">
               <div className="menu-card__group-title">
-                {t("DetailCostTitle")} — {provider.cost.period}
+                {provider.cost.balance != null && provider.cost.limit == null
+                  ? provider.cost.period || t("CreditsLabel")
+                  : `${t("DetailCostTitle")} — ${provider.cost.period}`}
               </div>
-              <div className="menu-card__cost-line">
-                {t("DetailCostUsed")}:{" "}
-                {provider.cost.formattedUsed ||
-                  formatCurrency(provider.cost.used, provider.cost.currencyCode)}
-                {provider.cost.limit != null && (
-                  <>
-                    {" / "}
-                    {provider.cost.formattedLimit ||
-                      formatCurrency(provider.cost.limit, provider.cost.currencyCode)}
-                  </>
-                )}
-              </div>
-              {provider.cost.remaining != null && (
-                <div className="menu-card__cost-line menu-card__cost-line--muted">
-                  {t("DetailCostRemaining")}:{" "}
-                  {formatCurrency(provider.cost.remaining, provider.cost.currencyCode)}
+              {provider.cost.balance != null && provider.cost.limit == null ? (
+                <div className="menu-card__cost-line">
+                  {provider.cost.formattedBalance ||
+                    formatCurrency(
+                      provider.cost.balance,
+                      provider.cost.currencyCode,
+                    )}
                 </div>
-              )}
-              {formattedCostReset && (
-                <div className="menu-card__cost-line menu-card__cost-line--muted">
-                  {t("DetailCostResets")}: {formattedCostReset}
-                </div>
+              ) : (
+                <>
+                  <div className="menu-card__cost-line">
+                    {t("DetailCostUsed")}:{" "}
+                    {provider.cost.formattedUsed ||
+                      formatCurrency(
+                        provider.cost.used,
+                        provider.cost.currencyCode,
+                      )}
+                    {provider.cost.limit != null && (
+                      <>
+                        {" / "}
+                        {provider.cost.formattedLimit ||
+                          formatCurrency(
+                            provider.cost.limit,
+                            provider.cost.currencyCode,
+                          )}
+                      </>
+                    )}
+                  </div>
+                  {provider.cost.balance != null && (
+                    <div className="menu-card__cost-line menu-card__cost-line--muted">
+                      {t("DetailCostBalance")}:{" "}
+                      {provider.cost.formattedBalance ||
+                        formatCurrency(
+                          provider.cost.balance,
+                          provider.cost.currencyCode,
+                        )}
+                    </div>
+                  )}
+                  {provider.cost.remaining != null && (
+                    <div className="menu-card__cost-line menu-card__cost-line--muted">
+                      {t("DetailCostRemaining")}:{" "}
+                      {formatCurrency(
+                        provider.cost.remaining,
+                        provider.cost.currencyCode,
+                      )}
+                    </div>
+                  )}
+                  {formattedCostReset && (
+                    <div className="menu-card__cost-line menu-card__cost-line--muted">
+                      {t("DetailCostResets")}: {formattedCostReset}
+                    </div>
+                  )}
+                </>
               )}
             </section>
           )}

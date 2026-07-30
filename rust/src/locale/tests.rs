@@ -79,6 +79,7 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailCostUsed, "使用済み"),
         (LocaleKey::DetailCostLimit, "上限"),
         (LocaleKey::DetailCostRemaining, "残り"),
+        (LocaleKey::DetailCostBalance, "残高"),
         (LocaleKey::DetailCostResets, "リセット"),
         (LocaleKey::DetailChartCost, "コスト（30日間）"),
         (LocaleKey::DetailChartCredits, "使用クレジット（30日間）"),

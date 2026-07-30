@@ -67,6 +67,9 @@ const settings: SettingsSnapshot = {
   floatBarDarkText: false,
   floatBarShowResetInline: false,
   floatBarShowCost: false,
+  claudeDailyRoutinesUsageVisible: true,
+  alibabaTokenPlanRegion: "cn",
+  weeklyProgressWorkDays: null,
   showResetWhenExhausted: false,
 };
 

@@ -459,6 +459,66 @@ describe("MenuCard", () => {
     expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
   });
 
+
+  it("shows spend used/limit plus balance secondary line", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        DetailCostTitle: "Cost",
+        DetailCostUsed: "Used",
+        DetailCostBalance: "Balance",
+        DetailCostRemaining: "Remaining",
+      }),
+    );
+    const snapshot = provider(null, 20);
+    snapshot.cost = {
+      used: 12.5,
+      limit: 100,
+      remaining: 87.5,
+      currencyCode: "USD",
+      period: "Extra usage",
+      resetsAt: null,
+      formattedUsed: "$12.50",
+      formattedLimit: "$100.00",
+      balance: 25.5,
+      formattedBalance: "$25.50",
+    };
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText(/Cost — Extra usage/)).toBeInTheDocument();
+    expect(screen.getByText(/Used:\s*\$12\.50\s*\/\s*\$100\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Balance:\s*\$25\.50/)).toBeInTheDocument();
+  });
+
+  it("renders balance-only cost as credits-style value", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        CreditsLabel: "Credits",
+        DetailCostTitle: "Cost",
+        DetailCostUsed: "Used",
+      }),
+    );
+    const snapshot = provider(null, 20);
+    snapshot.cost = {
+      used: 0,
+      limit: null,
+      remaining: null,
+      currencyCode: "USD",
+      period: "Extra usage",
+      resetsAt: null,
+      formattedUsed: "$0.00",
+      formattedLimit: null,
+      balance: 25.5,
+      formattedBalance: "$25.50",
+    };
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Extra usage")).toBeInTheDocument();
+    expect(screen.getByText("$25.50")).toBeInTheDocument();
+    expect(screen.queryByText(/Used:/)).not.toBeInTheDocument();
+  });
+
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({

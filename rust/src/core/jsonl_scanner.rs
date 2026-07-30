@@ -22,11 +22,10 @@ pub const DEFAULT_COST_SCAN_REFRESH_MIN_INTERVAL_SECS: u64 = 60;
 
 /// Options for a cost scan pass (disk-cache-backed full inspections).
 ///
-/// **Windows note:** the production [`crate::cost_scanner::CostScanner`] path
-/// does not load/save [`CostUsageCache`] today — it always full-walks sessions.
-/// These options are ready for the cache path (and unit-tested) so app-driven
-/// callers can pass [`CostScanOptions::app_driven`] once that path is wired
-/// (upstream issue #2089). Until then they do not change runtime freshness.
+/// Default debounce is 60s between full disk inspections when a
+/// [`CostUsageCache`] is present. Pass [`CostScanOptions::app_driven`] (interval 0)
+/// for explicit/CLI refreshes. Production [`crate::cost_scanner::CostScanner`]
+/// honors these options and persists cache under `{cache}/CodexBar/cost-usage/`.
 #[derive(Debug, Clone, Copy)]
 pub struct CostScanOptions {
     /// Minimum seconds between disk-cache-backed full inspections.
@@ -68,6 +67,11 @@ pub struct CostUsageCache {
     pub files: HashMap<String, CostUsageFileUsage>,
     /// Aggregated daily data: day_key -> model -> [input, cached, output]
     pub days: HashMap<String, HashMap<String, Vec<i32>>>,
+    /// Inclusive range covered by the last successful full inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_since_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_until_key: Option<String>,
 }
 
 /// Per-file usage tracking
@@ -844,26 +848,65 @@ impl JsonlScanner {
         CostUsageCache::default()
     }
 
-    /// Save cache to disk
+    /// Save cache to disk (temp sibling + copy into place).
     pub fn save_cache(provider: ProviderId, cache: &CostUsageCache, cache_root: Option<&Path>) {
         let cache_path = Self::cache_path(provider, cache_root);
 
-        if let Some(parent) = cache_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
+        let Some(parent) = cache_path.parent() else {
+            return;
+        };
+        let _ = fs::create_dir_all(parent);
 
-        if let Ok(json) = serde_json::to_string_pretty(cache) {
-            let _ = fs::write(&cache_path, json);
+        let Ok(json) = serde_json::to_string(cache) else {
+            return;
+        };
+
+        let tmp_name = format!(
+            ".{}.{}-{}.tmp",
+            provider.cli_name(),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let tmp_path = parent.join(tmp_name);
+        if fs::write(&tmp_path, json.as_bytes()).is_err() {
+            return;
         }
+        // `copy` replaces an existing target on Windows; prefer it over rename.
+        if fs::copy(&tmp_path, &cache_path).is_err() {
+            let _ = fs::write(&cache_path, json.as_bytes());
+        }
+        // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
+        let _ = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));
+    }
+
+    /// Default on-disk cache root: `%LOCALAPPDATA%\CodexBar` (via `dirs::cache_dir`).
+    pub fn default_cache_root() -> Option<PathBuf> {
+        dirs::cache_dir().map(|d| d.join("CodexBar"))
     }
 
     fn cache_path(provider: ProviderId, cache_root: Option<&Path>) -> PathBuf {
         let root = cache_root
             .map(|p| p.to_path_buf())
-            .or_else(|| dirs::cache_dir().map(|d| d.join("CodexBar")))
+            .or_else(Self::default_cache_root)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        root.join(format!("{}_cost_cache.json", provider.cli_name()))
+        // Mirror upstream layout: {cacheRoot}/cost-usage/{provider}-v1.json
+        root.join("cost-usage")
+            .join(format!("{}-v1.json", provider.cli_name()))
+    }
+
+    /// Whether `cache` covers the requested day window (for debounce short-circuit).
+    pub fn cache_covers_range(cache: &CostUsageCache, range: &CostUsageDayRange) -> bool {
+        match (&cache.scan_since_key, &cache.scan_until_key) {
+            (Some(since), Some(until)) => {
+                since.as_str() <= range.since_key.as_str()
+                    && until.as_str() >= range.until_key.as_str()
+            }
+            _ => !cache.days.is_empty() || !cache.files.is_empty(),
+        }
     }
 }
 

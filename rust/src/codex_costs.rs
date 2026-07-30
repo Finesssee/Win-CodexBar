@@ -48,6 +48,65 @@ pub(crate) fn add_codex_records_to_summary(
     (total_cost, has_tokens)
 }
 
+/// Merge billable records into a day→model→`[input,cached,output]` map.
+pub(crate) fn merge_codex_records_into_days(
+    days: &mut std::collections::HashMap<String, std::collections::HashMap<String, Vec<i32>>>,
+    records: &[CodexUsageRecord],
+) {
+    for record in records {
+        let models = days.entry(record.day_key.clone()).or_default();
+        let packed = models
+            .entry(record.model.clone())
+            .or_insert_with(|| vec![0, 0, 0]);
+        if packed.len() < 3 {
+            packed.resize(3, 0);
+        }
+        packed[0] = packed[0].saturating_add(record.input.max(0));
+        packed[1] = packed[1].saturating_add(record.cached.max(0));
+        packed[2] = packed[2].saturating_add(record.output.max(0));
+    }
+}
+
+/// Apply one packed `[input, cached, output]` triple to a summary.
+pub(crate) fn add_codex_packed_tokens_to_summary(
+    summary: &mut CostSummary,
+    model: &str,
+    packed: &[i32],
+) -> Option<f64> {
+    let input = packed.first().copied().unwrap_or(0);
+    let cached = packed.get(1).copied().unwrap_or(0);
+    let output = packed.get(2).copied().unwrap_or(0);
+    add_codex_tokens_to_summary(
+        summary,
+        model,
+        CodexTokenCounts::from_values(input, cached, output),
+    )
+}
+
+/// Fold day→model→packed token maps into a cost summary (range-filtered).
+/// Returns `(session_cost, has_tokens)` — caller adds cost to `total_cost_usd`.
+pub(crate) fn add_codex_days_map_to_summary(
+    summary: &mut CostSummary,
+    days: &std::collections::HashMap<String, std::collections::HashMap<String, Vec<i32>>>,
+    range: &CostUsageDayRange,
+) -> (f64, bool) {
+    let mut total_cost = 0.0;
+    let mut has_tokens = false;
+    for (day_key, models) in days {
+        if !CostUsageDayRange::is_in_range(day_key, &range.since_key, &range.until_key) {
+            continue;
+        }
+        for (model, packed) in models {
+            if let Some(cost) = add_codex_packed_tokens_to_summary(summary, model, packed) {
+                total_cost += cost;
+                has_tokens = true;
+            }
+        }
+    }
+    (total_cost, has_tokens)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
     let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
         Ok(result) => result,
@@ -153,6 +212,7 @@ fn add_codex_tokens_to_summary(
     Some(cost)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -> f64 {
     let mut total_cost = 0.0;
 

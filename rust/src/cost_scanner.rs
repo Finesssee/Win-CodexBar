@@ -2,9 +2,11 @@
 //!
 //! Scans local JSONL log files to aggregate token usage and calculate costs.
 //!
-//! Note: this path always full-walks session files. The disk-cache /
-//! [`crate::core::CostScanOptions`] debounce API in `jsonl_scanner` is not
-//! wired here yet (upstream #2089); app-level TTL still owns refresh pacing.
+//! Codex production path loads/saves [`crate::core::CostUsageCache`] under
+//! `{cache}/CodexBar/cost-usage/`, skips unchanged files by mtime+size, resumes
+//! partial files from `parsed_bytes`, honors [`crate::core::CostScanOptions`]
+//! debounce (default 60s; `app_driven` forces a fresh inspection), and checks
+//! cancel flags between files.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::Deserialize;
@@ -13,15 +15,19 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
-    add_codex_records_to_summary, codex_period_start, codex_scan_dates,
-    scan_codex_file_cost_for_range,
+    add_codex_days_map_to_summary, add_codex_records_to_summary, codex_period_start,
+    codex_scan_dates, merge_codex_records_into_days,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
-use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
+use crate::core::{
+    CostScanOptions, CostUsageCache, CostUsageDayRange, CostUsageFileUsage, CostUsagePricing,
+    JsonlScanner, ProviderId,
+};
 use crate::settings::Settings;
 
 /// Cost summary from scanning local logs
@@ -80,6 +86,40 @@ fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
 /// Fallback Claude model used when a scanned model isn't in the canonical
 /// pricing table (unknown or retired IDs). Prices as Sonnet 4.6.
 const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+
+fn unix_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn system_time_to_unix_ms(modified: Option<SystemTime>) -> i64 {
+    modified
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn rebuild_cache_days(cache: &mut CostUsageCache) {
+    cache.days.clear();
+    for usage in cache.files.values() {
+        for (day, models) in &usage.days {
+            let day_entry = cache.days.entry(day.clone()).or_default();
+            for (model, packed) in models {
+                let dest = day_entry
+                    .entry(model.clone())
+                    .or_insert_with(|| vec![0, 0, 0]);
+                if dest.len() < 3 {
+                    dest.resize(3, 0);
+                }
+                for (i, value) in packed.iter().take(3).enumerate() {
+                    dest[i] = dest[i].saturating_add(*value);
+                }
+            }
+        }
+    }
+}
 
 /// Claude cost calculation for the usage scanner.
 ///
@@ -218,15 +258,52 @@ struct ClaudeUsageRecord {
     cost: f64,
 }
 
+/// Per-pass counters for cache/resume behavior (tests + diagnostics).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CostScanStats {
+    pub files_seen: u32,
+    pub files_parsed: u32,
+    pub files_skipped: u32,
+    pub files_resumed: u32,
+    pub used_cache_debounce: bool,
+}
+
 /// Cost usage scanner
 pub struct CostScanner {
     days: u32,
+    options: CostScanOptions,
+    cache_root: Option<PathBuf>,
+    /// When set, bypass normal sessions-dir discovery (tests / inject roots).
+    sessions_dirs_override: Option<Vec<PathBuf>>,
 }
 
 impl CostScanner {
-    /// Create a new scanner for the last N days
+    /// Create a new scanner for the last N days (default 60s cache debounce).
     pub fn new(days: u32) -> Self {
-        Self { days }
+        Self {
+            days,
+            options: CostScanOptions::default(),
+            cache_root: None,
+            sessions_dirs_override: None,
+        }
+    }
+
+    /// Override scan options (e.g. [`CostScanOptions::app_driven`] for force refresh).
+    pub fn with_options(mut self, options: CostScanOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Override on-disk cache root (`{root}/cost-usage/…`).
+    pub fn with_cache_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.cache_root = Some(root.into());
+        self
+    }
+
+    /// Override Codex sessions roots (primarily for tests).
+    pub fn with_sessions_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.sessions_dirs_override = Some(dirs);
+        self
     }
 
     /// Scan Codex local logs
@@ -236,21 +313,76 @@ impl CostScanner {
 
     /// Scan Codex local logs, stopping early when the caller cancels the scan.
     pub fn scan_codex_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        self.scan_codex_detailed(cancel).0
+    }
+
+    /// Scan Codex and return cache/resume stats alongside the summary.
+    pub fn scan_codex_detailed(&self, cancel: Option<&AtomicBool>) -> (CostSummary, CostScanStats) {
         let mut summary = CostSummary::default();
+        let mut stats = CostScanStats::default();
         let today = Local::now().date_naive();
         let start_date = codex_period_start(today, self.days);
         let range = CostUsageDayRange::new(start_date, today);
+        let now_ms = unix_now_ms();
 
         summary.period_start = Some(start_date);
         summary.period_end = Some(today);
+
+        let cache_root = self.cache_root.as_deref();
+        let mut cache = JsonlScanner::load_cache(ProviderId::Codex, cache_root);
+
+        // Debounce: rebuild from disk cache without re-walking session files.
+        if JsonlScanner::should_skip_cached_scan(&cache, self.options, now_ms)
+            && JsonlScanner::cache_covers_range(&cache, &range)
+            && (!cache.days.is_empty() || !cache.files.is_empty())
+        {
+            stats.used_cache_debounce = true;
+            let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
+            summary.total_cost_usd += cost;
+            summary.sessions_count = cache
+                .files
+                .values()
+                .filter(|usage| {
+                    usage.days.keys().any(|day| {
+                        CostUsageDayRange::is_in_range(day, &range.since_key, &range.until_key)
+                    })
+                })
+                .count() as u32;
+
+            // Pi-compatible sessions are outside the Codex JSONL cache.
+            let mut seen_pi = HashSet::new();
+            crate::pi_session_cost::scan_pi_compatible_into(
+                &mut summary,
+                crate::pi_session_cost::PiMappedProvider::Codex,
+                self.days,
+                cancel,
+                &mut seen_pi,
+            );
+            return (summary, stats);
+        }
 
         for sessions_dir in self.get_codex_sessions_dirs() {
             if is_cancelled(cancel) {
                 break;
             }
             if sessions_dir.exists() {
-                self.scan_codex_sessions_dir(&sessions_dir, &range, &mut summary, cancel);
+                self.scan_codex_sessions_dir(
+                    &sessions_dir,
+                    &range,
+                    &mut summary,
+                    &mut cache,
+                    cancel,
+                    &mut stats,
+                );
             }
+        }
+
+        if !is_cancelled(cancel) {
+            rebuild_cache_days(&mut cache);
+            cache.last_scan_unix_ms = now_ms;
+            cache.scan_since_key = Some(range.since_key.clone());
+            cache.scan_until_key = Some(range.until_key.clone());
+            JsonlScanner::save_cache(ProviderId::Codex, &cache, cache_root);
         }
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
@@ -263,7 +395,7 @@ impl CostScanner {
             &mut seen_pi,
         );
 
-        summary
+        (summary, stats)
     }
 
     /// Scan Claude local logs
@@ -312,6 +444,9 @@ impl CostScanner {
     }
 
     fn get_codex_sessions_dirs(&self) -> Vec<PathBuf> {
+        if let Some(dirs) = &self.sessions_dirs_override {
+            return dirs.clone();
+        }
         let settings = Settings::load();
         let codex_home = std::env::var("CODEX_HOME").ok();
         codex_sessions_dir_candidates(
@@ -327,7 +462,9 @@ impl CostScanner {
         sessions_dir: &Path,
         range: &CostUsageDayRange,
         summary: &mut CostSummary,
+        cache: &mut CostUsageCache,
         cancel: Option<&AtomicBool>,
+        stats: &mut CostScanStats,
     ) {
         // Iterate through the date-based directory structure with one day of
         // padding on each side. Codex JSONL timestamps are UTC, while the tray
@@ -352,7 +489,7 @@ impl CostScanner {
                     }
                     let path = entry.path();
                     if path.extension().is_some_and(|e| e == "jsonl") {
-                        self.parse_codex_file(&path, summary, cancel);
+                        self.parse_codex_file(&path, range, summary, cache, cancel, stats);
                     }
                 }
             }
@@ -381,27 +518,119 @@ impl CostScanner {
     fn parse_codex_file(
         &self,
         path: &Path,
+        range: &CostUsageDayRange,
         summary: &mut CostSummary,
+        cache: &mut CostUsageCache,
         cancel: Option<&AtomicBool>,
+        stats: &mut CostScanStats,
     ) {
         if is_cancelled(cancel) {
             return;
         }
-        let today = Local::now().date_naive();
-        let start_date = codex_period_start(today, self.days);
-        let range = CostUsageDayRange::new(start_date, today);
-        let parse_result = match JsonlScanner::parse_codex_file(path, &range, 0, None, None) {
+        stats.files_seen += 1;
+
+        let metadata = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let size = metadata.len() as i64;
+        let mtime_ms = system_time_to_unix_ms(metadata.modified().ok());
+        let path_key = path.to_string_lossy().to_string();
+        let cached = cache.files.get(&path_key).cloned();
+
+        // Unchanged complete file: reuse packed days, skip re-parse.
+        if let Some(entry) = &cached
+            && entry.mtime_unix_ms == mtime_ms
+            && entry.size == size
+            && entry.parsed_bytes.unwrap_or(0) >= size
+            && size > 0
+        {
+            let (session_cost, has_tokens) =
+                add_codex_days_map_to_summary(summary, &entry.days, range);
+            if has_tokens {
+                summary.total_cost_usd += session_cost;
+                summary.sessions_count += 1;
+            }
+            stats.files_skipped += 1;
+            return;
+        }
+
+        // Growing file: resume from last parsed offset when safe.
+        if let Some(entry) = &cached {
+            let start_offset = entry.parsed_bytes.unwrap_or(0);
+            if size > entry.size
+                && start_offset > 0
+                && start_offset <= size
+                && entry.last_totals.is_some()
+            {
+                let parse_result = match JsonlScanner::parse_codex_file(
+                    path,
+                    range,
+                    start_offset,
+                    entry.last_model.clone(),
+                    entry.last_totals.clone(),
+                ) {
+                    Ok(result) => result,
+                    Err(_) => return,
+                };
+
+                let mut days = entry.days.clone();
+                merge_codex_records_into_days(&mut days, &parse_result.records);
+
+                let (session_cost, has_tokens) =
+                    add_codex_days_map_to_summary(summary, &days, range);
+                if has_tokens {
+                    summary.total_cost_usd += session_cost;
+                    summary.sessions_count += 1;
+                }
+
+                cache.files.insert(
+                    path_key,
+                    CostUsageFileUsage {
+                        mtime_unix_ms: mtime_ms,
+                        size,
+                        days,
+                        parsed_bytes: Some(parse_result.parsed_bytes),
+                        last_model: parse_result.last_model.or_else(|| entry.last_model.clone()),
+                        last_totals: parse_result
+                            .last_totals
+                            .or_else(|| entry.last_totals.clone()),
+                    },
+                );
+                stats.files_resumed += 1;
+                return;
+            }
+        }
+
+        // Full parse from offset 0.
+        let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
             Ok(result) => result,
             Err(_) => return,
         };
 
+        let mut days = HashMap::new();
+        merge_codex_records_into_days(&mut days, &parse_result.records);
+
         let (session_cost, has_tokens) =
-            add_codex_records_to_summary(summary, &parse_result.records, &range);
+            add_codex_records_to_summary(summary, &parse_result.records, range);
 
         if has_tokens {
             summary.total_cost_usd += session_cost;
             summary.sessions_count += 1;
         }
+
+        cache.files.insert(
+            path_key,
+            CostUsageFileUsage {
+                mtime_unix_ms: mtime_ms,
+                size,
+                days,
+                parsed_bytes: Some(parse_result.parsed_bytes),
+                last_model: parse_result.last_model,
+                last_totals: parse_result.last_totals,
+            },
+        );
+        stats.files_parsed += 1;
     }
 
     fn walk_claude_files<F>(
@@ -649,34 +878,22 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
 
     match provider {
         "codex" => {
-            // Scan Codex logs by day across Windows and WSL session roots.
-            let sessions_dirs = scanner.get_codex_sessions_dirs();
-            for days_ago in 0..days {
-                let date = today - Duration::days(days_ago as i64);
-                let date_str = date.format("%Y-%m-%d").to_string();
-                let range = CostUsageDayRange::new(date, date);
-                let mut day_cost = 0.0;
-
-                for sessions_dir in sessions_dirs.iter().filter(|dir| dir.exists()) {
-                    for scan_date in codex_scan_dates(&range) {
-                        let year = scan_date.format("%Y").to_string();
-                        let month = scan_date.format("%m").to_string();
-                        let day = scan_date.format("%d").to_string();
-                        let day_dir = sessions_dir.join(&year).join(&month).join(&day);
-                        if !day_dir.exists() {
-                            continue;
-                        }
-                        if let Ok(entries) = fs::read_dir(&day_dir) {
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                if path.extension().is_some_and(|e| e == "jsonl") {
-                                    day_cost += scan_codex_file_cost_for_range(&path, &range);
-                                }
-                            }
-                        }
-                    }
-                }
-                daily_costs.insert(date_str, day_cost);
+            // Warm/refresh the disk cache (honors debounce), then price from packed days.
+            let _ = scanner.scan_codex();
+            let cache = JsonlScanner::load_cache(ProviderId::Codex, scanner.cache_root.as_deref());
+            for (day_key, models) in &cache.days {
+                let Some(slot) = daily_costs.get_mut(day_key) else {
+                    continue;
+                };
+                let Some(day) = CostUsageDayRange::parse_day_key(day_key) else {
+                    continue;
+                };
+                let day_range = CostUsageDayRange::new(day, day);
+                let mut one_day = HashMap::new();
+                one_day.insert(day_key.clone(), models.clone());
+                let mut scratch = CostSummary::default();
+                let (cost, _) = add_codex_days_map_to_summary(&mut scratch, &one_day, &day_range);
+                *slot = cost;
             }
         }
         "claude" => {
@@ -835,11 +1052,13 @@ mod tests {
             ts = recent
         )
         .unwrap();
-        drop(file);
-
         let scanner = CostScanner::new(30);
         let mut summary = CostSummary::default();
-        scanner.parse_codex_file(&path, &mut summary, None);
+        let today = Local::now().date_naive();
+        let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
+        let mut cache = CostUsageCache::default();
+        let mut stats = CostScanStats::default();
+        scanner.parse_codex_file(&path, &range, &mut summary, &mut cache, None, &mut stats);
 
         assert_eq!(summary.sessions_count, 1);
         assert_eq!(summary.input_tokens, 125);
@@ -1026,5 +1245,131 @@ mod tests {
         let counted = for_each_claude_usage_record(&path, &cutoff, &mut seen, None, |_| {});
         assert_eq!(counted, 1, "incomplete final JSONL line must be processed");
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn write_codex_session_fixture(sessions_root: &Path, name: &str, input_tokens: u64) -> PathBuf {
+        let today = Local::now().date_naive();
+        let day_dir = sessions_root
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let path = day_dir.join(name);
+        let ts = (Utc::now() - Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        let body = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{input_tokens},"cached_input_tokens":0,"output_tokens":5}}}}}}}}
+"#
+        );
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        write_codex_session_fixture(&sessions, "a.jsonl", 100);
+        write_codex_session_fixture(&sessions, "b.jsonl", 200);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        let (summary1, stats1) = scanner.scan_codex_detailed(None);
+        assert_eq!(stats1.files_parsed, 2, "first pass parses both files");
+        assert_eq!(stats1.files_skipped, 0);
+        assert!(summary1.total_cost_usd > 0.0);
+        assert_eq!(summary1.sessions_count, 2);
+
+        // Second pass with default debounce still inspects files but skips re-parse.
+        // Use app_driven so we exercise per-file mtime skip rather than whole-scan debounce.
+        let (summary2, stats2) = scanner.scan_codex_detailed(None);
+        assert_eq!(stats2.files_seen, 2);
+        assert_eq!(stats2.files_skipped, 2, "cache hit skips re-parse");
+        assert_eq!(stats2.files_parsed, 0);
+        assert_eq!(summary2.input_tokens, summary1.input_tokens);
+        assert!((summary2.total_cost_usd - summary1.total_cost_usd).abs() < 1e-9);
+
+        // Force path already used above; confirm debounce short-circuit with default options.
+        let debounced = CostScanner::new(7)
+            .with_options(CostScanOptions::default())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (summary3, stats3) = debounced.scan_codex_detailed(None);
+        assert!(
+            stats3.used_cache_debounce,
+            "default options debounce within 60s"
+        );
+        assert_eq!(stats3.files_seen, 0);
+        assert_eq!(summary3.input_tokens, summary1.input_tokens);
+
+        // app_driven after debounce still re-reads (skip via mtime, not full re-parse).
+        let forced = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (_, stats4) = forced.scan_codex_detailed(None);
+        assert!(!stats4.used_cache_debounce);
+        assert_eq!(stats4.files_skipped, 2);
+        assert_eq!(stats4.files_parsed, 0);
+    }
+
+    #[test]
+    fn cost_scan_cancel_stops_between_files() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        write_codex_session_fixture(&sessions, "a.jsonl", 100);
+        write_codex_session_fixture(&sessions, "b.jsonl", 200);
+        write_codex_session_fixture(&sessions, "c.jsonl", 300);
+
+        let cancel = AtomicBool::new(true);
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, stats) = scanner.scan_codex_detailed(Some(&cancel));
+        assert_eq!(stats.files_seen, 0, "cancel before first file stops walk");
+        assert_eq!(summary.sessions_count, 0);
+    }
+
+    #[test]
+    fn cost_scan_resumes_appended_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let path = write_codex_session_fixture(&sessions, "grow.jsonl", 50);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (s1, st1) = scanner.scan_codex_detailed(None);
+        assert_eq!(st1.files_parsed, 1);
+        assert_eq!(s1.input_tokens, 50);
+
+        // Append another cumulative token_count event (100 total => +50 delta).
+        let ts = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let extra = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}}}}}
+"#
+        );
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(extra.as_bytes()).unwrap();
+        drop(f);
+
+        // Bump mtime/size visibly on some FS by rewriting metadata via reopen.
+        let (s2, st2) = scanner.scan_codex_detailed(None);
+        assert_eq!(st2.files_resumed, 1, "grown file resumes from offset");
+        assert_eq!(st2.files_parsed, 0);
+        assert_eq!(s2.input_tokens, 100);
     }
 }

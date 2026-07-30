@@ -5,7 +5,7 @@
 use clap::Args;
 
 use super::usage::{OutputFormat, ProviderSelection};
-use crate::core::ProviderId;
+use crate::core::{CostScanOptions, ProviderId};
 use crate::cost_scanner::{CostScanner, CostSummary};
 
 /// Arguments for the cost command
@@ -46,7 +46,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
 
     let providers = ProviderSelection::from_arg(args.provider.as_deref())?;
     let use_color = !args.no_color && is_terminal();
-    let scanner = CostScanner::new(args.days);
+    let scanner = CostScanner::new(args.days).with_options(CostScanOptions::app_driven());
 
     tracing::debug!(
         "Running cost command: providers={:?}, format={:?}, days={}",

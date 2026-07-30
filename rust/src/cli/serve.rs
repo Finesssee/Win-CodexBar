@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::usage::ProviderSelection;
-use crate::core::{FetchContext, ProviderId, SourceMode, instantiate_provider};
+use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::CostScanner;
 
 const DASHBOARD_TOKEN_ENV: &str = "CODEXBAR_DASHBOARD_TOKEN";
@@ -305,7 +305,7 @@ async fn cost_response(provider: Option<&str>) -> String {
             return json_response(400, serde_json::json!({ "error": error.to_string() }));
         }
     };
-    let scanner = CostScanner::new(30);
+    let scanner = CostScanner::new(30).with_options(CostScanOptions::app_driven());
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         let (supported, summary) = match provider_id {

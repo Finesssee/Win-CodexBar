@@ -155,6 +155,12 @@ pub(super) struct RawSettings {
     float_bar_show_cost: bool,
     #[serde(default = "default_true")]
     promote_tray_icon: bool,
+    #[serde(default = "default_true")]
+    claude_daily_routines_usage_visible: bool,
+    #[serde(default)]
+    weekly_progress_work_days: Option<u8>,
+    #[serde(default = "default_alibaba_token_plan_region")]
+    alibaba_token_plan_region: String,
 }
 
 impl Default for RawSettings {
@@ -246,6 +252,9 @@ impl Default for RawSettings {
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
             float_bar_show_cost: s.float_bar_show_cost,
             promote_tray_icon: s.promote_tray_icon,
+            claude_daily_routines_usage_visible: s.claude_daily_routines_usage_visible,
+            weekly_progress_work_days: s.weekly_progress_work_days,
+            alibaba_token_plan_region: s.alibaba_token_plan_region,
         }
     }
 }
@@ -382,6 +391,11 @@ impl From<RawSettings> for Settings {
             &mut provider_configs,
             ProviderId::MiniMax,
             raw.minimax_api_region,
+        );
+        set_region(
+            &mut provider_configs,
+            ProviderId::AlibabaTokenPlan,
+            Some(raw.alibaba_token_plan_region.clone()).filter(|v| !v.trim().is_empty()),
         );
 
         set_header(
@@ -520,6 +534,16 @@ impl From<RawSettings> for Settings {
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
             float_bar_show_cost: raw.float_bar_show_cost,
             promote_tray_icon: raw.promote_tray_icon,
+            claude_daily_routines_usage_visible: raw.claude_daily_routines_usage_visible,
+            weekly_progress_work_days: raw.weekly_progress_work_days,
+            alibaba_token_plan_region: {
+                let trimmed = raw.alibaba_token_plan_region.trim();
+                if trimmed.is_empty() {
+                    "cn".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            },
         }
     }
 }

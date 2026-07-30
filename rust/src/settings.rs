@@ -258,10 +258,28 @@ pub struct Settings {
     /// Defaults on so upgrades keep the icon pinned to the taskbar notification area.
     #[serde(default = "default_true")]
     pub promote_tray_icon: bool,
+
+    /// When true, show Claude Daily Routines usage in extras.
+    /// Defaults on to match upstream visibility.
+    #[serde(default = "default_true")]
+    pub claude_daily_routines_usage_visible: bool,
+
+    /// Optional work-week length [2,6] for session-equivalent weekly forecast.
+    /// `None` uses wall-clock time until weekly reset.
+    #[serde(default)]
+    pub weekly_progress_work_days: Option<u8>,
+
+    /// Alibaba Token Plan API region: "cn" | "intl" | "cn-personal" | "intl-personal".
+    #[serde(default = "default_alibaba_token_plan_region")]
+    pub alibaba_token_plan_region: String,
 }
 
 fn default_window_scale_percent() -> u16 {
     100
+}
+
+fn default_alibaba_token_plan_region() -> String {
+    "cn".to_string()
 }
 
 pub fn clamp_window_scale_percent(value: u16) -> u16 {
@@ -375,6 +393,7 @@ const DEFAULT_PROVIDER_SOURCE: &str = "auto";
 fn default_api_region(id: ProviderId) -> &'static str {
     match id {
         ProviderId::Alibaba => crate::providers::AlibabaRegion::Singapore.settings_value(),
+        ProviderId::AlibabaTokenPlan => "cn",
         ProviderId::Zai | ProviderId::MiniMax => "global",
         _ => "",
     }
@@ -449,6 +468,9 @@ impl Default for Settings {
             float_bar_show_reset_inline: false,
             float_bar_show_cost: false,
             promote_tray_icon: true,
+            claude_daily_routines_usage_visible: true,
+            weekly_progress_work_days: None,
+            alibaba_token_plan_region: default_alibaba_token_plan_region(),
         }
     }
 }
@@ -765,6 +787,9 @@ impl Settings {
 
     /// API region for `id`, or the provider-specific default if unset.
     pub fn api_region(&self, id: ProviderId) -> &str {
+        if id == ProviderId::AlibabaTokenPlan && !self.alibaba_token_plan_region.trim().is_empty() {
+            return self.alibaba_token_plan_region.as_str();
+        }
         self.provider_configs
             .get(&id)
             .and_then(|c| c.api_region.as_deref())

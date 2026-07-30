@@ -342,39 +342,26 @@ impl ClaudeWebApiFetcher {
             snapshot = snapshot.with_model_specific(m);
         }
 
-        for (id, title, window) in [
-            (
-                "claude-oauth-apps",
-                "OAuth apps",
-                usage
-                    .seven_day_oauth_apps
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
-            ),
-            (
-                "claude-routines",
-                "Daily Routines",
-                usage
-                    .seven_day_routines
-                    .as_ref()
-                    .map(|w| self.to_rate_window(w, Some(10080))),
-            ),
-        ] {
-            if let Some(window) = window {
-                snapshot
-                    .extra_rate_windows
-                    .push(NamedRateWindow::new(id, title, window));
-            }
-        }
-        snapshot
-            .extra_rate_windows
-            .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
+        let show_routines = crate::settings::Settings::load().claude_daily_routines_usage_visible;
+        append_web_extra_windows(
+            &mut snapshot,
+            usage
+                .seven_day_oauth_apps
+                .as_ref()
+                .map(|w| self.to_rate_window(w, Some(10080))),
+            super::scoped_weekly::scoped_weekly_windows(&usage.limits),
+            usage
+                .seven_day_routines
+                .as_ref()
+                .map(|w| self.to_rate_window(w, Some(10080))),
+            show_routines,
+        );
 
-        if let Some(ref acc) = account {
-            if let Some(ref email) = acc.email_address {
+        if let Some(acc) = &account {
+            if let Some(email) = &acc.email_address {
                 snapshot = snapshot.with_email(email.clone());
             }
-            if let Some(ref tier) = acc.rate_limit_tier {
+            if let Some(tier) = &acc.rate_limit_tier {
                 snapshot = snapshot.with_login_method(super::claude_plan_label(tier));
             }
         }
@@ -382,9 +369,10 @@ impl ClaudeWebApiFetcher {
         let mut result = ProviderFetchResult::new(snapshot, "web");
 
         // Add cost info if available
-        if let Some(extra) = extra_usage
-            && extra.is_enabled.unwrap_or(false)
-        {
+        let mut cost = extra_usage.and_then(|extra| {
+            if !extra.is_enabled.unwrap_or(false) {
+                return None;
+            }
             let used_cents = extra.used_credits.unwrap_or(0.0);
             let limit_cents = extra.monthly_credit_limit;
             let currency = extra.currency.unwrap_or_else(|| "USD".to_string());
@@ -398,7 +386,21 @@ impl ClaudeWebApiFetcher {
             if let Some(limit) = limit_cents {
                 cost = cost.with_limit(limit / 100.0);
             }
+            Some(cost)
+        });
 
+        // Best-effort prepaid Extra usage balance (non-fatal).
+        // Gate: cookie session is already available on this path; skip only when
+        // cookie source is explicitly off.
+        let settings = crate::settings::Settings::load();
+        let cookie_source = settings.claude_cookie_source();
+        if !cookie_source.eq_ignore_ascii_case("off")
+            && let Some(balance) = self.get_prepaid_credits(&org_id, &headers).await
+        {
+            cost = Some(apply_prepaid_balance(balance, cost));
+        }
+
+        if let Some(cost) = cost {
             result = result.with_cost(cost);
         }
 
@@ -554,6 +556,35 @@ impl ClaudeWebApiFetcher {
         parse_json_with_body(response, "extra usage").await
     }
 
+    /// Best-effort prepaid Extra usage balance. Non-fatal on any failure.
+    async fn get_prepaid_credits(
+        &self,
+        org_id: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Option<PrepaidBalance> {
+        let url = format!(
+            "{}/organizations/{}/prepaid/credits",
+            Self::BASE_URL,
+            org_id
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers.clone())
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .ok()?;
+
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let body = response.text().await.ok()?;
+        parse_prepaid_balance(&body)
+    }
+
     /// Get account info
     async fn get_account_info(
         &self,
@@ -656,6 +687,75 @@ fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
             Some(value.to_string())
         }
     })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PrepaidBalance {
+    amount_dollars: f64,
+    currency_code: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrepaidCreditsResponse {
+    amount: f64,
+    currency: String,
+}
+
+/// Parse `{ amount: cents, currency }` → dollars when finite ≥ 0.
+fn parse_prepaid_balance(body: &str) -> Option<PrepaidBalance> {
+    let response: PrepaidCreditsResponse = serde_json::from_str(body).ok()?;
+    if !response.amount.is_finite() || response.amount < 0.0 {
+        return None;
+    }
+    let currency = response.currency.trim().to_ascii_uppercase();
+    if currency.is_empty() {
+        return None;
+    }
+    Some(PrepaidBalance {
+        amount_dollars: response.amount / 100.0,
+        currency_code: currency,
+    })
+}
+
+/// Attach prepaid balance onto an existing same-currency cost, otherwise create
+/// an "Extra usage" snapshot carrying only the balance.
+fn apply_prepaid_balance(balance: PrepaidBalance, existing: Option<CostSnapshot>) -> CostSnapshot {
+    match existing {
+        Some(cost)
+            if cost
+                .currency_code
+                .eq_ignore_ascii_case(&balance.currency_code) =>
+        {
+            cost.with_balance(balance.amount_dollars)
+        }
+        _ => CostSnapshot::new(0.0, balance.currency_code, "Extra usage")
+            .with_balance(balance.amount_dollars),
+    }
+}
+
+/// Push extras in upstream order: oauth-apps → scoped weekly → routines (optional).
+fn append_web_extra_windows(
+    snapshot: &mut UsageSnapshot,
+    oauth_apps: Option<RateWindow>,
+    scoped_weekly: Vec<NamedRateWindow>,
+    routines: Option<RateWindow>,
+    show_routines: bool,
+) {
+    if let Some(window) = oauth_apps {
+        snapshot.extra_rate_windows.push(NamedRateWindow::new(
+            "claude-oauth-apps",
+            "OAuth apps",
+            window,
+        ));
+    }
+    snapshot.extra_rate_windows.extend(scoped_weekly);
+    if show_routines && let Some(window) = routines {
+        snapshot.extra_rate_windows.push(NamedRateWindow::new(
+            "claude-routines",
+            "Daily Routines",
+            window,
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -936,5 +1036,109 @@ mod tests {
         assert_eq!(extra.is_enabled, Some(true));
         assert_eq!(extra.monthly_credit_limit, Some(2000.0));
         assert_eq!(extra.used_credits, Some(550.0));
+    }
+
+    #[test]
+    fn parse_prepaid_balance_converts_cents_to_dollars() {
+        let balance = super::parse_prepaid_balance(r#"{"amount": 2550, "currency": "usd"}"#)
+            .expect("prepaid balance");
+        assert!((balance.amount_dollars - 25.5).abs() < f64::EPSILON);
+        assert_eq!(balance.currency_code, "USD");
+    }
+
+    #[test]
+    fn parse_prepaid_balance_rejects_negative_or_non_finite() {
+        assert!(super::parse_prepaid_balance(r#"{"amount": -1, "currency": "USD"}"#).is_none());
+        assert!(super::parse_prepaid_balance(r#"{"amount": 10, "currency": "  "}"#).is_none());
+    }
+
+    #[test]
+    fn apply_prepaid_balance_attaches_to_same_currency_cost() {
+        let existing = crate::core::CostSnapshot::new(1.0, "USD", "Monthly").with_limit(20.0);
+        let balance = super::PrepaidBalance {
+            amount_dollars: 12.34,
+            currency_code: "USD".into(),
+        };
+        let cost = super::apply_prepaid_balance(balance, Some(existing));
+        assert_eq!(cost.balance, Some(12.34));
+        assert!((cost.used - 1.0).abs() < f64::EPSILON);
+        assert_eq!(cost.limit, Some(20.0));
+        assert_eq!(cost.period, "Monthly");
+    }
+
+    #[test]
+    fn apply_prepaid_balance_creates_extra_usage_when_missing_or_mismatch() {
+        let balance = super::PrepaidBalance {
+            amount_dollars: 5.0,
+            currency_code: "USD".into(),
+        };
+        let created = super::apply_prepaid_balance(balance.clone(), None);
+        assert_eq!(created.balance, Some(5.0));
+        assert_eq!(created.period, "Extra usage");
+        assert!((created.used - 0.0).abs() < f64::EPSILON);
+
+        let eur = crate::core::CostSnapshot::new(2.0, "EUR", "Monthly");
+        let replaced = super::apply_prepaid_balance(balance, Some(eur));
+        assert_eq!(replaced.currency_code, "USD");
+        assert_eq!(replaced.period, "Extra usage");
+        assert_eq!(replaced.balance, Some(5.0));
+    }
+
+    #[test]
+    fn web_extras_order_oauth_scoped_then_routines() {
+        use crate::core::{NamedRateWindow, RateWindow, UsageSnapshot};
+
+        let mut snapshot = UsageSnapshot::new(RateWindow::new(10.0));
+        super::append_web_extra_windows(
+            &mut snapshot,
+            Some(RateWindow::new(1.0)),
+            vec![NamedRateWindow::new(
+                "claude-weekly-scoped-fable",
+                "Fable only",
+                RateWindow::new(2.0),
+            )],
+            Some(RateWindow::new(3.0)),
+            true,
+        );
+
+        let ids: Vec<&str> = snapshot
+            .extra_rate_windows
+            .iter()
+            .map(|w| w.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "claude-oauth-apps",
+                "claude-weekly-scoped-fable",
+                "claude-routines"
+            ]
+        );
+    }
+
+    #[test]
+    fn web_extras_hide_routines_when_disabled() {
+        use crate::core::{NamedRateWindow, RateWindow, UsageSnapshot};
+
+        let mut snapshot = UsageSnapshot::new(RateWindow::new(10.0));
+        super::append_web_extra_windows(
+            &mut snapshot,
+            Some(RateWindow::new(1.0)),
+            vec![NamedRateWindow::new(
+                "claude-weekly-scoped-fable",
+                "Fable only",
+                RateWindow::new(2.0),
+            )],
+            Some(RateWindow::new(3.0)),
+            false,
+        );
+
+        assert!(
+            snapshot
+                .extra_rate_windows
+                .iter()
+                .all(|w| w.id != "claude-routines")
+        );
+        assert_eq!(snapshot.extra_rate_windows.len(), 2);
     }
 }

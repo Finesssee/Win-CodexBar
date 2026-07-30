@@ -13,6 +13,7 @@ fn test_settings_default() {
     assert!(!settings.predictive_pace_warning_enabled);
     assert!(!settings.float_bar_show_cost);
     assert!(settings.promote_tray_icon);
+    assert!(settings.claude_daily_routines_usage_visible);
 }
 
 #[test]

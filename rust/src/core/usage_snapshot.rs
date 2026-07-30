@@ -227,6 +227,10 @@ pub struct CostSnapshot {
 
     /// When this snapshot was captured
     pub updated_at: DateTime<Utc>,
+
+    /// Remaining prepaid balance (currency units), separate from used/limit spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<f64>,
 }
 
 impl CostSnapshot {
@@ -239,12 +243,19 @@ impl CostSnapshot {
             period: period.into(),
             resets_at: None,
             updated_at: Utc::now(),
+            balance: None,
         }
     }
 
     /// Builder pattern: set limit
     pub fn with_limit(mut self, limit: f64) -> Self {
         self.limit = finite_amount(limit);
+        self
+    }
+
+    /// Builder pattern: set remaining prepaid balance (finite, ≥ 0 only)
+    pub fn with_balance(mut self, balance: f64) -> Self {
+        self.balance = finite_amount(balance);
         self
     }
 
@@ -278,6 +289,12 @@ impl CostSnapshot {
     /// Format the limit as a currency string
     pub fn format_limit(&self) -> Option<String> {
         self.limit.map(|l| format_currency(l, &self.currency_code))
+    }
+
+    /// Format the prepaid balance as a currency string
+    pub fn format_balance(&self) -> Option<String> {
+        self.balance
+            .map(|b| format_currency(b, &self.currency_code))
     }
 }
 

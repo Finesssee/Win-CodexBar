@@ -25,6 +25,9 @@ pub enum ConfigCommand {
         /// Output format: json or toml
         #[arg(short, long, default_value = "json")]
         format: String,
+        /// Include raw secrets (default: redact)
+        #[arg(long = "show-secrets", default_value_t = false)]
+        show_secrets: bool,
     },
     /// List providers and enabled state
     Providers,
@@ -60,7 +63,10 @@ pub enum ConfigCommand {
 pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
     match args.command {
         ConfigCommand::Validate => validate_config().await,
-        ConfigCommand::Dump { format } => dump_config(&format).await,
+        ConfigCommand::Dump {
+            format,
+            show_secrets,
+        } => dump_config(&format, show_secrets).await,
         ConfigCommand::Providers => list_providers().await,
         ConfigCommand::Enable { provider } => set_provider_enabled(&provider, true).await,
         ConfigCommand::Disable { provider } => set_provider_enabled(&provider, false).await,
@@ -213,16 +219,18 @@ fn print_validation_summary(errors: &[String], warnings: &[String]) -> anyhow::R
 }
 
 /// Dump configuration to stdout
-async fn dump_config(format: &str) -> anyhow::Result<()> {
-    let settings = Settings::load();
+async fn dump_config(format: &str, show_secrets: bool) -> anyhow::Result<()> {
+    let value = build_dump_value()?;
+    let value = sanitize_settings_for_dump(value, show_secrets);
 
     match format.to_lowercase().as_str() {
         "json" => {
-            let json = serde_json::to_string_pretty(&settings)?;
+            let json = serde_json::to_string_pretty(&value)?;
             println!("{}", json);
         }
         "toml" => {
-            let toml = toml::to_string_pretty(&settings)?;
+            let toml = toml::to_string_pretty(&value)
+                .map_err(|e| anyhow::anyhow!("Failed to convert dump to TOML: {e}"))?;
             println!("{}", toml);
         }
         _ => {
@@ -231,6 +239,84 @@ async fn dump_config(format: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn build_dump_value() -> anyhow::Result<serde_json::Value> {
+    let settings = Settings::load();
+    let mut root = serde_json::to_value(&settings)?;
+
+    if let Some(obj) = root.as_object_mut() {
+        obj.insert(
+            "api_keys".to_string(),
+            serde_json::to_value(ApiKeys::load())?,
+        );
+        obj.insert(
+            "manual_cookies".to_string(),
+            serde_json::to_value(ManualCookies::load())?,
+        );
+
+        let token_accounts = TokenAccountStore::new()
+            .load()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, data)| (id.cli_name().to_string(), data))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        obj.insert(
+            "token_accounts".to_string(),
+            serde_json::to_value(token_accounts)?,
+        );
+    }
+
+    Ok(root)
+}
+
+/// Recursively redact secret-shaped fields for `config dump`.
+///
+/// When `show_secrets` is true the value is returned unchanged.
+fn sanitize_settings_for_dump(value: serde_json::Value, show_secrets: bool) -> serde_json::Value {
+    if show_secrets {
+        return value;
+    }
+    redact_secrets_value(value)
+}
+
+fn is_secret_field_name(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|c| *c != '_')
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "apikey"
+            | "secretkey"
+            | "cookieheader"
+            | "manualcookieheader"
+            | "token"
+            | "apitoken"
+            | "httpproxypassword"
+            | "password"
+    )
+}
+
+fn redact_secrets_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                if is_secret_field_name(&key) {
+                    out.insert(key, serde_json::Value::String("[REDACTED]".to_string()));
+                } else {
+                    out.insert(key, redact_secrets_value(child));
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(redact_secrets_value).collect())
+        }
+        other => other,
+    }
 }
 
 /// List provider enabled state.
@@ -385,4 +471,80 @@ async fn show_paths() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_settings_for_dump;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_settings_for_dump_redacts_secret_fields() {
+        let raw = json!({
+            "http_proxy_password": "proxy-secret",
+            "provider_configs": {
+                "claude": {
+                    "manual_cookie_header": "sessionKey=abc",
+                    "api_token": "tok-123"
+                }
+            },
+            "api_keys": {
+                "keys": {
+                    "zai": {
+                        "api_key": "cb_test_api_key_456",
+                        "label": "Work",
+                        "saved_at": "2026-01-01"
+                    }
+                }
+            },
+            "manual_cookies": {
+                "cookies": {
+                    "claude": {
+                        "cookie_header": "sessionKey=secret-cookie",
+                        "saved_at": "2026-01-01"
+                    }
+                }
+            },
+            "token_accounts": {
+                "factory": {
+                    "accounts": [{
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "label": "Team",
+                        "token": "raw-token-value",
+                        "added_at": 1
+                    }]
+                }
+            },
+            "secret_key": "top-secret"
+        });
+
+        let redacted = sanitize_settings_for_dump(raw, false);
+        let text = serde_json::to_string(&redacted).expect("serialize");
+
+        assert!(text.contains("[REDACTED]"));
+        assert!(!text.contains("proxy-secret"));
+        assert!(!text.contains("sessionKey=abc"));
+        assert!(!text.contains("tok-123"));
+        assert!(!text.contains("cb_test_api_key_456"));
+        assert!(!text.contains("secret-cookie"));
+        assert!(!text.contains("raw-token-value"));
+        assert!(!text.contains("top-secret"));
+        // Non-secret identity fields stay.
+        assert!(text.contains("Work"));
+        assert!(text.contains("Team"));
+        assert!(text.contains("11111111-1111-1111-1111-111111111111"));
+    }
+
+    #[test]
+    fn sanitize_settings_for_dump_show_secrets_keeps_raw() {
+        let raw = json!({
+            "api_key": "keep-me",
+            "nested": { "token": "also-keep", "label": "Team" }
+        });
+
+        let out = sanitize_settings_for_dump(raw.clone(), true);
+        assert_eq!(out, raw);
+        assert_eq!(out["api_key"], "keep-me");
+        assert_eq!(out["nested"]["token"], "also-keep");
+    }
 }

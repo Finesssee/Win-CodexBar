@@ -38,7 +38,7 @@ import AgentSessions from "../components/AgentSessions";
 const HAS_DASHBOARD = new Set([
   "abacus", "alibaba", "alibabatokenplan", "amp", "augment",
   "azureopenai", "bedrock", "claude", "codex", "codebuff",
-  "aiand", "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt",
+  "aiand", "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate",
   "doubao", "elevenlabs", "factory", "gemini", "grok", "groq",
   "infini", "jetbrains", "kilo", "kimi", "kimik2", "kiro", "manus",
   "mimo", "minimax", "mistral", "nanogpt", "ollama", "openaiapi",
@@ -49,7 +49,7 @@ const HAS_DASHBOARD = new Set([
 /** Provider IDs that have a status page URL in the backend */
 const HAS_STATUS_PAGE = new Set([
   "alibabatokenplan", "amp", "augment", "azureopenai", "bedrock",
-  "claude", "codex", "copilot", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "elevenlabs",
+  "claude", "codex", "copilot", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate", "elevenlabs",
   "gemini", "grok", "groq", "kiro", "mistral", "openaiapi",
   "openrouter", "vertexai", "windsurf",
 ]);

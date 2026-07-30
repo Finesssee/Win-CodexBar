@@ -215,6 +215,8 @@ function providerSourceHintShort(
     case "infini":
     case "manus":
     case "mimo":
+    case "zoommate":
+    case "t3chat":
     case "commandcode":
       return t("ProviderSourceWebShort");
     case "gemini":

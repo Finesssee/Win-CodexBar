@@ -141,6 +141,14 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: true,
                 cookie_name: None,
             }),
+            ProviderId::ZoomMate => Some(TokenAccountSupport {
+                title: "Session tokens",
+                subtitle: "Store multiple ZoomMate Cookie headers or credits/status cURL captures.",
+                placeholder: "Cookie: ... or curl 'https://ai.zoom.us/.../credits/status' -H 'Authorization: Bearer ...'",
+                injection: TokenInjection::CookieHeader,
+                requires_manual_cookie_source: true,
+                cookie_name: None,
+            }),
             ProviderId::Mistral => Some(TokenAccountSupport {
                 title: "Session tokens",
                 subtitle: "Store multiple Mistral Cookie headers.",
@@ -308,7 +316,8 @@ impl TokenAccountSupport {
             | ProviderId::Zed
             | ProviderId::CrossModel
             | ProviderId::LongCat
-            | ProviderId::Wayfinder => None,
+            | ProviderId::Wayfinder
+            | ProviderId::QwenCloud => None,
         }
     }
 

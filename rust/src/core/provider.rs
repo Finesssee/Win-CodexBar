@@ -75,6 +75,8 @@ pub enum ProviderId {
     ClinePass,
     LongCat,
     Neuralwatt,
+    ZoomMate,
+    QwenCloud,
 }
 
 impl ProviderId {
@@ -145,6 +147,8 @@ impl ProviderId {
             ProviderId::ClinePass,
             ProviderId::LongCat,
             ProviderId::Neuralwatt,
+            ProviderId::ZoomMate,
+            ProviderId::QwenCloud,
         ]
     }
 
@@ -215,6 +219,8 @@ impl ProviderId {
             ProviderId::ClinePass => "clinepass",
             ProviderId::LongCat => "longcat",
             ProviderId::Neuralwatt => "neuralwatt",
+            ProviderId::ZoomMate => "zoommate",
+            ProviderId::QwenCloud => "qwen-cloud",
         }
     }
 
@@ -287,6 +293,8 @@ impl ProviderId {
             ProviderId::ClinePass => "ClinePass",
             ProviderId::LongCat => "LongCat",
             ProviderId::Neuralwatt => "Neuralwatt",
+            ProviderId::ZoomMate => "ZoomMate",
+            ProviderId::QwenCloud => "Qwen Cloud",
         }
     }
 
@@ -362,6 +370,8 @@ impl ProviderId {
             ProviderId::ZenMux => None,
             ProviderId::ClinePass => None,
             ProviderId::Neuralwatt => None,
+            ProviderId::ZoomMate => Some("zoommate.zoom.us"),
+            ProviderId::QwenCloud => Some("qwencloud.com"),
         }
     }
 
@@ -394,7 +404,7 @@ impl ProviderId {
             "jetbrains" | "jetbrains-ai" | "jetbrains ai" | "intellij" => {
                 Some(ProviderId::JetBrains)
             }
-            "alibaba" | "tongyi" | "qianwen" | "qwen" => Some(ProviderId::Alibaba),
+            "alibaba" | "tongyi" | "qianwen" => Some(ProviderId::Alibaba),
             "alibabatokenplan" | "alibaba-token-plan" | "alibaba token plan" | "alibaba-token"
             | "bailian-token-plan" => Some(ProviderId::AlibabaTokenPlan),
             "nanogpt" | "nano-gpt" => Some(ProviderId::NanoGPT),
@@ -443,6 +453,10 @@ impl ProviderId {
             "clinepass" | "cline-pass" | "cline" => Some(ProviderId::ClinePass),
             "longcat" | "long-cat" | "lc" => Some(ProviderId::LongCat),
             "neuralwatt" | "neural-watt" | "nw" | "neural" => Some(ProviderId::Neuralwatt),
+            "qwen-cloud" | "qwencloud" | "qwen" | "qwen-token-plan" | "qwen cloud" => {
+                Some(ProviderId::QwenCloud)
+            }
+            "zoommate" | "zoom-mate" | "zoom mate" => Some(ProviderId::ZoomMate),
             _ => None,
         }
     }
@@ -655,7 +669,9 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("aws bedrock", ProviderId::Bedrock);
     map.insert("tongyi", ProviderId::Alibaba);
     map.insert("qianwen", ProviderId::Alibaba);
-    map.insert("qwen", ProviderId::Alibaba);
+    map.insert("qwen", ProviderId::QwenCloud);
+    map.insert("qwencloud", ProviderId::QwenCloud);
+    map.insert("qwen-token-plan", ProviderId::QwenCloud);
     map.insert("infini-ai", ProviderId::Infini);
     map.insert("pplx", ProviderId::Perplexity);
     map.insert("abacus-ai", ProviderId::Abacus);
@@ -693,7 +709,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 64);
+        assert_eq!(all.len(), 66);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Kimi));
@@ -738,6 +754,8 @@ mod tests {
         assert!(all.contains(&ProviderId::ClinePass));
         assert!(all.contains(&ProviderId::LongCat));
         assert!(all.contains(&ProviderId::Neuralwatt));
+        assert!(all.contains(&ProviderId::ZoomMate));
+        assert!(all.contains(&ProviderId::QwenCloud));
     }
 
     #[test]
@@ -901,6 +919,34 @@ mod tests {
             ProviderId::from_cli_name("qianwen"),
             Some(ProviderId::Alibaba)
         );
-        assert_eq!(ProviderId::from_cli_name("qwen"), Some(ProviderId::Alibaba));
+    }
+
+    #[test]
+    fn test_provider_id_qwen_cloud() {
+        assert_eq!(ProviderId::QwenCloud.cli_name(), "qwen-cloud");
+        assert_eq!(ProviderId::QwenCloud.display_name(), "Qwen Cloud");
+        assert_eq!(ProviderId::QwenCloud.cookie_domain(), Some("qwencloud.com"));
+        assert_eq!(
+            ProviderId::from_cli_name("qwen-cloud"),
+            Some(ProviderId::QwenCloud)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("qwencloud"),
+            Some(ProviderId::QwenCloud)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("qwen"),
+            Some(ProviderId::QwenCloud)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("qwen-token-plan"),
+            Some(ProviderId::QwenCloud)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("qwen cloud"),
+            Some(ProviderId::QwenCloud)
+        );
+        // Bare "qwen" must not resolve to Alibaba Coding Plan.
+        assert_ne!(ProviderId::from_cli_name("qwen"), Some(ProviderId::Alibaba));
     }
 }

@@ -55,6 +55,7 @@ pub mod openrouter;
 pub mod perplexity;
 pub mod poe;
 pub mod qoder;
+pub mod qwencloud;
 pub mod sakana;
 pub mod stepfun;
 pub mod sub2api;
@@ -67,12 +68,13 @@ pub mod windsurf;
 pub mod zai;
 pub mod zed;
 pub mod zenmux;
+pub mod zoommate;
 
 // Re-export provider implementations
 pub use abacus::AbacusProvider;
 pub use aiand::AiAndProvider;
 pub use alibaba::{AlibabaProvider, AlibabaRegion};
-pub use alibabatokenplan::AlibabaTokenPlanProvider;
+pub use alibabatokenplan::{AlibabaTokenPlanProvider, AlibabaTokenPlanRegion};
 pub use amp::AmpProvider;
 pub use antigravity::AntigravityProvider;
 pub use augment::AugmentProvider;
@@ -121,6 +123,7 @@ pub use openrouter::OpenRouterProvider;
 pub use perplexity::PerplexityProvider;
 pub use poe::PoeProvider;
 pub use qoder::QoderProvider;
+pub use qwencloud::QwenCloudProvider;
 pub use sakana::SakanaProvider;
 pub use stepfun::StepFunProvider;
 pub use sub2api::Sub2ApiProvider;
@@ -133,6 +136,7 @@ pub use windsurf::WindsurfProvider;
 pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
 pub use zenmux::ZenMuxProvider;
+pub use zoommate::ZoomMateProvider;
 
 pub(crate) fn browser_cookie_header(
     domains: &[&str],

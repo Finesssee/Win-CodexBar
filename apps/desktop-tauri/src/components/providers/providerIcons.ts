@@ -208,6 +208,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   poe:         { id: "poe",         brandColor: "#5d5fef", fallbackLetter: "P" },
   devin:       { id: "devin",       brandColor: "#111827", fallbackLetter: "D" },
   zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
+  qwencloud:   { id: "qwencloud",   brandColor: "#615CED", fallbackLetter: "Q" },
 };
 
 const ALIASES: Record<string, string> = {
@@ -217,7 +218,9 @@ const ALIASES: Record<string, string> = {
   "jetbrains ai": "jetbrains",
   "kimi k2": "kimik2",
   tongyi: "alibaba",
-  qwen: "alibaba",
+  qwen: "qwencloud",
+  "qwen cloud": "qwencloud",
+  "qwen-cloud": "qwencloud",
   qianwen: "alibaba",
   "alibaba token plan": "alibabatokenplan",
   "alibaba-token-plan": "alibabatokenplan",

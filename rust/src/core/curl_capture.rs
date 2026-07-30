@@ -27,10 +27,9 @@ pub fn request_url(raw: &str) -> Option<String> {
         m.as_str().to_string()
     } else if let Some(m) = caps.get(3) {
         unescape_shell_segment(m.as_str(), false)
-    } else if let Some(m) = caps.get(4) {
-        unescape_shell_segment(m.as_str(), false)
     } else {
-        return None;
+        let m = caps.get(4)?;
+        unescape_shell_segment(m.as_str(), false)
     };
     let value = value.trim();
     if value.is_empty() {

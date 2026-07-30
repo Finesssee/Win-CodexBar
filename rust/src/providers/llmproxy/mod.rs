@@ -300,10 +300,7 @@ fn parse_summary(data: &[u8]) -> Result<LLMProxySummary, ProviderError> {
             .iter()
             .filter_map(|group| group.remaining_percent)
             .min_by(|left, right| left.total_cmp(right)),
-        next_reset_at: quota_groups
-            .iter()
-            .filter_map(|group| parse_date(group.reset_time.as_deref()))
-            .min(),
+        next_reset_at: next_reset_at_from_groups(&quota_groups, Utc::now()),
         top_providers: provider_summaries,
     })
 }
@@ -367,6 +364,16 @@ fn token_total(tokens: Option<&TokenStats>) -> u64 {
                 + tokens.output.unwrap_or(0)
         })
         .unwrap_or(0)
+}
+
+/// Pick the soonest upcoming reset. Already-elapsed times are ignored so a stale
+/// past reset cannot win over a real future one (upstream #2335).
+fn next_reset_at_from_groups(groups: &[QuotaGroup], now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    groups
+        .iter()
+        .filter_map(|group| parse_date(group.reset_time.as_deref()))
+        .filter(|t| *t > now)
+        .min()
 }
 
 fn parse_date(raw: Option<&str>) -> Option<DateTime<Utc>> {
@@ -460,5 +467,45 @@ mod tests {
         let snapshot = snapshot_from_summary(&summary);
         assert_eq!(snapshot.primary.used_percent, 74.5);
         assert_eq!(snapshot.extra_rate_windows.len(), 2);
+    }
+
+    #[test]
+    fn next_reset_at_ignores_elapsed_resets() {
+        let now = DateTime::parse_from_rfc3339("2026-05-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let groups = vec![
+            QuotaGroup {
+                remaining_percent: Some(10.0),
+                reset_time: Some("2026-05-10T00:00:00Z".into()), // past
+            },
+            QuotaGroup {
+                remaining_percent: Some(40.0),
+                reset_time: Some("2026-05-20T00:00:00Z".into()), // future
+            },
+            QuotaGroup {
+                remaining_percent: Some(50.0),
+                reset_time: Some("2026-05-18T00:00:00Z".into()), // sooner future
+            },
+        ];
+        let next = next_reset_at_from_groups(&groups, now).expect("future reset");
+        assert_eq!(
+            next,
+            DateTime::parse_from_rfc3339("2026-05-18T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn next_reset_at_none_when_all_elapsed() {
+        let now = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let groups = vec![QuotaGroup {
+            remaining_percent: Some(10.0),
+            reset_time: Some("2026-05-20T00:00:00Z".into()),
+        }];
+        assert!(next_reset_at_from_groups(&groups, now).is_none());
     }
 }

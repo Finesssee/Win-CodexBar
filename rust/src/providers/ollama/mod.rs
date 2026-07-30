@@ -88,8 +88,27 @@ impl OllamaProvider {
             .map_err(|e| ProviderError::Other(e.to_string()))?;
         let start_url =
             Url::parse(OLLAMA_SETTINGS_URL).map_err(|e| ProviderError::Other(e.to_string()))?;
-        let html = fetch_settings_html_at(&client, &cookies, start_url).await?;
-        self.parse_usage_html(&html)
+
+        match fetch_settings_html_at(&client, &cookies, start_url.clone()).await {
+            Ok(html) => {
+                // Only cache non-manual browser/validated sessions for reuse.
+                if ctx.manual_cookie_header.is_none() {
+                    Self::cache_validated_session_cookie(&cookies);
+                }
+                self.parse_usage_html(&html)
+            }
+            Err(ProviderError::AuthRequired) if ctx.manual_cookie_header.is_none() => {
+                // Cached/imported session expired — clear and re-import once.
+                Self::invalidate_cached_session_cookie();
+                let fresh = resolve_browser_cookie_header(true)?
+                    .map(OllamaCookieSource::Manual)
+                    .ok_or(ProviderError::AuthRequired)?;
+                let html = fetch_settings_html_at(&client, &fresh, start_url).await?;
+                Self::cache_validated_session_cookie(&fresh);
+                self.parse_usage_html(&html)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
@@ -234,13 +253,16 @@ impl OllamaProvider {
         }
     }
 
-    /// Resolve cookies from manual cookies, browser import, or context.
+    /// Resolve cookies from manual cookies, validated cache, or browser import.
+    ///
+    /// Upstream #2404: reuse the last validated browser session cookie header
+    /// across refreshes until auth fails, then re-import.
     fn resolve_cookie_source(
         &self,
         ctx: &FetchContext,
     ) -> Result<OllamaCookieSource, ProviderError> {
         // Check manual cookie header first
-        if let Some(ref cookie) = ctx.manual_cookie_header
+        if let Some(cookie) = &ctx.manual_cookie_header
             && let Some(header) = Self::normalize_cookie_header(cookie)
         {
             return has_recognized_ollama_session_cookie(&header)
@@ -248,24 +270,80 @@ impl OllamaProvider {
                 .ok_or(ProviderError::NoCookies);
         }
 
-        // Try browser cookie extraction
-        match crate::providers::browser_cookies_for_domain(OLLAMA_COOKIE_DOMAIN) {
-            Ok(cookies) => {
-                let source = OllamaCookieSource::Browser(cookies);
-                source
-                    .header_for_url(
-                        &Url::parse(OLLAMA_SETTINGS_URL)
-                            .map_err(|e| ProviderError::Other(e.to_string()))?,
-                    )
-                    .is_some()
-                    .then_some(source)
-                    .ok_or(ProviderError::NoCookies)
-            }
-            Err(ProviderError::NoCookies) => Err(ProviderError::NoCookies),
-            Err(err) => Err(err),
+        match resolve_browser_cookie_header(false)? {
+            Some(header) => Ok(OllamaCookieSource::Manual(header)),
+            None => Err(ProviderError::NoCookies),
         }
     }
 
+    /// After a successful web fetch, cache the validated browser/manual session header.
+    fn cache_validated_session_cookie(source: &OllamaCookieSource) {
+        use crate::browser::cookie_cache::CookieHeaderCache;
+        if let Some(header) = source.header_for_url(
+            &Url::parse(OLLAMA_SETTINGS_URL)
+                .unwrap_or_else(|_| Url::parse("https://ollama.com/settings").expect("static url")),
+        ) {
+            let label = match source {
+                OllamaCookieSource::Manual(_) => "validated",
+                OllamaCookieSource::Browser(_) => "browser",
+            };
+            let _ = CookieHeaderCache::store(ProviderId::Ollama, &header, label);
+        }
+    }
+
+    /// Clear cached session after auth failure so the next refresh re-imports.
+    fn invalidate_cached_session_cookie() {
+        use crate::browser::cookie_cache::CookieHeaderCache;
+        CookieHeaderCache::clear(ProviderId::Ollama);
+    }
+}
+
+/// Resolve a browser/session cookie header for Ollama.
+///
+/// When `force_reimport` is false, prefers the last validated cached header
+/// (upstream #2404). On force or cache miss, imports from the browser.
+fn resolve_browser_cookie_header(force_reimport: bool) -> Result<Option<String>, ProviderError> {
+    use crate::browser::cookie_cache::CookieHeaderCache;
+
+    if !force_reimport
+        && let Some(cached) = CookieHeaderCache::load(ProviderId::Ollama)
+        && has_recognized_ollama_session_cookie(&cached.cookie_header)
+    {
+        return Ok(Some(cached.cookie_header));
+    }
+
+    match crate::providers::browser_cookies_for_domain(OLLAMA_COOKIE_DOMAIN) {
+        Ok(cookies) => {
+            let url =
+                Url::parse(OLLAMA_SETTINGS_URL).map_err(|e| ProviderError::Other(e.to_string()))?;
+            Ok(ollama_cookie_header_for_url(&cookies, &url)
+                .filter(|h| has_recognized_ollama_session_cookie(h)))
+        }
+        Err(ProviderError::NoCookies) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Pure decision helper for the Ollama session reuse path (unit-tested).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OllamaSessionAction {
+    UseCached,
+    ReimportBrowser,
+}
+
+fn ollama_session_action(
+    has_cached_validated: bool,
+    auth_failed: bool,
+    force_reimport: bool,
+) -> OllamaSessionAction {
+    if force_reimport || auth_failed || !has_cached_validated {
+        OllamaSessionAction::ReimportBrowser
+    } else {
+        OllamaSessionAction::UseCached
+    }
+}
+
+impl OllamaProvider {
     /// Parse usage data from the Ollama settings HTML page
     fn parse_usage_html(&self, html: &str) -> Result<UsageSnapshot, ProviderError> {
         // Check if we're signed out
@@ -970,5 +1048,33 @@ mod tests {
         assert_eq!(session.reset_description.as_deref(), Some("resets in 2h"));
         assert_eq!(weekly.used_percent, 84.0);
         assert!(weekly.resets_at.is_some());
+    }
+
+    #[test]
+    fn session_action_reuses_cached_until_auth_fails() {
+        assert_eq!(
+            ollama_session_action(true, false, false),
+            OllamaSessionAction::UseCached
+        );
+        assert_eq!(
+            ollama_session_action(true, true, false),
+            OllamaSessionAction::ReimportBrowser
+        );
+        assert_eq!(
+            ollama_session_action(false, false, false),
+            OllamaSessionAction::ReimportBrowser
+        );
+        assert_eq!(
+            ollama_session_action(true, false, true),
+            OllamaSessionAction::ReimportBrowser
+        );
+    }
+
+    #[test]
+    fn recognized_session_cookie_required_for_cache_reuse() {
+        assert!(has_recognized_ollama_session_cookie(
+            "__Secure-session=abc123; path=/"
+        ));
+        assert!(!has_recognized_ollama_session_cookie("foo=bar; baz=qux"));
     }
 }

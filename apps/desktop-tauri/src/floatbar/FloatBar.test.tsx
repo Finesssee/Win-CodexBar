@@ -358,6 +358,46 @@ describe("FloatBar", () => {
     });
   });
 
+  it("resizes the native window in physical pixels at the WebView DPI", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    const originalDevicePixelRatio = window.devicePixelRatio;
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: 1.5,
+    });
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 20,
+        top: 0,
+        right: 100,
+        bottom: 20,
+        left: 0,
+        toJSON: () => ({}),
+      });
+
+    try {
+      renderFloatBar(bootstrap());
+
+      await waitFor(() => {
+        expect(coreMocks.invoke).toHaveBeenCalledWith("resize_float_bar", {
+          width: 162,
+          height: 42,
+        });
+      });
+    } finally {
+      rectSpy.mockRestore();
+      Object.defineProperty(window, "devicePixelRatio", {
+        configurable: true,
+        value: originalDevicePixelRatio,
+      });
+    }
+  });
+
   it("uses the localized reset formatter in pill tooltips", async () => {
     const resetsAt = new Date(Date.now() + 3 * 60 * 60_000 + 42 * 60_000).toISOString();
     tauriMocks.getCachedProviders.mockResolvedValue([

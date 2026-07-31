@@ -22,6 +22,7 @@ body.floatbar-window #root {
  * group reads like a compact widget sitting on the Windows taskbar. */
 .floatbar {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   gap: calc(4px * var(--floatbar-scale, 1));

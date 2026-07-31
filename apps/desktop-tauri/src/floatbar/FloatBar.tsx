@@ -381,8 +381,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       resizeRafRef.current = null;
       const rect = el.getBoundingClientRect();
       const padding = 8;
-      const w = Math.ceil(rect.width + padding);
-      const h = Math.ceil(rect.height + padding);
+      const dpr =
+        Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+          ? window.devicePixelRatio
+          : 1;
+      // DOM measurements are CSS pixels; the native command accepts physical
+      // pixels so the window remains correctly sized on scaled displays.
+      const w = Math.ceil(Math.ceil(rect.width + padding) * dpr);
+      const h = Math.ceil(Math.ceil(rect.height + padding) * dpr);
       const last = lastResizeRef.current;
       if (last && Math.abs(last.w - w) <= 1 && Math.abs(last.h - h) <= 1) return;
       lastResizeRef.current = { w, h };
@@ -409,6 +415,12 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     const observer = new ResizeObserver(resizeToContent);
     observer.observe(el);
     return () => observer.disconnect();
+  }, [resizeToContent]);
+
+  useEffect(() => {
+    // Re-measure after moving onto a monitor with a different scale factor.
+    window.addEventListener("resize", resizeToContent);
+    return () => window.removeEventListener("resize", resizeToContent);
   }, [resizeToContent]);
 
   useEffect(

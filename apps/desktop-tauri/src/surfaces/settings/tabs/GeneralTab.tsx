@@ -14,6 +14,7 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "japanese", display: "日本語" },
   { value: "korean", display: "한국어" },
   { value: "spanish", display: "Español" },
+  { value: "russian", display: "Русский" },
 ];
 
 const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [

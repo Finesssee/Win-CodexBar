@@ -30,7 +30,8 @@ export type Language =
   | "chinesetraditional"
   | "japanese"
   | "korean"
-  | "spanish";
+  | "spanish"
+  | "russian";
 
 /** Language catalog entry from the Rust backend. */
 export type LanguageOption = {

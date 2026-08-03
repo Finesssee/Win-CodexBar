@@ -410,7 +410,7 @@ export interface MenuCardPresence {
   hasCostHistory: boolean;
   hasCreditsHistory: boolean;
   hasUsageBreakdown: boolean;
-  localUsage: ProviderUsageSnapshot["localUsage"] | null;
+  localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
   hasDetails: boolean;
 }

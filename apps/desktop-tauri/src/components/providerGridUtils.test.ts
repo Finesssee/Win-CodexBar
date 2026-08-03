@@ -20,7 +20,7 @@ function provider(id: string): ProviderUsageSnapshot {
       reserveWillLastToReset: false,
       reserveEtaSeconds: null,
     },
-    primaryLabel: null,
+    primaryLabel: undefined,
     secondary: null,
     secondaryLabel: undefined,
     modelSpecific: null,

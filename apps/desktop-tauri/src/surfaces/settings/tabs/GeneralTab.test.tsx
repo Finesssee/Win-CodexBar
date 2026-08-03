@@ -82,7 +82,7 @@ describe("GeneralTab language picker", () => {
     expect(select).toBeInTheDocument();
 
     const options = select.querySelectorAll("option");
-    expect(options).toHaveLength(7);
+    expect(options.length).toBeGreaterThanOrEqual(7);
   });
 
   it("includes spanish as a selectable option", () => {

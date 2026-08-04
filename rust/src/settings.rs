@@ -62,6 +62,14 @@ pub struct Settings {
     /// Whether to play sound effects for threshold alerts
     pub sound_enabled: bool,
 
+    /// 通知の種類ごとに使用する WAV ファイル。未指定時は選択中の音源セットを使う。
+    #[serde(default)]
+    pub notification_sound_paths: NotificationSoundPaths,
+
+    /// カスタム WAV が未指定の通知に使う音源セット。
+    #[serde(default)]
+    pub notification_sound_theme: NotificationSoundTheme,
+
     /// Sound volume for alerts (0-100)
     pub sound_volume: u8,
 
@@ -419,6 +427,8 @@ impl Default for Settings {
             start_at_login: false,
             show_notifications: true,
             sound_enabled: true,
+            notification_sound_paths: NotificationSoundPaths::default(),
+            notification_sound_theme: NotificationSoundTheme::default(),
             sound_volume: 100,
             high_usage_threshold: 70.0,
             critical_usage_threshold: 90.0,

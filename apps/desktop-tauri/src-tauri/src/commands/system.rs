@@ -171,11 +171,12 @@ pub fn get_work_area_rect(app: tauri::AppHandle) -> Result<WorkAreaRect, String>
 // ── Misc UX ────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn play_notification_sound() -> Result<(), String> {
-    // Use the shared sound helper, honouring the user's `sound_enabled` flag.
+pub fn play_notification_sound(
+    event: codexbar::sound::NotificationSoundEvent,
+) -> Result<(), String> {
+    // 実際の通知と同じ設定解決を通して試聴する。
     let settings = Settings::load();
-    codexbar::sound::play_alert(codexbar::sound::AlertSound::Success, &settings);
-    Ok(())
+    codexbar::sound::play_alert(event, &settings).map_err(|error| error.to_string())
 }
 
 /// Reposition the flyout window so its bottom-right corner stays anchored to

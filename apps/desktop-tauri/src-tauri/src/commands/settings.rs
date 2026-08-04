@@ -15,6 +15,8 @@ pub struct SettingsUpdate {
     pub start_minimized: Option<bool>,
     pub show_notifications: Option<bool>,
     pub sound_enabled: Option<bool>,
+    pub notification_sound_theme: Option<codexbar::settings::NotificationSoundTheme>,
+    pub notification_sound_paths: Option<codexbar::settings::NotificationSoundPaths>,
     pub sound_volume: Option<u8>,
     pub high_usage_threshold: Option<f64>,
     pub critical_usage_threshold: Option<f64>,
@@ -212,12 +214,23 @@ impl SettingsUpdate {
         self
     }
 
-    fn apply_notification_settings(self, settings: &mut Settings) -> Self {
+    fn apply_notification_settings(self, settings: &mut Settings) -> Result<Self, String> {
         if let Some(v) = self.show_notifications {
             settings.show_notifications = v;
         }
         if let Some(v) = self.sound_enabled {
             settings.sound_enabled = v;
+        }
+        if let Some(v) = self.notification_sound_theme {
+            settings.notification_sound_theme = v;
+        }
+        if let Some(v) = self.notification_sound_paths.clone() {
+            codexbar::sound::validate_custom_sound_path_updates(
+                &settings.notification_sound_paths,
+                &v,
+            )
+            .map_err(|error| error.to_string())?;
+            settings.notification_sound_paths = v;
         }
         if let Some(v) = self.sound_volume {
             settings.sound_volume = v;
@@ -235,7 +248,7 @@ impl SettingsUpdate {
         if let Some(v) = self.predictive_pace_warning_enabled {
             settings.predictive_pace_warning_enabled = v;
         }
-        self
+        Ok(self)
     }
 
     fn apply_advanced_settings(self, settings: &mut Settings) -> Self {
@@ -334,7 +347,7 @@ impl SettingsUpdate {
         self.apply_provider_settings(settings)
             .apply_general_settings(settings)?
             .apply_display_settings(settings)
-            .apply_notification_settings(settings)
+            .apply_notification_settings(settings)?
             .apply_advanced_settings(settings);
         float_bar_patch.apply(settings);
         Ok(float_bar_patch)
@@ -544,5 +557,41 @@ mod tests {
         }
         .apply_display_settings(&mut settings);
         assert_eq!(settings.tray_scale_percent, 100);
+    }
+
+    #[test]
+    fn apply_notification_settings_updates_sound() {
+        let mut settings = Settings::default();
+
+        SettingsUpdate {
+            notification_sound_theme: Some(codexbar::settings::NotificationSoundTheme::CodexBar),
+            ..Default::default()
+        }
+        .apply_notification_settings(&mut settings)
+        .expect("apply sound theme");
+
+        assert_eq!(
+            settings.notification_sound_theme,
+            codexbar::settings::NotificationSoundTheme::CodexBar
+        );
+    }
+
+    #[test]
+    fn apply_notification_settings_rejects_invalid_custom_sound() {
+        let mut settings = Settings::default();
+        let result = SettingsUpdate {
+            notification_sound_paths: Some(codexbar::settings::NotificationSoundPaths {
+                high_usage: Some("relative.wav".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .apply_notification_settings(&mut settings);
+
+        assert!(result.is_err());
+        assert_eq!(
+            settings.notification_sound_paths,
+            codexbar::settings::NotificationSoundPaths::default()
+        );
     }
 }

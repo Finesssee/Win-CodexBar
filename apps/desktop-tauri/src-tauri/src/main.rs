@@ -127,6 +127,7 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(initial_state))
         .plugin(shortcut_bridge::plugin())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
                 let request = primary_window_request();

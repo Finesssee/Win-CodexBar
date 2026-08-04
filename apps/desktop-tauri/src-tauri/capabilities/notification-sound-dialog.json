@@ -1,0 +1,6 @@
+{
+  "identifier": "notification-sound-dialog",
+  "description": "Allows the settings window to select custom notification WAV files.",
+  "windows": ["main", "settings"],
+  "permissions": ["dialog:allow-open"]
+}

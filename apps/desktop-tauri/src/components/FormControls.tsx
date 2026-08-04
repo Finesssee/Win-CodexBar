@@ -42,15 +42,21 @@ export function Select({
   onChange,
   disabled,
   ariaLabel,
+  minWidth,
 }: {
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
   disabled?: boolean;
   ariaLabel?: string;
+  minWidth?: number;
 }) {
   const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
-  const width = Math.min(128, Math.max(48, Math.ceil((selectedLabel ?? "").length * 6.8) + 18));
+  const calculatedWidth = Math.min(
+    128,
+    Math.max(48, Math.ceil((selectedLabel ?? "").length * 6.8) + 18),
+  );
+  const width = Math.max(calculatedWidth, minWidth ?? 0);
 
   return (
     <select

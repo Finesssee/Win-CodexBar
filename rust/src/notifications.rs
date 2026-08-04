@@ -8,7 +8,7 @@ use crate::core::ProviderId;
 use crate::core::{RateWindow, UsagePace};
 use crate::locale::{self, LocaleKey};
 use crate::settings::Settings;
-use crate::sound::{AlertSound, play_alert};
+use crate::sound::{NotificationSoundEvent, play_alert};
 use chrono::{DateTime, Utc};
 
 /// Notification types
@@ -236,7 +236,7 @@ impl NotificationManager {
             &[&eta],
         );
         self.show_toast(&title, &body);
-        play_alert(AlertSound::Warning, settings);
+        Self::play_notification_sound(NotificationSoundEvent::PredictiveWarning, settings);
     }
 
     /// Check usage and send notifications if thresholds are crossed.
@@ -348,7 +348,7 @@ impl NotificationManager {
                 provider.display_name()
             );
             self.show_toast(title, &body);
-            play_alert(AlertSound::Error, settings);
+            Self::play_notification_sound(NotificationSoundEvent::SessionDepleted, settings);
             self.sent_notifications.insert((
                 provider,
                 account.to_string(),
@@ -372,7 +372,7 @@ impl NotificationManager {
                     provider.display_name()
                 );
                 self.show_toast(title, &body);
-                play_alert(AlertSound::Success, settings);
+                Self::play_notification_sound(NotificationSoundEvent::SessionRestored, settings);
                 self.sent_notifications.remove(&depleted_key);
             }
         }
@@ -394,7 +394,7 @@ impl NotificationManager {
         let title = notif_type.title();
         let body = Self::notification_body(provider, window, used_percent, notif_type);
         self.show_toast(title, &body);
-        play_alert(Self::alert_sound_for(notif_type), settings);
+        Self::play_notification_sound(Self::sound_event_for(notif_type), settings);
     }
 
     fn window_label(window: &str) -> &str {
@@ -438,14 +438,20 @@ impl NotificationManager {
         }
     }
 
-    fn alert_sound_for(notif_type: NotificationType) -> AlertSound {
+    fn sound_event_for(notif_type: NotificationType) -> NotificationSoundEvent {
         match notif_type {
-            NotificationType::HighUsage => AlertSound::Warning,
-            NotificationType::CriticalUsage => AlertSound::Critical,
-            NotificationType::Exhausted
-            | NotificationType::StatusIssue
-            | NotificationType::SessionDepleted => AlertSound::Error,
-            NotificationType::SessionRestored => AlertSound::Success,
+            NotificationType::HighUsage => NotificationSoundEvent::HighUsage,
+            NotificationType::CriticalUsage => NotificationSoundEvent::CriticalUsage,
+            NotificationType::Exhausted => NotificationSoundEvent::Exhausted,
+            NotificationType::StatusIssue => NotificationSoundEvent::StatusIssue,
+            NotificationType::SessionDepleted => NotificationSoundEvent::SessionDepleted,
+            NotificationType::SessionRestored => NotificationSoundEvent::SessionRestored,
+        }
+    }
+
+    fn play_notification_sound(event: NotificationSoundEvent, settings: &Settings) {
+        if let Err(error) = play_alert(event, settings) {
+            tracing::warn!(?event, %error, "notification sound failed to play");
         }
     }
 
@@ -458,7 +464,7 @@ impl NotificationManager {
         let title = NotificationType::StatusIssue.title();
         let body = format!("{}: {}", provider.display_name(), description);
         self.show_toast(title, &body);
-        play_alert(AlertSound::Error, settings);
+        Self::play_notification_sound(NotificationSoundEvent::StatusIssue, settings);
     }
 
     #[cfg(target_os = "windows")]

@@ -2921,6 +2921,24 @@ body:has(.tray-panel-reveal) {
   justify-content: flex-end;
 }
 
+.notification-sound-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  max-width: 320px;
+  flex-wrap: wrap;
+}
+
+.notification-sound-file {
+  width: 150px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-section__hint {
   margin: 4px 0 0;
   font-size: 0.78rem;

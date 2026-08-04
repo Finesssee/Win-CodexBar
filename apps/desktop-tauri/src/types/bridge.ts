@@ -14,6 +14,27 @@ export type SettingsTabId =
 
 export type TrayIconMode = "single" | "perProvider";
 
+export type NotificationSoundTheme = "windows" | "codexBar";
+
+export type NotificationSoundEvent =
+  | "predictiveWarning"
+  | "highUsage"
+  | "criticalUsage"
+  | "exhausted"
+  | "statusIssue"
+  | "sessionDepleted"
+  | "sessionRestored";
+
+export interface NotificationSoundPaths {
+  predictiveWarning: string | null;
+  highUsage: string | null;
+  criticalUsage: string | null;
+  exhausted: string | null;
+  statusIssue: string | null;
+  sessionDepleted: string | null;
+  sessionRestored: string | null;
+}
+
 export type MetricPreference =
   | "automatic"
   | "session"
@@ -139,6 +160,8 @@ export interface SettingsSnapshot {
   startMinimized: boolean;
   showNotifications: boolean;
   soundEnabled: boolean;
+  notificationSoundTheme: NotificationSoundTheme;
+  notificationSoundPaths: NotificationSoundPaths;
   soundVolume: number;
   highUsageThreshold: number;
   criticalUsageThreshold: number;
@@ -218,6 +241,8 @@ export interface SettingsUpdate {
   startMinimized?: boolean;
   showNotifications?: boolean;
   soundEnabled?: boolean;
+  notificationSoundTheme?: NotificationSoundTheme;
+  notificationSoundPaths?: NotificationSoundPaths;
   soundVolume?: number;
   highUsageThreshold?: number;
   criticalUsageThreshold?: number;

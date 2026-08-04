@@ -12,6 +12,30 @@ pub struct UsageThresholds {
     pub critical: f64,
 }
 
+/// 通知の種類ごとに割り当てる WAV ファイル。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationSoundPaths {
+    pub predictive_warning: Option<String>,
+    pub high_usage: Option<String>,
+    pub critical_usage: Option<String>,
+    pub exhausted: Option<String>,
+    pub status_issue: Option<String>,
+    pub session_depleted: Option<String>,
+    pub session_restored: Option<String>,
+}
+
+/// カスタム WAV が未指定の通知に使う音源セット。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotificationSoundTheme {
+    /// 従来どおり Windows のシステム音を使う。
+    #[default]
+    Windows,
+    /// 通知ごとに異なる CodexBar 内蔵音を使う。
+    CodexBar,
+}
+
 pub fn normalize_usage_threshold_overrides(
     values: HashMap<String, UsageThresholdOverride>,
 ) -> HashMap<String, UsageThresholdOverride> {

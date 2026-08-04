@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { playNotificationSound } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
-import type { Language, LanguageOption, UsageThresholdOverride } from "../../../types/bridge";
+import type {
+  Language,
+  LanguageOption,
+  NotificationSoundEvent,
+  NotificationSoundPaths,
+  NotificationSoundTheme,
+  UsageThresholdOverride,
+} from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 
@@ -25,6 +33,73 @@ const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [
   { value: "1800", labelKey: "RefreshInterval30Min" },
   { value: "3600", labelKey: "RefreshInterval1Hour" },
 ];
+
+const NOTIFICATION_SOUND_THEME_OPTIONS: {
+  value: NotificationSoundTheme;
+  labelKey: LocaleKey;
+}[] = [
+  { value: "windows", labelKey: "NotificationSoundThemeWindows" },
+  { value: "codexBar", labelKey: "NotificationSoundThemeCodexBar" },
+];
+
+type NotificationSoundPathKey = keyof NotificationSoundPaths;
+
+const NOTIFICATION_SOUND_EVENTS: {
+  event: NotificationSoundEvent;
+  pathKey: NotificationSoundPathKey;
+  labelKey: LocaleKey;
+  helperKey: LocaleKey;
+}[] = [
+  {
+    event: "predictiveWarning",
+    pathKey: "predictiveWarning",
+    labelKey: "NotificationSoundEventPredictiveWarning",
+    helperKey: "NotificationSoundEventPredictiveWarningHelper",
+  },
+  {
+    event: "highUsage",
+    pathKey: "highUsage",
+    labelKey: "NotificationSoundEventHighUsage",
+    helperKey: "NotificationSoundEventHighUsageHelper",
+  },
+  {
+    event: "criticalUsage",
+    pathKey: "criticalUsage",
+    labelKey: "NotificationSoundEventCriticalUsage",
+    helperKey: "NotificationSoundEventCriticalUsageHelper",
+  },
+  {
+    event: "exhausted",
+    pathKey: "exhausted",
+    labelKey: "NotificationSoundEventExhausted",
+    helperKey: "NotificationSoundEventExhaustedHelper",
+  },
+  {
+    event: "statusIssue",
+    pathKey: "statusIssue",
+    labelKey: "NotificationSoundEventStatusIssue",
+    helperKey: "NotificationSoundEventStatusIssueHelper",
+  },
+  {
+    event: "sessionDepleted",
+    pathKey: "sessionDepleted",
+    labelKey: "NotificationSoundEventSessionDepleted",
+    helperKey: "NotificationSoundEventSessionDepletedHelper",
+  },
+  {
+    event: "sessionRestored",
+    pathKey: "sessionRestored",
+    labelKey: "NotificationSoundEventSessionRestored",
+    helperKey: "NotificationSoundEventSessionRestoredHelper",
+  },
+];
+
+const NOTIFICATION_SOUND_THEME_SELECT_MIN_WIDTH = 180;
+const NOTIFICATION_SOUND_PREVIEW_DURATION_MS = 1500;
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
 
 function blurOnEnter(event: { key: string; currentTarget: { blur: () => void } }) {
   if (event.key === "Enter") event.currentTarget.blur();
@@ -98,7 +173,8 @@ export default function GeneralTab({
   saving,
 }: TabProps & { mode?: "general" | "notifications" }) {
   const { t } = useLocale();
-  const [playingSound, setPlayingSound] = useState(false);
+  const [playingSound, setPlayingSound] = useState<NotificationSoundEvent | null>(null);
+  const [soundError, setSoundError] = useState<string | null>(null);
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
     FALLBACK_LANGUAGE_OPTIONS,
   );
@@ -109,11 +185,51 @@ export default function GeneralTab({
       .catch(() => {}); // graceful fallback to static default
   }, []);
 
-  const handleTestSound = useCallback(() => {
-    setPlayingSound(true);
-    void playNotificationSound().catch(() => {});
-    window.setTimeout(() => setPlayingSound(false), 1500);
+  const handleTestSound = useCallback((event: NotificationSoundEvent) => {
+    setSoundError(null);
+    setPlayingSound(event);
+    void playNotificationSound(event).catch((error: unknown) => {
+      setSoundError(error instanceof Error ? error.message : String(error));
+    });
+    window.setTimeout(() => setPlayingSound(null), NOTIFICATION_SOUND_PREVIEW_DURATION_MS);
   }, []);
+
+  const handleChooseSound = useCallback(
+    async (pathKey: NotificationSoundPathKey) => {
+      setSoundError(null);
+      try {
+        const selected = await open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: t("NotificationSoundWaveFile"), extensions: ["wav"] }],
+        });
+        if (typeof selected === "string") {
+          set({
+            notificationSoundPaths: {
+              ...settings.notificationSoundPaths,
+              [pathKey]: selected,
+            },
+          });
+        }
+      } catch (error: unknown) {
+        setSoundError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [set, settings.notificationSoundPaths, t],
+  );
+
+  const handleClearSound = useCallback(
+    (pathKey: NotificationSoundPathKey) => {
+      setSoundError(null);
+      set({
+        notificationSoundPaths: {
+          ...settings.notificationSoundPaths,
+          [pathKey]: null,
+        },
+      });
+    },
+    [set, settings.notificationSoundPaths],
+  );
 
   return (
     <>
@@ -187,35 +303,94 @@ export default function GeneralTab({
             />
           </Field>
           <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
-            <div className="sound-enabled-row">
-              <Toggle
-                checked={settings.soundEnabled}
-                disabled={saving}
-                onChange={(v) => set({ soundEnabled: v })}
-              />
-              <button
-                type="button"
-                className="shortcut-capture__button shortcut-capture__button--ghost"
-                disabled={saving || !settings.soundEnabled || playingSound}
-                onClick={handleTestSound}
-              >
-                {playingSound
-                  ? t("NotificationTestSoundPlaying")
-                  : t("NotificationTestSound")}
-              </button>
-            </div>
+            <Toggle
+              checked={settings.soundEnabled}
+              disabled={saving}
+              onChange={(v) => set({ soundEnabled: v })}
+            />
           </Field>
           {settings.soundEnabled && (
-            <Field label={t("SoundVolume")} description={t("SoundVolumeHelper")}>
-              <NumberInput
-                value={settings.soundVolume}
-                min={0}
-                max={100}
-                step={5}
-                disabled={saving}
-                onChange={(v) => set({ soundVolume: v })}
-              />
-            </Field>
+            <>
+              <Field
+                label={t("NotificationSoundTheme")}
+                description={t("NotificationSoundThemeHelper")}
+              >
+                <Select
+                  value={settings.notificationSoundTheme}
+                  disabled={saving}
+                  ariaLabel={t("NotificationSoundTheme")}
+                  minWidth={NOTIFICATION_SOUND_THEME_SELECT_MIN_WIDTH}
+                  options={NOTIFICATION_SOUND_THEME_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: t(option.labelKey),
+                  }))}
+                  onChange={(value) =>
+                    set({ notificationSoundTheme: value as NotificationSoundTheme })
+                  }
+                />
+              </Field>
+              {NOTIFICATION_SOUND_EVENTS.map((sound) => {
+                const path = settings.notificationSoundPaths[sound.pathKey];
+                const label = t(sound.labelKey);
+                return (
+                  <Field
+                    key={sound.event}
+                    label={label}
+                    description={t(sound.helperKey)}
+                  >
+                    <div className="notification-sound-row">
+                      <button
+                        type="button"
+                        className="shortcut-capture__button shortcut-capture__button--ghost notification-sound-file"
+                        aria-label={`${label}: ${t("NotificationSoundChooseFile")}`}
+                        title={path ?? t("NotificationSoundUsesTheme")}
+                        disabled={saving}
+                        onClick={() => void handleChooseSound(sound.pathKey)}
+                      >
+                        {path ? fileName(path) : t("NotificationSoundChooseFile")}
+                      </button>
+                      <button
+                        type="button"
+                        className="shortcut-capture__button shortcut-capture__button--ghost"
+                        aria-label={`${label}: ${t("NotificationTestSound")}`}
+                        disabled={saving || playingSound !== null}
+                        onClick={() => handleTestSound(sound.event)}
+                      >
+                        {playingSound === sound.event
+                          ? t("NotificationTestSoundPlaying")
+                          : t("NotificationTestSound")}
+                      </button>
+                      {path && (
+                        <button
+                          type="button"
+                          className="shortcut-capture__button shortcut-capture__button--ghost"
+                          aria-label={`${label}: ${t("NotificationSoundClearFile")}`}
+                          disabled={saving}
+                          onClick={() => handleClearSound(sound.pathKey)}
+                        >
+                          {t("NotificationSoundClearFile")}
+                        </button>
+                      )}
+                    </div>
+                  </Field>
+                );
+              })}
+              {soundError && (
+                <p className="settings-section__error" role="alert">
+                  {soundError}
+                </p>
+              )}
+              <Field label={t("SoundVolume")} description={t("SoundVolumeHelper")}>
+                <NumberInput
+                  value={settings.soundVolume}
+                  min={0}
+                  max={100}
+                  step={5}
+                  disabled={saving}
+                  onChange={(v) => set({ soundVolume: v })}
+                />
+              </Field>
+            </>
           )}
         </div>
         <div className="settings-section__group">

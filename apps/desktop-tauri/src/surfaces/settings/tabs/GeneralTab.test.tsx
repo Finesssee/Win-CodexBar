@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -17,8 +17,14 @@ vi.mock("@tauri-apps/api/core", () => ({
   ]),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+
 import GeneralTab from "./GeneralTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 const settings: SettingsSnapshot = {
   enabledProviders: [],
@@ -29,6 +35,16 @@ const settings: SettingsSnapshot = {
   startMinimized: false,
   showNotifications: true,
   soundEnabled: true,
+  notificationSoundTheme: "windows",
+  notificationSoundPaths: {
+    predictiveWarning: null,
+    highUsage: null,
+    criticalUsage: null,
+    exhausted: null,
+    statusIssue: null,
+    sessionDepleted: null,
+    sessionRestored: null,
+  },
   soundVolume: 100,
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
@@ -120,6 +136,87 @@ describe("GeneralTab language picker", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
 
     expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+  });
+
+  it("updates the default notification sound set", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    const select = screen.getByRole("combobox", { name: "NotificationSoundTheme" });
+    expect(select.querySelectorAll("option")).toHaveLength(2);
+    expect(select).toHaveStyle({ width: "180px" });
+    fireEvent.change(select, {
+      target: { value: "codexBar" },
+    });
+
+    expect(set).toHaveBeenCalledWith({ notificationSoundTheme: "codexBar" });
+  });
+
+  it("renders and previews all seven notification events", () => {
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={vi.fn()} saving={false} />,
+    );
+
+    const previewButtons = screen.getAllByRole("button", {
+      name: /NotificationTestSound$/,
+    });
+    expect(previewButtons).toHaveLength(7);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "NotificationSoundEventSessionRestored: NotificationTestSound",
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith("play_notification_sound", {
+      event: "sessionRestored",
+    });
+  });
+
+  it("assigns and clears a custom WAV for one notification", async () => {
+    const set = vi.fn();
+    vi.mocked(open).mockResolvedValue("C:\\sounds\\high-usage.wav");
+    const { rerender } = render(
+      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "NotificationSoundEventHighUsage: NotificationSoundChooseFile",
+      }),
+    );
+    await waitFor(() =>
+      expect(set).toHaveBeenCalledWith({
+        notificationSoundPaths: {
+          ...settings.notificationSoundPaths,
+          highUsage: "C:\\sounds\\high-usage.wav",
+        },
+      }),
+    );
+
+    rerender(
+      <GeneralTab
+        mode="notifications"
+        settings={{
+          ...settings,
+          notificationSoundPaths: {
+            ...settings.notificationSoundPaths,
+            highUsage: "C:\\sounds\\high-usage.wav",
+          },
+        }}
+        set={set}
+        saving={false}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "NotificationSoundEventHighUsage: NotificationSoundClearFile",
+      }),
+    );
+    expect(set).toHaveBeenLastCalledWith({
+      notificationSoundPaths: settings.notificationSoundPaths,
+    });
   });
 
   it("saves a window override on blur and clears it to resume inheritance", () => {

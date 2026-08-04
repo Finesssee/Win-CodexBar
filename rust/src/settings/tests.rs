@@ -7,6 +7,14 @@ fn test_settings_default() {
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
     assert!(settings.show_notifications);
+    assert_eq!(
+        settings.notification_sound_paths,
+        NotificationSoundPaths::default()
+    );
+    assert_eq!(
+        settings.notification_sound_theme,
+        NotificationSoundTheme::Windows
+    );
     assert_eq!(settings.high_usage_threshold, 70.0);
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
@@ -14,6 +22,42 @@ fn test_settings_default() {
     assert!(!settings.float_bar_show_cost);
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
+}
+
+#[test]
+fn notification_sound_paths_round_trip_and_default_for_existing_settings() {
+    let settings = Settings {
+        notification_sound_theme: NotificationSoundTheme::CodexBar,
+        notification_sound_paths: NotificationSoundPaths {
+            critical_usage: Some(r"C:\sounds\critical.wav".to_string()),
+            ..NotificationSoundPaths::default()
+        },
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&settings).expect("serialize notification sound paths");
+    assert!(json.contains("\"criticalUsage\":\"C:\\\\sounds\\\\critical.wav\""));
+
+    let loaded: Settings =
+        serde_json::from_str(&json).expect("deserialize notification sound paths");
+    assert_eq!(
+        loaded.notification_sound_paths,
+        settings.notification_sound_paths
+    );
+    assert_eq!(
+        loaded.notification_sound_theme,
+        NotificationSoundTheme::CodexBar
+    );
+
+    let legacy: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("deserialize settings without notification sound paths");
+    assert_eq!(
+        legacy.notification_sound_paths,
+        NotificationSoundPaths::default()
+    );
+    assert_eq!(
+        legacy.notification_sound_theme,
+        NotificationSoundTheme::Windows
+    );
 }
 
 #[test]

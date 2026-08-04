@@ -9,6 +9,7 @@ import type {
   DetectedBrowserBridge,
   Language,
   LocaleStrings,
+  NotificationSoundEvent,
   ProviderCatalogEntry,
   ProviderChartData,
   ProviderDetail,
@@ -410,8 +411,8 @@ export function unregisterGlobalShortcut(): Promise<void> {
   return invoke<void>("unregister_global_shortcut");
 }
 
-export function playNotificationSound(): Promise<void> {
-  return invoke<void>("play_notification_sound");
+export function playNotificationSound(event: NotificationSoundEvent): Promise<void> {
+  return invoke<void>("play_notification_sound", { event });
 }
 
 export function reanchorTrayPanel(): Promise<void> {

@@ -394,6 +394,8 @@ RefreshIntervalLabel = 重新整理間隔
 RefreshIntervalHelper = 兩次自動重新整理之間的秒數（0 = 手動）。
 RefreshAllProvidersOnMenuOpen = 開啟選單時重新整理
 RefreshAllProvidersOnMenuOpenHelper = 每次開啟系統匣選單時強制重新整理已啟用的提供商。
+LowPowerMode = 低耗電模式
+LowPowerModeHelper = 將自動背景重新整理限制為每 30 分鐘一次。手動重新整理仍可立即執行。
 HighUsageWarningHelper = 當用量超過該百分比時顯示預警。
 CriticalUsageWarningHelper = 當用量超過該百分比時顯示嚴重告警。
 GlobalShortcutFieldLabel = 全域性快捷鍵

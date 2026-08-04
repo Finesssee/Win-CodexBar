@@ -11,6 +11,7 @@ pub struct SettingsUpdate {
     pub refresh_interval_secs: Option<u64>,
     pub adaptive_refresh: Option<bool>,
     pub refresh_all_providers_on_menu_open: Option<bool>,
+    pub low_power_mode: Option<bool>,
     pub start_at_login: Option<bool>,
     pub start_minimized: Option<bool>,
     pub show_notifications: Option<bool>,
@@ -82,6 +83,8 @@ impl SettingsUpdate {
     fn notifies_float_bar(&self) -> bool {
         self.enabled_providers.is_some()
             || self.refresh_interval_secs.is_some()
+            || self.low_power_mode.is_some()
+            || self.adaptive_refresh.is_some()
             || self.codex_custom_sessions_dirs.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
@@ -143,6 +146,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
+        }
+        if let Some(v) = self.low_power_mode {
+            settings.low_power_mode = v;
         }
         if let Some(ref s) = self.tray_icon_mode
             && let Some(mode) = parse_tray_icon_mode(s)

@@ -19,6 +19,9 @@ pub(super) struct RawSettings {
     #[serde(default)]
     adaptive_refresh: bool,
     refresh_all_providers_on_menu_open: bool,
+    #[serde(default)]
+    low_power_mode: bool,
+
     start_minimized: bool,
     start_at_login: bool,
     show_notifications: bool,
@@ -172,6 +175,7 @@ impl Default for RawSettings {
             refresh_interval_secs: s.refresh_interval_secs,
             adaptive_refresh: s.adaptive_refresh,
             refresh_all_providers_on_menu_open: s.refresh_all_providers_on_menu_open,
+            low_power_mode: s.low_power_mode,
             start_minimized: s.start_minimized,
             start_at_login: s.start_at_login,
             show_notifications: s.show_notifications,
@@ -477,6 +481,7 @@ impl From<RawSettings> for Settings {
             refresh_interval_secs: raw.refresh_interval_secs,
             adaptive_refresh: raw.adaptive_refresh,
             refresh_all_providers_on_menu_open: raw.refresh_all_providers_on_menu_open,
+            low_power_mode: raw.low_power_mode,
             start_minimized: raw.start_minimized,
             start_at_login: raw.start_at_login,
             show_notifications: raw.show_notifications,

@@ -22,6 +22,24 @@ fn test_settings_default() {
     assert!(!settings.float_bar_show_cost);
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
+    assert!(!settings.low_power_mode);
+}
+
+#[test]
+fn low_power_mode_defaults_false_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing low_power_mode defaults false");
+    assert!(!defaulted.low_power_mode);
+
+    let enabled = Settings {
+        low_power_mode: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize low_power_mode");
+    assert!(json.contains("\"low_power_mode\":true"));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize low_power_mode");
+    assert!(loaded.low_power_mode);
 }
 
 #[test]

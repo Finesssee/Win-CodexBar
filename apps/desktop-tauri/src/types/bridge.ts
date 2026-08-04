@@ -157,6 +157,7 @@ export interface SettingsSnapshot {
   refreshIntervalSecs: number;
   adaptiveRefresh: boolean;
   refreshAllProvidersOnMenuOpen: boolean;
+  lowPowerMode: boolean;
   startAtLogin: boolean;
   startMinimized: boolean;
   showNotifications: boolean;
@@ -237,6 +238,7 @@ export interface SettingsUpdate {
   refreshIntervalSecs?: number;
   adaptiveRefresh?: boolean;
   refreshAllProvidersOnMenuOpen?: boolean;
+  lowPowerMode?: boolean;
   startAtLogin?: boolean;
   startMinimized?: boolean;
   showNotifications?: boolean;

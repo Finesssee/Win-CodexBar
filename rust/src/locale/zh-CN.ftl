@@ -394,6 +394,8 @@ RefreshIntervalLabel = 刷新间隔
 RefreshIntervalHelper = 两次自动刷新之间的秒数（0 = 手动）。
 RefreshAllProvidersOnMenuOpen = 打开菜单时刷新
 RefreshAllProvidersOnMenuOpenHelper = 每次打开托盘菜单时强制刷新已启用的提供商。
+LowPowerMode = 低功耗模式
+LowPowerModeHelper = 将自动后台刷新限制为每 30 分钟一次。手动刷新仍可立即执行。
 HighUsageWarningHelper = 当用量超过该百分比时显示预警。
 CriticalUsageWarningHelper = 当用量超过该百分比时显示严重告警。
 GlobalShortcutFieldLabel = 全局快捷键

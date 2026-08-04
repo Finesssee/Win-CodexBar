@@ -269,16 +269,20 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   // The detached floatbar should keep usage fresh, but it must not open or
   // focus any other surface. Refresh data only; provider-updated events feed
-  // this window when the backend completes.
+  // this window when the backend completes. Respect Low Power Mode's 30-min
+  // floor for automatic ticks (manual refresh stays elsewhere/immediate).
   useEffect(() => {
-    const intervalMs = Math.max(60_000, settings.refreshIntervalSecs * 1000);
+    const baseMs = Math.max(60_000, settings.refreshIntervalSecs * 1000);
+    const intervalMs = settings.lowPowerMode
+      ? Math.max(baseMs, 30 * 60 * 1000)
+      : baseMs;
     const tick = () => {
       void refreshProvidersIfStale().catch(() => {});
     };
     tick();
     const id = setInterval(tick, intervalMs);
     return () => clearInterval(id);
-  }, [settings.refreshIntervalSecs]);
+  }, [settings.refreshIntervalSecs, settings.lowPowerMode]);
 
   useEffect(() => {
     const unlisten = listen(FLOAT_BAR_CONFIG_CHANGED_EVENT, () => {

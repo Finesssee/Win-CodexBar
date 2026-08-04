@@ -418,6 +418,8 @@ export const ALL_LOCALE_KEYS = [
   "RefreshIntervalHelper",
   "RefreshAllProvidersOnMenuOpen",
   "RefreshAllProvidersOnMenuOpenHelper",
+  "LowPowerMode",
+  "LowPowerModeHelper",
   "HighUsageWarningHelper",
   "CriticalUsageWarningHelper",
   "GlobalShortcutFieldLabel",

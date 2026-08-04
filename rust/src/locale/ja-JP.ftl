@@ -394,6 +394,8 @@ RefreshIntervalLabel = 更新間隔
 RefreshIntervalHelper = プロバイダーを自動更新する間隔(秒)(0 = 手動)。
 RefreshAllProvidersOnMenuOpen = メニュー表示時に更新
 RefreshAllProvidersOnMenuOpenHelper = トレイメニューを開くたびに有効なプロバイダーを強制更新。
+LowPowerMode = 低電力モード
+LowPowerModeHelper = 自動のバックグラウンド更新を30分に1回までに制限します。手動更新はすぐ実行されます。
 HighUsageWarningHelper = 使用量がこの割合を超えたら警告を表示。
 CriticalUsageWarningHelper = 使用量がこの割合を超えたら重大アラートを表示。
 GlobalShortcutFieldLabel = グローバルショートカット

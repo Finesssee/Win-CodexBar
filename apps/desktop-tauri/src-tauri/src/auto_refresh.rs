@@ -81,11 +81,29 @@ pub fn install(app: tauri::AppHandle) {
     });
 }
 
-fn resolve_refresh_interval(settings: &Settings) -> Option<Duration> {
-    if settings.adaptive_refresh {
-        return Some(adaptive_delay_now());
+const LOW_POWER_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// Pure upstream `BackgroundWorkPowerPolicy.automaticInterval` port:
+/// floor automatic intervals to 30 minutes when low-power mode is on.
+/// `None` (manual / no timer) stays `None`.
+pub(crate) fn automatic_interval(
+    requested: Option<Duration>,
+    low_power_mode_enabled: bool,
+) -> Option<Duration> {
+    let requested = requested?;
+    if !low_power_mode_enabled {
+        return Some(requested);
     }
-    refresh_interval(settings.refresh_interval_secs)
+    Some(requested.max(LOW_POWER_MIN_INTERVAL))
+}
+
+fn resolve_refresh_interval(settings: &Settings) -> Option<Duration> {
+    let requested = if settings.adaptive_refresh {
+        Some(adaptive_delay_now())
+    } else {
+        refresh_interval(settings.refresh_interval_secs)
+    };
+    automatic_interval(requested, settings.low_power_mode)
 }
 
 fn adaptive_delay_now() -> Duration {
@@ -224,6 +242,34 @@ mod tests {
         let delay = resolve_refresh_interval(&settings).expect("adaptive always schedules");
         // No menu open → long idle 30m
         assert_eq!(delay, Duration::from_secs(30 * 60));
+    }
+
+    #[test]
+    fn low_power_mode_floors_fixed_and_adaptive_intervals() {
+        assert_eq!(
+            automatic_interval(Some(Duration::from_secs(60)), true),
+            Some(Duration::from_secs(30 * 60))
+        );
+        assert_eq!(
+            automatic_interval(Some(Duration::from_secs(3600)), true),
+            Some(Duration::from_secs(3600))
+        );
+        assert_eq!(
+            automatic_interval(Some(Duration::from_secs(60)), false),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(automatic_interval(None, true), None);
+
+        let settings = Settings {
+            low_power_mode: true,
+            adaptive_refresh: false,
+            refresh_interval_secs: 300,
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_refresh_interval(&settings),
+            Some(Duration::from_secs(30 * 60))
+        );
     }
 
     #[test]

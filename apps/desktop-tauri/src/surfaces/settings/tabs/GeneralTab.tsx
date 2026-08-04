@@ -522,6 +522,18 @@ export default function GeneralTab({
               onChange={(v) => set({ refreshAllProvidersOnMenuOpen: v })}
             />
           </Field>
+          <Field
+            label={t("LowPowerMode")}
+            description={t("LowPowerModeHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.lowPowerMode}
+              disabled={saving}
+              ariaLabel={t("LowPowerMode")}
+              onChange={(v) => set({ lowPowerMode: v })}
+            />
+          </Field>
         </div>
       </section>}
     </>

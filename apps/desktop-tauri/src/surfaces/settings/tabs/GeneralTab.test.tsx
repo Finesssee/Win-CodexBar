@@ -32,6 +32,7 @@ const settings: SettingsSnapshot = {
   refreshIntervalSecs: 300,
     adaptiveRefresh: false,
   refreshAllProvidersOnMenuOpen: false,
+  lowPowerMode: false,
   startAtLogin: false,
   startMinimized: false,
   showNotifications: true,
@@ -142,6 +143,15 @@ describe("GeneralTab language picker", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
 
     expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+  });
+
+  it("updates the low power mode preference", () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "LowPowerMode" }));
+
+    expect(set).toHaveBeenCalledWith({ lowPowerMode: true });
   });
 
   it("updates the default notification sound set", () => {

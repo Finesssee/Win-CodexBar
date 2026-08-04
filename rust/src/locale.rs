@@ -656,6 +656,8 @@ locale_keys! {
     RefreshIntervalHelper,
     RefreshAllProvidersOnMenuOpen,
     RefreshAllProvidersOnMenuOpenHelper,
+    LowPowerMode,
+    LowPowerModeHelper,
     HighUsageWarningHelper,
     CriticalUsageWarningHelper,
     GlobalShortcutFieldLabel,

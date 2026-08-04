@@ -52,6 +52,7 @@ describe("Language type", () => {
       refreshIntervalSecs: 300,
     adaptiveRefresh: false,
       refreshAllProvidersOnMenuOpen: false,
+  lowPowerMode: false,
       startAtLogin: false,
       startMinimized: false,
       showNotifications: true,

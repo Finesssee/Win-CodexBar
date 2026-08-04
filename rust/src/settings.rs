@@ -50,6 +50,11 @@ pub struct Settings {
     #[serde(default)]
     pub refresh_all_providers_on_menu_open: bool,
 
+    /// When true, automatic background refresh is floored to once per 30 minutes.
+    /// Manual refresh stays immediate.
+    #[serde(default)]
+    pub low_power_mode: bool,
+
     /// Whether to start minimized
     pub start_minimized: bool,
 
@@ -420,6 +425,7 @@ impl Default for Settings {
             refresh_interval_secs: 300, // 5 minutes
             adaptive_refresh: false,
             refresh_all_providers_on_menu_open: false,
+            low_power_mode: false,
             start_minimized: false,
             start_at_login: false,
             show_notifications: true,

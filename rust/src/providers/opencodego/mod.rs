@@ -193,14 +193,7 @@ impl OpenCodeGoProvider {
                 let reset = super::extract_number(&reset_pattern, text)
                     .map(|n| n as i64)
                     .unwrap_or(0);
-                // Regex path only matches direct percent field names — fraction
-                // heuristic is safe here (upstream #2331). used/limit computed
-                // percents must not use this path without a separate gate.
-                let p = if (0.0..=1.0).contains(&p) {
-                    p * 100.0
-                } else {
-                    p
-                };
+                // Direct percent fields arrive as integer percent in the serialized payload; no fraction scaling (upstream parseSubscription parity; win-fork #247).
                 return Some((p.clamp(0.0, 100.0), reset.max(0)));
             }
 
@@ -488,16 +481,24 @@ mod tests {
     fn parses_usage_blocks() {
         let text = r#"
             rollingUsage: { usagePercent: 42.5, resetInSec: 3600 }
-            weeklyUsage: { usagePercent: 0.13, resetInSec: 86400 }
+            weeklyUsage: { usagePercent: 13, resetInSec: 86400 }
             monthlyUsage: { usagePercent: 7, resetInSec: 2592000 }
         "#;
         let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
         assert!((snap.primary.used_percent - 42.5).abs() < 0.001);
         let secondary = snap.secondary.expect("weekly");
-        // usagePercent: 0.13 is a direct fraction → 13%
+        // usagePercent: 13 is a direct integer percent → 13%
         assert!((secondary.used_percent - 13.0).abs() < 0.001);
         let tertiary = snap.tertiary.expect("monthly");
         assert!((tertiary.used_percent - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn direct_percent_one_is_not_rescaled() {
+        let text = r#"rollingUsage:$R[34]={status:"ok",resetInSec:13631,usagePercent:1} weeklyUsage:$R[35]={status:"ok",resetInSec:53863,usagePercent:15}"#;
+        let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
+        assert!((snap.primary.used_percent - 1.0).abs() < 0.001);
+        assert!((snap.secondary.as_ref().unwrap().used_percent - 15.0).abs() < 0.001);
     }
 
     #[test]

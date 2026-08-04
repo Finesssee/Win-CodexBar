@@ -3,6 +3,8 @@
 //! Fetches usage data from MiniMax AI API
 //! MiniMax stores API keys locally or in environment
 
+mod coding_plan;
+mod coding_plan_html;
 mod local_storage;
 
 // Re-exports for local storage import
@@ -120,6 +122,38 @@ impl MiniMaxRegion {
             Self::Global => "platform.minimax.io",
             Self::ChinaMainland => "platform.minimaxi.com",
         }
+    }
+
+    /// WWW host for the remains-API fallback (apex domain for cookie search).
+    pub fn www_base_url(self) -> &'static str {
+        match self {
+            Self::Global => "https://www.minimax.io",
+            Self::ChinaMainland => "https://www.minimaxi.com",
+        }
+    }
+
+    /// Cookie search domains — apex so `cookies.rs::domain_matches` suffix-matches
+    /// `platform.`/`www.` subdomains and parent-scoped session cookies.
+    pub fn cookie_search_domains(self) -> [&'static str; 1] {
+        match self {
+            Self::Global => ["minimax.io"],
+            Self::ChinaMainland => ["minimaxi.com"],
+        }
+    }
+
+    /// Remains-API URL (platform host) — the coding-plan quota endpoint.
+    pub fn coding_plan_remains_url(self) -> String {
+        format!(
+            "{}/v1/api/openplatform/coding_plan/remains",
+            self.base_url()
+        )
+    }
+
+    pub fn www_remains_url(self) -> String {
+        format!(
+            "{}/v1/api/openplatform/coding_plan/remains",
+            self.www_base_url()
+        )
     }
 
     pub fn coding_plan_url(self) -> String {
@@ -343,11 +377,12 @@ impl MiniMaxProvider {
         Ok(usage)
     }
 
-    async fn fetch_billing_with_cookie(
+    /// Fetch the billing history summary (best-effort enrichment; never fatal).
+    async fn fetch_billing_summary(
         &self,
         cookie_header: &str,
         region: MiniMaxRegion,
-    ) -> Result<ProviderFetchResult, ProviderError> {
+    ) -> Result<MiniMaxBillingSummary, ProviderError> {
         let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -378,10 +413,236 @@ impl MiniMaxProvider {
             .json()
             .await
             .map_err(|e| ProviderError::Parse(format!("Failed to parse MiniMax billing: {e}")))?;
-        let summary = parse_billing_summary(&json)?;
-        Ok(result_from_billing_summary(summary, "web-billing"))
+        parse_billing_summary(&json)
     }
 
+    /// User-Agent string for coding-plan web requests (matches the upstream
+    /// Chrome UA; kept local to minimax so we don't couple to opencodego).
+    const WEB_USER_AGENT: &'static str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+    /// Fetch quota from the coding-plan page with a remains-API fallback.
+    /// Mirrors upstream `MiniMaxUsageFetcher` cookie/web flow (issue #246).
+    async fn fetch_coding_plan_with_cookie(
+        &self,
+        cookie_header: &str,
+        region: MiniMaxRegion,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        let client = crate::core::credentialed_http_client_builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| ProviderError::Other(e.to_string()))?;
+
+        let coding_url = region.coding_plan_url();
+        let base = region.base_url();
+        let response = client
+            .get(&coding_url)
+            .header("Cookie", cookie_header)
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
+            .header("User-Agent", Self::WEB_USER_AGENT)
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Origin", base)
+            .header(
+                "Referer",
+                &format!("{base}/user-center/payment/coding-plan"),
+            )
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "MiniMax coding plan returned status {status}"
+            )));
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+        let now = Utc::now();
+
+        // 200 with JSON content-type → parse_coding_plan_value
+        if content_type.contains("application/json") {
+            let json: serde_json::Value = response.json().await.map_err(|e| {
+                ProviderError::Parse(format!("Failed to parse coding plan JSON: {e}"))
+            })?;
+            match coding_plan::parse_coding_plan_value(&json, now) {
+                Ok(snapshot) => return coding_plan_html::to_usage_snapshot(&snapshot, now),
+                Err(ProviderError::Parse(msg)) => {
+                    tracing::debug!(
+                        "MiniMax coding plan JSON parse failed: {msg}; trying remains API"
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+            // JSON Parse-error fall-through → remains fallback (response consumed)
+            return self
+                .fetch_coding_plan_remains_fallback(cookie_header, region, now)
+                .await;
+        }
+
+        // 200 other → read text → parse_coding_plan_html
+        let html = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Failed to read coding plan HTML: {e}")))?;
+        match coding_plan_html::parse_coding_plan_html(&html, now) {
+            Ok(snapshot) => match &snapshot {
+                // Empty-services → remains fallback
+                coding_plan::MiniMaxCodingPlanSnapshot::Services(rows) if rows.is_empty() => {}
+                _ => return coding_plan_html::to_usage_snapshot(&snapshot, now),
+            },
+            Err(ProviderError::Parse(msg)) => {
+                tracing::debug!("MiniMax coding plan HTML parse failed: {msg}; trying remains API");
+            }
+            Err(e) => return Err(e),
+        }
+        // remains fallback (response already consumed by .text())
+        self.fetch_coding_plan_remains_fallback(cookie_header, region, now)
+            .await
+    }
+
+    /// Remains-API fallback: try the platform-host remains URL, then the www-host
+    /// remains URL. Move to the second URL only on HTTP 404/405, network error, or
+    /// parse failure; AuthRequired and other statuses stop the chain.
+    async fn fetch_coding_plan_remains_fallback(
+        &self,
+        cookie_header: &str,
+        region: MiniMaxRegion,
+        now: DateTime<Utc>,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        let urls = [region.coding_plan_remains_url(), region.www_remains_url()];
+        let mut last_err: Option<ProviderError> = None;
+        for url in &urls {
+            match self
+                .fetch_remains_once(cookie_header, url, region, now)
+                .await
+            {
+                Ok(snapshot) => return coding_plan_html::to_usage_snapshot(&snapshot, now),
+                Err(err) => {
+                    let should_try_next =
+                        matches!(err, ProviderError::Parse(_) | ProviderError::Network(_));
+                    last_err = Some(err);
+                    if !should_try_next {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| ProviderError::Parse("Missing MiniMax remains URL.".into())))
+    }
+
+    /// One remains-API request, returning the parsed snapshot.
+    async fn fetch_remains_once(
+        &self,
+        cookie_header: &str,
+        url: &str,
+        region: MiniMaxRegion,
+        now: DateTime<Utc>,
+    ) -> Result<coding_plan::MiniMaxCodingPlanSnapshot, ProviderError> {
+        let client = crate::core::credentialed_http_client_builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| ProviderError::Other(e.to_string()))?;
+
+        let base = region.base_url();
+        let response = client
+            .get(url)
+            .header("Cookie", cookie_header)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("User-Agent", Self::WEB_USER_AGENT)
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Origin", base)
+            .header(
+                "Referer",
+                &format!("{base}/user-center/payment/coding-plan"),
+            )
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
+            let msg = format!("MiniMax remains returned status {status}");
+            // 404/405 → try next URL; other → stop
+            if status == reqwest::StatusCode::NOT_FOUND
+                || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+            {
+                return Err(ProviderError::Parse(msg));
+            }
+            return Err(ProviderError::Other(msg));
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+        if content_type.contains("application/json") {
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| ProviderError::Parse(format!("Failed to parse remains JSON: {e}")))?;
+            return coding_plan::parse_coding_plan_value(&json, now);
+        }
+
+        // Non-JSON remains response → treat as HTML
+        let html = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Failed to read remains text: {e}")))?;
+        coding_plan_html::parse_coding_plan_html(&html, now)
+    }
+
+    /// Full cookie/web fetch: quota from coding plan + best-effort billing.
+    async fn fetch_with_cookie(
+        &self,
+        cookie_header: &str,
+        region: MiniMaxRegion,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let snapshot = self
+            .fetch_coding_plan_with_cookie(cookie_header, region)
+            .await?;
+        let mut result = ProviderFetchResult::new(snapshot, "web");
+
+        // Best-effort billing enrichment — never kills the fetch.
+        if let Ok(summary) = self.fetch_billing_summary(cookie_header, region).await {
+            result = attach_billing_summary(result, summary);
+        } else {
+            tracing::warn!("MiniMax billing history unavailable; quota from coding plan only");
+        }
+        Ok(result)
+    }
+
+    /// Resolve the web cookie: manual cookie takes priority, then browser cookies.
+    fn resolve_web_cookie(
+        &self,
+        ctx: &FetchContext,
+        region: MiniMaxRegion,
+    ) -> Result<Option<String>, ProviderError> {
+        if let Some(cookie) = ctx.manual_cookie_header.as_deref()
+            && !cookie.trim().is_empty()
+        {
+            return Ok(Some(cookie.to_string()));
+        }
+        match crate::providers::browser_cookie_header(&region.cookie_search_domains()) {
+            Ok(header) => Ok(Some(header)),
+            Err(ProviderError::NoCookies) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
     fn result_with_optional_billing(
         &self,
         usage: UsageSnapshot,
@@ -717,23 +978,30 @@ impl Provider for MiniMaxProvider {
 
         match ctx.source_mode {
             SourceMode::Auto => {
+                // Manual cookie → try fetch_with_cookie first.
                 if let Some(cookie_header) = ctx.manual_cookie_header.as_deref()
-                    && let Ok(result) = self.fetch_billing_with_cookie(cookie_header, region).await
+                    && !cookie_header.trim().is_empty()
+                    && let Ok(result) = self.fetch_with_cookie(cookie_header, region).await
                 {
                     return Ok(result);
                 }
+                // Browser cookie (no manual) → same fetch_with_cookie.
+                if let Ok(Some(cookie)) = self.resolve_web_cookie(ctx, region)
+                    && let Ok(result) = self.fetch_with_cookie(&cookie, region).await
+                {
+                    return Ok(result);
+                }
+                // Fall through to API keys.
                 if let Ok(result) = self.fetch_via_web(region).await {
                     return Ok(result);
                 }
                 let usage = self.probe_cli().await?;
                 Ok(ProviderFetchResult::new(usage, "cli"))
             }
-            SourceMode::Web => {
-                if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
-                    return self.fetch_billing_with_cookie(cookie_header, region).await;
-                }
-                self.fetch_via_web(region).await
-            }
+            SourceMode::Web => match self.resolve_web_cookie(ctx, region)? {
+                Some(cookie) => self.fetch_with_cookie(&cookie, region).await,
+                None => self.fetch_via_web(region).await,
+            },
             SourceMode::Cli => {
                 let usage = self.probe_cli().await?;
                 Ok(ProviderFetchResult::new(usage, "cli"))
@@ -787,6 +1055,33 @@ mod tests {
                 "https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3"
             );
         }
+    }
+
+    #[test]
+    fn minimax_region_cookie_search_domains_and_www_base_url() {
+        let global = MiniMaxRegion::Global;
+        assert_eq!(global.www_base_url(), "https://www.minimax.io");
+        assert_eq!(global.cookie_search_domains(), ["minimax.io"]);
+        assert_eq!(
+            global.coding_plan_remains_url(),
+            "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains"
+        );
+        assert_eq!(
+            global.www_remains_url(),
+            "https://www.minimax.io/v1/api/openplatform/coding_plan/remains"
+        );
+
+        let cn = MiniMaxRegion::ChinaMainland;
+        assert_eq!(cn.www_base_url(), "https://www.minimaxi.com");
+        assert_eq!(cn.cookie_search_domains(), ["minimaxi.com"]);
+        assert_eq!(
+            cn.coding_plan_remains_url(),
+            "https://platform.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+        );
+        assert_eq!(
+            cn.www_remains_url(),
+            "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+        );
     }
 
     #[test]

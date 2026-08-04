@@ -4,6 +4,7 @@
 //! MiniMax stores API keys locally or in environment
 
 mod coding_plan;
+mod coding_plan_html;
 mod local_storage;
 
 // Re-exports for local storage import
@@ -474,7 +475,7 @@ impl MiniMaxProvider {
                 ProviderError::Parse(format!("Failed to parse coding plan JSON: {e}"))
             })?;
             match coding_plan::parse_coding_plan_value(&json, now) {
-                Ok(snapshot) => return coding_plan::to_usage_snapshot(&snapshot, now),
+                Ok(snapshot) => return coding_plan_html::to_usage_snapshot(&snapshot, now),
                 Err(ProviderError::Parse(msg)) => {
                     tracing::debug!(
                         "MiniMax coding plan JSON parse failed: {msg}; trying remains API"
@@ -493,11 +494,11 @@ impl MiniMaxProvider {
             .text()
             .await
             .map_err(|e| ProviderError::Parse(format!("Failed to read coding plan HTML: {e}")))?;
-        match coding_plan::parse_coding_plan_html(&html, now) {
+        match coding_plan_html::parse_coding_plan_html(&html, now) {
             Ok(snapshot) => match &snapshot {
                 // Empty-services → remains fallback
                 coding_plan::MiniMaxCodingPlanSnapshot::Services(rows) if rows.is_empty() => {}
-                _ => return coding_plan::to_usage_snapshot(&snapshot, now),
+                _ => return coding_plan_html::to_usage_snapshot(&snapshot, now),
             },
             Err(ProviderError::Parse(msg)) => {
                 tracing::debug!("MiniMax coding plan HTML parse failed: {msg}; trying remains API");
@@ -511,6 +512,7 @@ impl MiniMaxProvider {
 
     /// Remains-API fallback: try the platform-host remains URL, then the www-host
     /// remains URL. Move to the second URL only on HTTP 404/405, network error, or
+    /// parse failure; AuthRequired and other statuses stop the chain.
     async fn fetch_coding_plan_remains_fallback(
         &self,
         cookie_header: &str,
@@ -524,7 +526,7 @@ impl MiniMaxProvider {
                 .fetch_remains_once(cookie_header, url, region, now)
                 .await
             {
-                Ok(snapshot) => return coding_plan::to_usage_snapshot(&snapshot, now),
+                Ok(snapshot) => return coding_plan_html::to_usage_snapshot(&snapshot, now),
                 Err(err) => {
                     let should_try_next =
                         matches!(err, ProviderError::Parse(_) | ProviderError::Network(_));
@@ -601,7 +603,7 @@ impl MiniMaxProvider {
             .text()
             .await
             .map_err(|e| ProviderError::Parse(format!("Failed to read remains text: {e}")))?;
-        coding_plan::parse_coding_plan_html(&html, now)
+        coding_plan_html::parse_coding_plan_html(&html, now)
     }
 
     /// Full cookie/web fetch: quota from coding plan + best-effort billing.

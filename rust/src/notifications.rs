@@ -500,7 +500,7 @@ impl NotificationManager {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
     $template = @'
-<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual></toast>
+<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual><audio silent="true"/></toast>
 '@
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml($template)
@@ -607,6 +607,43 @@ mod tests {
     use super::*;
     use crate::core::{PaceStage, RateWindow, UsagePace};
     use chrono::{DateTime, Duration, Utc};
+
+    #[test]
+    fn notification_types_map_to_their_sound_events() {
+        let mappings = [
+            (
+                NotificationType::HighUsage,
+                NotificationSoundEvent::HighUsage,
+            ),
+            (
+                NotificationType::CriticalUsage,
+                NotificationSoundEvent::CriticalUsage,
+            ),
+            (
+                NotificationType::Exhausted,
+                NotificationSoundEvent::Exhausted,
+            ),
+            (
+                NotificationType::StatusIssue,
+                NotificationSoundEvent::StatusIssue,
+            ),
+            (
+                NotificationType::SessionDepleted,
+                NotificationSoundEvent::SessionDepleted,
+            ),
+            (
+                NotificationType::SessionRestored,
+                NotificationSoundEvent::SessionRestored,
+            ),
+        ];
+
+        for (notification_type, sound_event) in mappings {
+            assert_eq!(
+                NotificationManager::sound_event_for(notification_type),
+                sound_event
+            );
+        }
+    }
 
     fn pace(will_last_to_reset: bool, eta_seconds: Option<f64>) -> UsagePace {
         UsagePace {

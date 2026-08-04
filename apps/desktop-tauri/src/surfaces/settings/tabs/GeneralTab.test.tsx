@@ -209,6 +209,11 @@ describe("GeneralTab language picker", () => {
         saving={false}
       />,
     );
+    expect(
+      screen.getByRole("button", {
+        name: "NotificationSoundEventHighUsage: high-usage.wav, NotificationSoundChooseFile",
+      }),
+    ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
         name: "NotificationSoundEventHighUsage: NotificationSoundClearFile",
@@ -217,6 +222,24 @@ describe("GeneralTab language picker", () => {
     expect(set).toHaveBeenLastCalledWith({
       notificationSoundPaths: settings.notificationSoundPaths,
     });
+  });
+
+  it("reenables sound previews immediately when playback fails", async () => {
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={vi.fn()} saving={false} />,
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("get_available_languages"),
+    );
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("playback failed"));
+
+    const preview = screen.getByRole("button", {
+      name: "NotificationSoundEventCriticalUsage: NotificationTestSound",
+    });
+    fireEvent.click(preview);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("playback failed");
+    expect(preview).toBeEnabled();
   });
 
   it("saves a window override on blur and clears it to resume inheritance", () => {

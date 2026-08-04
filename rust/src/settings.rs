@@ -62,11 +62,11 @@ pub struct Settings {
     /// Whether to play sound effects for threshold alerts
     pub sound_enabled: bool,
 
-    /// 通知の種類ごとに使用する WAV ファイル。未指定時は選択中の音源セットを使う。
+    /// Per-notification WAV files. Unassigned events use the selected sound theme.
     #[serde(default)]
     pub notification_sound_paths: NotificationSoundPaths,
 
-    /// カスタム WAV が未指定の通知に使う音源セット。
+    /// Sound theme used when an event has no custom WAV file.
     #[serde(default)]
     pub notification_sound_theme: NotificationSoundTheme,
 

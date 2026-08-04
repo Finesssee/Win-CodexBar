@@ -2939,6 +2939,30 @@ body:has(.tray-panel-reveal) {
   white-space: nowrap;
 }
 
+@media (max-width: 480px) {
+  .settings-field:has(.notification-sound-row) {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .settings-field:has(.notification-sound-row) .settings-field__control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .notification-sound-row {
+    display: flex;
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .notification-sound-file {
+    width: auto;
+    flex: 1 1 140px;
+  }
+}
+
 .settings-section__hint {
   margin: 4px 0 0;
   font-size: 0.78rem;

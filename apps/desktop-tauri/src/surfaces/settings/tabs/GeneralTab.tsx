@@ -188,10 +188,15 @@ export default function GeneralTab({
   const handleTestSound = useCallback((event: NotificationSoundEvent) => {
     setSoundError(null);
     setPlayingSound(event);
+    const timeoutId = window.setTimeout(
+      () => setPlayingSound(null),
+      NOTIFICATION_SOUND_PREVIEW_DURATION_MS,
+    );
     void playNotificationSound(event).catch((error: unknown) => {
+      window.clearTimeout(timeoutId);
+      setPlayingSound(null);
       setSoundError(error instanceof Error ? error.message : String(error));
     });
-    window.setTimeout(() => setPlayingSound(null), NOTIFICATION_SOUND_PREVIEW_DURATION_MS);
   }, []);
 
   const handleChooseSound = useCallback(
@@ -342,7 +347,7 @@ export default function GeneralTab({
                       <button
                         type="button"
                         className="shortcut-capture__button shortcut-capture__button--ghost notification-sound-file"
-                        aria-label={`${label}: ${t("NotificationSoundChooseFile")}`}
+                        aria-label={`${label}: ${path ? `${fileName(path)}, ` : ""}${t("NotificationSoundChooseFile")}`}
                         title={path ?? t("NotificationSoundUsesTheme")}
                         disabled={saving}
                         onClick={() => void handleChooseSound(sound.pathKey)}
@@ -380,16 +385,6 @@ export default function GeneralTab({
                   {soundError}
                 </p>
               )}
-              <Field label={t("SoundVolume")} description={t("SoundVolumeHelper")}>
-                <NumberInput
-                  value={settings.soundVolume}
-                  min={0}
-                  max={100}
-                  step={5}
-                  disabled={saving}
-                  onChange={(v) => set({ soundVolume: v })}
-                />
-              </Field>
             </>
           )}
         </div>

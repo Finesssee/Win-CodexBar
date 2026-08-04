@@ -1,6 +1,6 @@
-//! CodexBar の通知音再生。
+//! Notification sound playback for CodexBar.
 //!
-//! 通知別の独自 WAV、CodexBar 内蔵音、従来の Windows システム音を扱う。
+//! Handles per-event custom WAV files, built-in CodexBar sounds, and Windows system sounds.
 
 #![allow(dead_code)]
 
@@ -8,14 +8,19 @@ use crate::settings::{NotificationSoundPaths, NotificationSoundTheme, Settings};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const MB_ICONERROR: u32 = 0x00000010;
-const MB_ICONWARNING: u32 = 0x00000030;
-const MB_ICONINFORMATION: u32 = 0x00000040;
+#[cfg(target_os = "windows")]
+use std::sync::{OnceLock, mpsc};
 
-const WAV_HEADER_SIZE: u32 = 44;
+const MINIMUM_WAV_SIZE: usize = 44;
 const TAG_SIZE: usize = 4;
 const RIFF_TAG_OFFSET: usize = 0;
+const RIFF_SIZE_OFFSET: usize = 4;
+const RIFF_SIZE_BASE: usize = 8;
 const WAVE_TAG_OFFSET: usize = 8;
+const RIFF_HEADER_SIZE: usize = 12;
+const CHUNK_HEADER_SIZE: usize = 8;
+const CHUNK_SIZE_OFFSET: usize = 4;
+const MINIMUM_FORMAT_CHUNK_SIZE: usize = 16;
 
 const PREDICTIVE_WARNING_WAV: &[u8] = include_bytes!("../assets/sounds/predictive-warning.wav");
 const HIGH_USAGE_WAV: &[u8] = include_bytes!("../assets/sounds/high-usage.wav");
@@ -25,7 +30,7 @@ const STATUS_ISSUE_WAV: &[u8] = include_bytes!("../assets/sounds/status-issue.wa
 const SESSION_DEPLETED_WAV: &[u8] = include_bytes!("../assets/sounds/session-depleted.wav");
 const SESSION_RESTORED_WAV: &[u8] = include_bytes!("../assets/sounds/session-restored.wav");
 
-/// 個別の音を割り当てられる通知イベント。
+/// Notification events that can have individual sounds assigned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NotificationSoundEvent {
@@ -51,13 +56,13 @@ impl NotificationSoundEvent {
         }
     }
 
-    fn windows_sound_type(self) -> u32 {
+    fn windows_sound_alias(self) -> &'static str {
         match self {
-            Self::PredictiveWarning | Self::HighUsage => MB_ICONWARNING,
+            Self::PredictiveWarning | Self::HighUsage => "SystemExclamation",
             Self::CriticalUsage | Self::Exhausted | Self::StatusIssue | Self::SessionDepleted => {
-                MB_ICONERROR
+                "SystemHand"
             }
-            Self::SessionRestored => MB_ICONINFORMATION,
+            Self::SessionRestored => "SystemAsterisk",
         }
     }
 
@@ -82,6 +87,14 @@ pub enum SoundError {
     MissingFile(String),
     #[error("notification sound must be a WAV file: {0}")]
     UnsupportedFormat(String),
+    #[error("could not read notification sound file {path}: {source}")]
+    ReadFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("notification sound is not a valid WAV file ({reason}): {path}")]
+    InvalidWav { path: String, reason: &'static str },
     #[error("Windows could not play the notification sound: {0}")]
     PlaybackFailed(String),
     #[error("could not start notification sound playback: {0}")]
@@ -90,7 +103,7 @@ pub enum SoundError {
     UnsupportedPlatform,
 }
 
-/// 1つの通知イベントに設定された音を再生する。
+/// Play the sound configured for one notification event.
 pub fn play_alert(event: NotificationSoundEvent, settings: &Settings) -> Result<(), SoundError> {
     if !settings.sound_enabled {
         return Ok(());
@@ -107,7 +120,7 @@ pub fn play_alert(event: NotificationSoundEvent, settings: &Settings) -> Result<
     }
 }
 
-/// 通知音として保存する前にファイルパスを検証する。
+/// Validate a file path before saving it as a notification sound.
 pub fn validate_custom_sound_path(path: &str) -> Result<(), SoundError> {
     let candidate = Path::new(path);
     if !candidate.is_absolute() {
@@ -123,10 +136,82 @@ pub fn validate_custom_sound_path(path: &str) -> Result<(), SoundError> {
     if !is_wav {
         return Err(SoundError::UnsupportedFormat(path.to_string()));
     }
+    let wav = std::fs::read(candidate).map_err(|source| SoundError::ReadFailed {
+        path: path.to_string(),
+        source,
+    })?;
+    validate_wav_bytes(&wav).map_err(|reason| SoundError::InvalidWav {
+        path: path.to_string(),
+        reason,
+    })?;
     Ok(())
 }
 
-/// 設定更新で追加または変更された独自通知音を検証する。
+fn validate_wav_bytes(wav: &[u8]) -> Result<(), &'static str> {
+    if wav.len() < RIFF_HEADER_SIZE {
+        return Err("file is shorter than the RIFF header");
+    }
+    if &wav[RIFF_TAG_OFFSET..RIFF_TAG_OFFSET + TAG_SIZE] != b"RIFF"
+        || &wav[WAVE_TAG_OFFSET..WAVE_TAG_OFFSET + TAG_SIZE] != b"WAVE"
+    {
+        return Err("RIFF/WAVE signature is missing");
+    }
+
+    let riff_size = u32::from_le_bytes(
+        wav[RIFF_SIZE_OFFSET..RIFF_SIZE_OFFSET + TAG_SIZE]
+            .try_into()
+            .expect("RIFF size field"),
+    ) as usize;
+    let riff_end = RIFF_SIZE_BASE
+        .checked_add(riff_size)
+        .ok_or("RIFF size overflows")?;
+    if riff_end < RIFF_HEADER_SIZE || riff_end > wav.len() {
+        return Err("RIFF size exceeds the file bounds");
+    }
+
+    let mut offset = RIFF_HEADER_SIZE;
+    let mut has_format = false;
+    let mut has_audio_data = false;
+    while offset + CHUNK_HEADER_SIZE <= riff_end {
+        let chunk_size = u32::from_le_bytes(
+            wav[offset + CHUNK_SIZE_OFFSET..offset + CHUNK_HEADER_SIZE]
+                .try_into()
+                .expect("WAV chunk size field"),
+        ) as usize;
+        let data_start = offset + CHUNK_HEADER_SIZE;
+        let data_end = data_start
+            .checked_add(chunk_size)
+            .ok_or("WAV chunk size overflows")?;
+        if data_end > riff_end {
+            return Err("WAV chunk exceeds the RIFF bounds");
+        }
+
+        match &wav[offset..offset + TAG_SIZE] {
+            b"fmt " if chunk_size >= MINIMUM_FORMAT_CHUNK_SIZE => has_format = true,
+            b"fmt " => return Err("format chunk is too short"),
+            b"data" if chunk_size > 0 => has_audio_data = true,
+            _ => {}
+        }
+
+        let padding = chunk_size % 2;
+        offset = data_end
+            .checked_add(padding)
+            .ok_or("WAV chunk padding overflows")?;
+        if offset > riff_end {
+            return Err("WAV chunk padding exceeds the RIFF bounds");
+        }
+    }
+
+    if !has_format {
+        return Err("format chunk is missing");
+    }
+    if !has_audio_data {
+        return Err("audio data chunk is missing or empty");
+    }
+    Ok(())
+}
+
+/// Validate custom notification sounds added or changed by a settings update.
 pub fn validate_custom_sound_path_updates(
     current: &NotificationSoundPaths,
     updated: &NotificationSoundPaths,
@@ -168,18 +253,31 @@ pub fn validate_custom_sound_path_updates(
 
 #[cfg(target_os = "windows")]
 fn play_windows_system_sound(event: NotificationSoundEvent) -> Result<(), SoundError> {
-    use std::ffi::c_uint;
+    enqueue_playback(PlaybackRequest::WindowsSystem(event))
+}
 
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn MessageBeep(sound_type: c_uint) -> i32;
-    }
+#[cfg(target_os = "windows")]
+fn perform_windows_system_sound(event: NotificationSoundEvent) -> Result<(), SoundError> {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_NODEFAULT};
+    use windows::core::PCWSTR;
 
-    let result = unsafe { MessageBeep(event.windows_sound_type()) };
-    if result == 0 {
-        Err(SoundError::PlaybackFailed(format!("{event:?}")))
-    } else {
+    let wide_alias: Vec<u16> = event
+        .windows_sound_alias()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let played = unsafe {
+        PlaySoundW(
+            PCWSTR(wide_alias.as_ptr()),
+            HMODULE::default(),
+            SND_ALIAS | SND_NODEFAULT,
+        )
+    };
+    if played.as_bool() {
         Ok(())
+    } else {
+        Err(SoundError::PlaybackFailed(format!("{event:?}")))
     }
 }
 
@@ -190,9 +288,14 @@ fn play_windows_system_sound(_event: NotificationSoundEvent) -> Result<(), Sound
 
 #[cfg(target_os = "windows")]
 fn play_custom_wav(path: &str) -> Result<(), SoundError> {
+    enqueue_playback(PlaybackRequest::CustomWav(path.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn perform_custom_wav(path: &str) -> Result<(), SoundError> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Foundation::HMODULE;
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT};
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_FILENAME, SND_NODEFAULT};
     use windows::core::PCWSTR;
 
     let wide_path: Vec<u16> = Path::new(path)
@@ -204,7 +307,7 @@ fn play_custom_wav(path: &str) -> Result<(), SoundError> {
         PlaySoundW(
             PCWSTR(wide_path.as_ptr()),
             HMODULE::default(),
-            SND_ASYNC | SND_FILENAME | SND_NODEFAULT,
+            SND_FILENAME | SND_NODEFAULT,
         )
     };
     if played.as_bool() {
@@ -221,30 +324,28 @@ fn play_custom_wav(_path: &str) -> Result<(), SoundError> {
 
 #[cfg(target_os = "windows")]
 fn play_built_in_sound(event: NotificationSoundEvent) -> Result<(), SoundError> {
-    let wav = event.built_in_wav();
-    std::thread::Builder::new()
-        .name("codexbar-notification-sound".to_string())
-        .spawn(move || {
-            use windows::Win32::Foundation::HMODULE;
-            use windows::Win32::Media::Audio::{PlaySoundA, SND_MEMORY, SND_NODEFAULT};
-            use windows::core::PCSTR;
+    enqueue_playback(PlaybackRequest::BuiltIn(event))
+}
 
-            let played = unsafe {
-                PlaySoundA(
-                    PCSTR(wav.as_ptr()),
-                    HMODULE::default(),
-                    SND_MEMORY | SND_NODEFAULT,
-                )
-            };
-            if !played.as_bool() {
-                tracing::warn!(
-                    ?event,
-                    "CodexBar built-in notification sound failed to play"
-                );
-            }
-        })
-        .map_err(|error| SoundError::PlaybackThread(error.to_string()))?;
-    Ok(())
+#[cfg(target_os = "windows")]
+fn perform_built_in_sound(event: NotificationSoundEvent) -> Result<(), SoundError> {
+    let wav = event.built_in_wav();
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Media::Audio::{PlaySoundA, SND_MEMORY, SND_NODEFAULT};
+    use windows::core::PCSTR;
+
+    let played = unsafe {
+        PlaySoundA(
+            PCSTR(wav.as_ptr()),
+            HMODULE::default(),
+            SND_MEMORY | SND_NODEFAULT,
+        )
+    };
+    if played.as_bool() {
+        Ok(())
+    } else {
+        Err(SoundError::PlaybackFailed(format!("{event:?}")))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -252,27 +353,69 @@ fn play_built_in_sound(_event: NotificationSoundEvent) -> Result<(), SoundError>
     Err(SoundError::UnsupportedPlatform)
 }
 
+#[cfg(target_os = "windows")]
+enum PlaybackRequest {
+    WindowsSystem(NotificationSoundEvent),
+    BuiltIn(NotificationSoundEvent),
+    CustomWav(String),
+}
+
+#[cfg(target_os = "windows")]
+static PLAYBACK_QUEUE: OnceLock<Result<mpsc::Sender<PlaybackRequest>, String>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn enqueue_playback(request: PlaybackRequest) -> Result<(), SoundError> {
+    let sender = PLAYBACK_QUEUE.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("codexbar-notification-sound".to_string())
+            .spawn(move || playback_worker(receiver))
+            .map(|_| sender)
+            .map_err(|error| error.to_string())
+    });
+    match sender {
+        Ok(sender) => sender
+            .send(request)
+            .map_err(|error| SoundError::PlaybackThread(error.to_string())),
+        Err(error) => Err(SoundError::PlaybackThread(error.clone())),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn playback_worker(receiver: mpsc::Receiver<PlaybackRequest>) {
+    for request in receiver {
+        let result = match request {
+            PlaybackRequest::WindowsSystem(event) => perform_windows_system_sound(event),
+            PlaybackRequest::BuiltIn(event) => perform_built_in_sound(event),
+            PlaybackRequest::CustomWav(path) => perform_custom_wav(&path),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "notification sound failed to play");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn has_non_empty_data_chunk(wav: &[u8]) -> bool {
-        let mut offset = 12;
-        while offset + 8 <= wav.len() {
+    fn find_chunk<'a>(wav: &'a [u8], tag: &[u8; TAG_SIZE]) -> Option<&'a [u8]> {
+        let mut offset = RIFF_HEADER_SIZE;
+        while offset + CHUNK_HEADER_SIZE <= wav.len() {
             let chunk_size = u32::from_le_bytes(
-                wav[offset + 4..offset + 8]
+                wav[offset + CHUNK_SIZE_OFFSET..offset + CHUNK_HEADER_SIZE]
                     .try_into()
                     .expect("WAV chunk size"),
             ) as usize;
-            let data_start = offset + 8;
+            let data_start = offset + CHUNK_HEADER_SIZE;
             let data_end = data_start.saturating_add(chunk_size);
-            if &wav[offset..offset + TAG_SIZE] == b"data" {
-                return chunk_size > 0 && data_end <= wav.len();
+            if &wav[offset..offset + TAG_SIZE] == tag && data_end <= wav.len() {
+                return Some(&wav[data_start..data_end]);
             }
             let padding = chunk_size % 2;
             offset = data_end.saturating_add(padding);
         }
-        false
+        None
     }
 
     const ALL_EVENTS: [NotificationSoundEvent; 7] = [
@@ -288,12 +431,12 @@ mod tests {
     #[test]
     fn windows_defaults_preserve_existing_alert_mapping() {
         assert_eq!(
-            NotificationSoundEvent::PredictiveWarning.windows_sound_type(),
-            MB_ICONWARNING
+            NotificationSoundEvent::PredictiveWarning.windows_sound_alias(),
+            "SystemExclamation"
         );
         assert_eq!(
-            NotificationSoundEvent::HighUsage.windows_sound_type(),
-            MB_ICONWARNING
+            NotificationSoundEvent::HighUsage.windows_sound_alias(),
+            "SystemExclamation"
         );
         for event in [
             NotificationSoundEvent::CriticalUsage,
@@ -301,11 +444,11 @@ mod tests {
             NotificationSoundEvent::StatusIssue,
             NotificationSoundEvent::SessionDepleted,
         ] {
-            assert_eq!(event.windows_sound_type(), MB_ICONERROR);
+            assert_eq!(event.windows_sound_alias(), "SystemHand");
         }
         assert_eq!(
-            NotificationSoundEvent::SessionRestored.windows_sound_type(),
-            MB_ICONINFORMATION
+            NotificationSoundEvent::SessionRestored.windows_sound_alias(),
+            "SystemAsterisk"
         );
     }
 
@@ -316,8 +459,25 @@ mod tests {
             let wav = event.built_in_wav();
             assert_eq!(&wav[RIFF_TAG_OFFSET..RIFF_TAG_OFFSET + TAG_SIZE], b"RIFF");
             assert_eq!(&wav[WAVE_TAG_OFFSET..WAVE_TAG_OFFSET + TAG_SIZE], b"WAVE");
-            assert!(has_non_empty_data_chunk(wav));
-            assert!(wav.len() > WAV_HEADER_SIZE as usize);
+            assert!(validate_wav_bytes(wav).is_ok());
+            assert!(wav.len() > MINIMUM_WAV_SIZE);
+            let format = find_chunk(wav, b"fmt ").expect("format chunk");
+            assert_eq!(
+                u16::from_le_bytes(format[0..2].try_into().expect("audio format")),
+                1
+            );
+            assert_eq!(
+                u16::from_le_bytes(format[2..4].try_into().expect("channel count")),
+                2
+            );
+            assert_eq!(
+                u32::from_le_bytes(format[4..8].try_into().expect("sample rate")),
+                48_000
+            );
+            assert_eq!(
+                u16::from_le_bytes(format[14..16].try_into().expect("bit depth")),
+                16
+            );
             wav_data.push(wav);
         }
 
@@ -366,6 +526,13 @@ mod tests {
         assert!(matches!(
             validate_custom_sound_path(mp3.to_str().expect("UTF-8 test path")),
             Err(SoundError::UnsupportedFormat(_))
+        ));
+
+        let fake_wav = temp.path().join("renamed.wav");
+        std::fs::write(&fake_wav, b"not audio").expect("write test file");
+        assert!(matches!(
+            validate_custom_sound_path(fake_wav.to_str().expect("UTF-8 test path")),
+            Err(SoundError::InvalidWav { .. })
         ));
     }
 

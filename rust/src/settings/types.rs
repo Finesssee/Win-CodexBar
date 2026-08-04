@@ -12,7 +12,7 @@ pub struct UsageThresholds {
     pub critical: f64,
 }
 
-/// 通知の種類ごとに割り当てる WAV ファイル。
+/// WAV files assigned to individual notification events.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NotificationSoundPaths {
@@ -25,14 +25,14 @@ pub struct NotificationSoundPaths {
     pub session_restored: Option<String>,
 }
 
-/// カスタム WAV が未指定の通知に使う音源セット。
+/// Sound theme used when an event has no custom WAV file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NotificationSoundTheme {
-    /// 従来どおり Windows のシステム音を使う。
+    /// Use the existing Windows system-sound mapping.
     #[default]
     Windows,
-    /// 通知ごとに異なる CodexBar 内蔵音を使う。
+    /// Use a distinct built-in CodexBar sound for each event.
     CodexBar,
 }
 

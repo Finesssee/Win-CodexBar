@@ -174,7 +174,7 @@ pub fn get_work_area_rect(app: tauri::AppHandle) -> Result<WorkAreaRect, String>
 pub fn play_notification_sound(
     event: codexbar::sound::NotificationSoundEvent,
 ) -> Result<(), String> {
-    // 実際の通知と同じ設定解決を通して試聴する。
+    // Preview through the same settings resolution path used by real notifications.
     let settings = Settings::load();
     codexbar::sound::play_alert(event, &settings).map_err(|error| error.to_string())
 }

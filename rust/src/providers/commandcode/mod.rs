@@ -89,6 +89,28 @@ impl CommandCodeProvider {
             ProviderError::Parse(format!("Failed to parse Command Code response: {e}"))
         })
     }
+
+    /// Cookie refresh path (upstream #2564):
+    /// 1. Try last validated cached cookie header
+    /// 2. On auth failure: clear cache, re-import browser cookies, validate, store
+    async fn fetch_with_cookie_refresh(&self) -> Result<ProviderFetchResult, ProviderError> {
+        use crate::browser::cookie_cache::CookieHeaderCache;
+
+        if let Some(cached) = CookieHeaderCache::load(ProviderId::CommandCode) {
+            match self.fetch_web(&cached.cookie_header).await {
+                Ok(result) => return Ok(result),
+                Err(err) if matches!(err, ProviderError::AuthRequired) => {
+                    CookieHeaderCache::clear(ProviderId::CommandCode);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        let cookie_header = crate::providers::browser_cookie_header(&["commandcode.ai"])?;
+        let result = self.fetch_web(&cookie_header).await?;
+        let _ = CookieHeaderCache::store(ProviderId::CommandCode, &cookie_header, "browser");
+        Ok(result)
+    }
 }
 
 fn normalize_cookie_header(raw: &str) -> Option<String> {
@@ -257,11 +279,10 @@ impl Provider for CommandCodeProvider {
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::Web => {
-                let cookie = match ctx.manual_cookie_header.as_deref() {
-                    Some(cookie) => cookie.to_string(),
-                    None => crate::providers::browser_cookie_header(&["commandcode.ai"])?,
-                };
-                self.fetch_web(&cookie).await
+                if let Some(cookie) = ctx.manual_cookie_header.as_deref() {
+                    return self.fetch_web(cookie).await;
+                }
+                self.fetch_with_cookie_refresh().await
             }
             SourceMode::OAuth | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))

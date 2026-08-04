@@ -40,6 +40,7 @@ import manus from "./icons/ProviderIcon-manus.svg?raw";
 import mimo from "./icons/ProviderIcon-mimo.svg?raw";
 import minimax from "./icons/ProviderIcon-minimax.svg?raw";
 import mistral from "./icons/ProviderIcon-mistral.svg?raw";
+import notion from "./icons/ProviderIcon-notion.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
 import opencode from "./icons/ProviderIcon-opencode.svg?raw";
 import opencodego from "./icons/ProviderIcon-opencodego.svg?raw";
@@ -118,6 +119,7 @@ const RAW: Record<string, string> = {
   manus: tint(manus),
   mimo: tint(mimo),
   minimax: tint(minimax),
+  notion: tint(notion),
   mistral: tint(mistral),
   ollama: tint(ollama),
   opencode: tint(opencode),
@@ -209,6 +211,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   devin:       { id: "devin",       brandColor: "#111827", fallbackLetter: "D" },
   zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
   qwencloud:   { id: "qwencloud",   brandColor: "#615CED", fallbackLetter: "Q" },
+  notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
 };
 
 const ALIASES: Record<string, string> = {
@@ -221,6 +224,9 @@ const ALIASES: Record<string, string> = {
   qwen: "qwencloud",
   "qwen cloud": "qwencloud",
   "qwen-cloud": "qwencloud",
+  "notion ai": "notion",
+  "notion-ai": "notion",
+  notionai: "notion",
   qianwen: "alibaba",
   "alibaba token plan": "alibabatokenplan",
   "alibaba-token-plan": "alibabatokenplan",

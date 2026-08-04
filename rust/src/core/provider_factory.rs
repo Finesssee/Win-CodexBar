@@ -15,11 +15,11 @@ use crate::providers::{
     FactoryProvider, GeminiProvider, GrokProvider, GroqProvider, InfiniProvider, JetBrainsProvider,
     KiloProvider, KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider, LiteLLMProvider,
     LongCatProvider, ManusProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
-    NanoGPTProvider, NeuralwattProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider,
-    OpenCodeProvider, OpenRouterProvider, PerplexityProvider, PoeProvider, QoderProvider,
-    QwenCloudProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider, T3ChatProvider,
-    VeniceProvider, VertexAIProvider, WarpProvider, WayfinderProvider, WindsurfProvider,
-    ZaiProvider, ZedProvider, ZenMuxProvider, ZoomMateProvider,
+    NanoGPTProvider, NeuralwattProvider, NotionProvider, OllamaProvider, OpenAIApiProvider,
+    OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider, PerplexityProvider, PoeProvider,
+    QoderProvider, QwenCloudProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider,
+    T3ChatProvider, VeniceProvider, VertexAIProvider, WarpProvider, WayfinderProvider,
+    WindsurfProvider, ZaiProvider, ZedProvider, ZenMuxProvider, ZoomMateProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].
@@ -94,6 +94,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Neuralwatt => Box::new(NeuralwattProvider::new()),
         ProviderId::ZoomMate => Box::new(ZoomMateProvider::new()),
         ProviderId::QwenCloud => Box::new(QwenCloudProvider::new()),
+        ProviderId::Notion => Box::new(NotionProvider::new()),
     }
 }
 

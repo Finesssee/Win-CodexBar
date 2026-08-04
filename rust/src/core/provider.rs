@@ -77,6 +77,7 @@ pub enum ProviderId {
     Neuralwatt,
     ZoomMate,
     QwenCloud,
+    Notion,
 }
 
 impl ProviderId {
@@ -149,6 +150,7 @@ impl ProviderId {
             ProviderId::Neuralwatt,
             ProviderId::ZoomMate,
             ProviderId::QwenCloud,
+            ProviderId::Notion,
         ]
     }
 
@@ -221,6 +223,7 @@ impl ProviderId {
             ProviderId::Neuralwatt => "neuralwatt",
             ProviderId::ZoomMate => "zoommate",
             ProviderId::QwenCloud => "qwen-cloud",
+            ProviderId::Notion => "notion",
         }
     }
 
@@ -295,6 +298,7 @@ impl ProviderId {
             ProviderId::Neuralwatt => "Neuralwatt",
             ProviderId::ZoomMate => "ZoomMate",
             ProviderId::QwenCloud => "Qwen Cloud",
+            ProviderId::Notion => "Notion AI",
         }
     }
 
@@ -372,6 +376,7 @@ impl ProviderId {
             ProviderId::Neuralwatt => None,
             ProviderId::ZoomMate => Some("zoommate.zoom.us"),
             ProviderId::QwenCloud => Some("qwencloud.com"),
+            ProviderId::Notion => Some("app.notion.com"),
         }
     }
 
@@ -457,6 +462,7 @@ impl ProviderId {
                 Some(ProviderId::QwenCloud)
             }
             "zoommate" | "zoom-mate" | "zoom mate" => Some(ProviderId::ZoomMate),
+            "notion" | "notion-ai" | "notionai" | "notion ai" => Some(ProviderId::Notion),
             _ => None,
         }
     }
@@ -699,6 +705,8 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("cross-model", ProviderId::CrossModel);
     map.insert("sakana-ai", ProviderId::Sakana);
     map.insert("sub-2-api", ProviderId::Sub2Api);
+    map.insert("notion-ai", ProviderId::Notion);
+    map.insert("notionai", ProviderId::Notion);
     map
 }
 
@@ -709,7 +717,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 66);
+        assert_eq!(all.len(), 67);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Kimi));
@@ -756,6 +764,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Neuralwatt));
         assert!(all.contains(&ProviderId::ZoomMate));
         assert!(all.contains(&ProviderId::QwenCloud));
+        assert!(all.contains(&ProviderId::Notion));
     }
 
     #[test]
@@ -948,5 +957,28 @@ mod tests {
         );
         // Bare "qwen" must not resolve to Alibaba Coding Plan.
         assert_ne!(ProviderId::from_cli_name("qwen"), Some(ProviderId::Alibaba));
+    }
+
+    #[test]
+    fn test_provider_id_notion() {
+        assert_eq!(ProviderId::Notion.cli_name(), "notion");
+        assert_eq!(ProviderId::Notion.display_name(), "Notion AI");
+        assert_eq!(ProviderId::Notion.cookie_domain(), Some("app.notion.com"));
+        assert_eq!(
+            ProviderId::from_cli_name("notion"),
+            Some(ProviderId::Notion)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("notion-ai"),
+            Some(ProviderId::Notion)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("notionai"),
+            Some(ProviderId::Notion)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("notion ai"),
+            Some(ProviderId::Notion)
+        );
     }
 }

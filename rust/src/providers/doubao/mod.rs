@@ -499,10 +499,16 @@ fn coding_plan_window(
         let level = quota.level.to_ascii_lowercase();
         levels.iter().any(|candidate| *candidate == level)
     })?;
+    let resets_at = quota.reset_timestamp.and_then(datetime_from_epoch);
+    // Monthly windows: expand the 30-day sentinel to the real calendar cycle.
+    let window_minutes = match minutes {
+        Some(m) if m == 30 * 24 * 60 => RateWindow::monthly_window_minutes(resets_at).or(Some(m)),
+        other => other,
+    };
     Some(RateWindow::with_details(
         quota.percent,
-        minutes,
-        quota.reset_timestamp.and_then(datetime_from_epoch),
+        window_minutes,
+        resets_at,
         None,
     ))
 }
@@ -1045,7 +1051,10 @@ mod tests {
         let snapshot = coding_plan_snapshot(decode_coding_plan_usage(body).unwrap());
         assert_eq!(snapshot.primary.used_percent, 12.5);
         assert_eq!(snapshot.secondary.unwrap().used_percent, 50.0);
-        assert_eq!(snapshot.tertiary.unwrap().used_percent, 75.0);
+        let monthly = snapshot.tertiary.expect("monthly");
+        assert_eq!(monthly.used_percent, 75.0);
+        // ResetTimestamp 1785628800 = 2026-08-02 → prior month is 31 days.
+        assert_eq!(monthly.window_minutes, Some(31 * 24 * 60));
         assert_eq!(snapshot.login_method.as_deref(), Some("active"));
     }
 

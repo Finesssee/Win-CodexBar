@@ -1,6 +1,6 @@
 //! Rate window model - represents a usage limit window (e.g., 5-hour session, 7-day weekly)
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Represents a rate limit window with usage percentage and reset time
@@ -63,6 +63,27 @@ impl RateWindow {
         }
     }
 
+    /// Real UTC Gregorian month length ending at `resets_at`, in minutes.
+    ///
+    /// Mirrors upstream `ProviderPaceCapability.inferredMonthlyWindowMinutes`
+    /// (reset − 1 calendar month). Used so monthly pace scores the actual cycle
+    /// (28–31 days) instead of a flat 30-day sentinel.
+    pub fn calendar_month_window_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
+        let start = subtract_one_calendar_month(resets_at)?;
+        let minutes = (resets_at - start).num_minutes();
+        if minutes > 0 {
+            Some(minutes as u32)
+        } else {
+            None
+        }
+    }
+
+    /// Monthly window minutes from a known reset. Returns `None` when there is
+    /// no reset (upstream leaves windowMinutes unset in that case).
+    pub fn monthly_window_minutes(resets_at: Option<DateTime<Utc>>) -> Option<u32> {
+        resets_at.and_then(Self::calendar_month_window_minutes)
+    }
+
     /// Get the remaining percentage (100 - used)
     pub fn remaining_percent(&self) -> f64 {
         100.0 - self.used_percent
@@ -111,6 +132,39 @@ impl RateWindow {
     }
 }
 
+/// Subtract one Gregorian calendar month in UTC (upstream Calendar.date(byAdding: .month, -1)).
+fn subtract_one_calendar_month(dt: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let y = dt.year();
+    let m = dt.month();
+    let (py, pm) = if m == 1 {
+        (y - 1, 12)
+    } else {
+        (y, m - 1)
+    };
+    let max_day = days_in_month(py, pm);
+    let day = dt.day().min(max_day);
+    dt.date_naive()
+        .with_year(py)?
+        .with_month(pm)?
+        .with_day(day)
+        .map(|d| d.and_time(dt.time()).and_utc())
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if chrono::NaiveDate::from_ymd_opt(year, 2, 29).is_some() {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
 impl Default for RateWindow {
     fn default() -> Self {
         Self::new(0.0)
@@ -120,6 +174,7 @@ impl Default for RateWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn test_remaining_percent() {
@@ -152,5 +207,22 @@ mod tests {
         );
 
         assert_eq!(window.format_countdown().as_deref(), Some("1m"));
+    }
+
+    #[test]
+    fn calendar_month_window_uses_real_cycle_length() {
+        // March 1 2026 ends a 28-day February cycle (upstream ProviderPaceCapabilityTests).
+        let resets = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(28 * 24 * 60)
+        );
+        // 31-day cycle ending Aug 1.
+        let resets = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(31 * 24 * 60)
+        );
+        assert_eq!(RateWindow::monthly_window_minutes(None), None);
     }
 }

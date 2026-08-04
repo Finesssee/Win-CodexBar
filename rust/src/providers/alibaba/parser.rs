@@ -90,10 +90,12 @@ pub(crate) fn parse_response(json: &serde_json::Value) -> Result<UsageSnapshot, 
         ms_to_dt("perWeekQuotaNextRefreshTime"),
         detail("perWeekUsedQuota", "perWeekTotalQuota"),
     );
+    let monthly_reset = ms_to_dt("perBillMonthQuotaNextRefreshTime");
     let monthly = RateWindow::with_details(
         pct("perBillMonthUsedQuota", "perBillMonthTotalQuota"),
-        Some(30 * 24 * 60),
-        ms_to_dt("perBillMonthQuotaNextRefreshTime"),
+        RateWindow::monthly_window_minutes(monthly_reset)
+            .or(Some(30 * 24 * 60)),
+        monthly_reset,
         detail("perBillMonthUsedQuota", "perBillMonthTotalQuota"),
     );
 
@@ -167,6 +169,8 @@ mod tests {
 
         let monthly = usage.tertiary.unwrap();
         assert!((monthly.used_percent - 0.028).abs() < 0.01);
+        // perBillMonthQuotaNextRefreshTime 1783267200000 = 2026-07-05 → 30-day cycle.
+        assert_eq!(monthly.window_minutes, Some(30 * 24 * 60));
 
         assert_eq!(usage.login_method.as_deref(), Some("Coding Plan Pro"));
     }

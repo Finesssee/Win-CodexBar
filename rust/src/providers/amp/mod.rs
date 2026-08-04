@@ -370,15 +370,17 @@ pub fn usage_snapshot_from_amp_display_text(
     if let Some(sub) = parse_amp_subscription_usage(text, now) {
         // Labels: primary = "Other usage", secondary = "Orb usage"
         // (surfaced via provider session/weekly labels + plan login_method).
+        let monthly_minutes = RateWindow::monthly_window_minutes(Some(sub.resets_at))
+            .unwrap_or(AMP_MONTHLY_WINDOW_MINUTES);
         let other = RateWindow::with_details(
             sub.other_used_percent,
-            Some(AMP_MONTHLY_WINDOW_MINUTES),
+            Some(monthly_minutes),
             Some(sub.resets_at),
             Some(sub.reset_description.clone()),
         );
         let orb = RateWindow::with_details(
             sub.orb_used_percent,
-            Some(AMP_MONTHLY_WINDOW_MINUTES),
+            Some(monthly_minutes),
             Some(sub.resets_at),
             Some(sub.reset_description),
         );
@@ -459,7 +461,8 @@ Subscription Megawatt: 42% other usage and 88% orb usage remaining - resets upon
         assert!((snapshot.primary.used_percent - 58.0).abs() < f64::EPSILON);
         assert_eq!(
             snapshot.primary.window_minutes,
-            Some(AMP_MONTHLY_WINDOW_MINUTES)
+            RateWindow::monthly_window_minutes(snapshot.primary.resets_at)
+                .or(Some(AMP_MONTHLY_WINDOW_MINUTES))
         );
         assert_eq!(
             snapshot.primary.reset_description.as_deref(),
@@ -467,7 +470,11 @@ Subscription Megawatt: 42% other usage and 88% orb usage remaining - resets upon
         );
         let secondary = snapshot.secondary.expect("orb secondary");
         assert!((secondary.used_percent - 12.0).abs() < f64::EPSILON);
-        assert_eq!(secondary.window_minutes, Some(AMP_MONTHLY_WINDOW_MINUTES));
+        assert_eq!(
+            secondary.window_minutes,
+            RateWindow::monthly_window_minutes(secondary.resets_at)
+                .or(Some(AMP_MONTHLY_WINDOW_MINUTES))
+        );
         assert_eq!(snapshot.login_method.as_deref(), Some("Megawatt"));
     }
 

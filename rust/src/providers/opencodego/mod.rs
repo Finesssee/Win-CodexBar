@@ -157,10 +157,11 @@ impl OpenCodeGoProvider {
         }
 
         if let Some((pct, reset)) = monthly {
+            let resets_at = now + chrono::Duration::seconds(reset);
             snap = snap.with_tertiary(RateWindow::with_details(
                 pct,
-                Some(43200),
-                Some(now + chrono::Duration::seconds(reset)),
+                RateWindow::monthly_window_minutes(Some(resets_at)).or(Some(43200)),
+                Some(resets_at),
                 None,
             ));
         }
@@ -491,6 +492,10 @@ mod tests {
         assert!((secondary.used_percent - 13.0).abs() < 0.001);
         let tertiary = snap.tertiary.expect("monthly");
         assert!((tertiary.used_percent - 7.0).abs() < 0.001);
+        let expected = RateWindow::monthly_window_minutes(tertiary.resets_at)
+            .or(Some(43200));
+        assert_eq!(tertiary.window_minutes, expected);
+        assert!(tertiary.resets_at.is_some());
     }
 
     #[test]

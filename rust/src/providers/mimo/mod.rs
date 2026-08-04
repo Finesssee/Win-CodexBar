@@ -233,12 +233,17 @@ fn snapshot_from_parts(
     let primary = if let Some(item) = usage_item {
         RateWindow::with_details(
             item.percent,
-            None,
+            RateWindow::monthly_window_minutes(period_end),
             period_end,
             Some(format!("{}/{} tokens", item.used, item.limit)),
         )
     } else {
-        RateWindow::with_details(0.0, None, period_end, Some("No token-plan usage".into()))
+        RateWindow::with_details(
+            0.0,
+            RateWindow::monthly_window_minutes(period_end),
+            period_end,
+            Some("No token-plan usage".into()),
+        )
     };
     let mut secondary = RateWindow::new(0.0);
     secondary.reset_description = Some(balance_description(
@@ -347,5 +352,19 @@ mod tests {
             balance_description(12.5, "CNY", Some("8.25"), None),
             "12.50 CNY balance"
         );
+    }
+
+    #[test]
+    fn mimo_token_plan_uses_calendar_month_minutes() {
+        // Period end 2026-03-01 → February cycle is 28 days.
+        let period_end = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+        let primary = RateWindow::with_details(
+            40.0,
+            RateWindow::monthly_window_minutes(Some(period_end)),
+            Some(period_end),
+            Some("400/1000 tokens".into()),
+        );
+        assert_eq!(primary.window_minutes, Some(28 * 24 * 60));
+        assert_eq!(primary.resets_at, Some(period_end));
     }
 }

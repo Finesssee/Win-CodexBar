@@ -95,10 +95,11 @@ impl LocalUsageSnapshot {
             Some(now + Duration::seconds(self.weekly_reset_in_sec)),
             None,
         ));
+        let monthly_reset = now + Duration::seconds(self.monthly_reset_in_sec);
         snap = snap.with_tertiary(RateWindow::with_details(
             self.monthly_usage_percent,
-            Some(43200),
-            Some(now + Duration::seconds(self.monthly_reset_in_sec)),
+            RateWindow::monthly_window_minutes(Some(monthly_reset)).or(Some(43200)),
+            Some(monthly_reset),
             None,
         ));
         ProviderFetchResult::new(snap, "local")
@@ -297,7 +298,10 @@ fn is_cant_open(err: &rusqlite::Error) -> bool {
     matches!(
         err.sqlite_error_code(),
         Some(rusqlite::ErrorCode::CannotOpen)
-    ) || err.to_string().to_ascii_lowercase().contains("unable to open")
+    ) || err
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("unable to open")
 }
 
 fn has_table(conn: &Connection, name: &str) -> bool {

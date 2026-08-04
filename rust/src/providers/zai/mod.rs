@@ -336,7 +336,45 @@ impl ZaiProvider {
                         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
                         .map(|timestamp| timestamp.with_timezone(&Utc))
                 });
-            RateWindow::with_details(compute_percent(l), window_mins, resets_at, None)
+            let reset_description = rate_window_description(l, window_mins);
+            RateWindow::with_details(
+                compute_percent(l),
+                window_mins,
+                resets_at,
+                reset_description,
+            )
+        }
+
+        fn rate_window_minutes(l: &ZaiLimit) -> Option<u32> {
+            // Upstream #2431 / #2566: verified z.ai duration table.
+            // MCP 1-minute marker and bare TIME_LIMIT → monthly sentinel;
+            // explicit unit/number durations kept as-is; tokens use computed minutes.
+            if is_mcp_monthly_marker(l) {
+                return Some(30 * 24 * 60);
+            }
+            let explicit = ZaiProvider::window_minutes(l);
+            let is_time = matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp"));
+            if is_time {
+                explicit.or(Some(30 * 24 * 60))
+            } else {
+                explicit
+            }
+        }
+
+        fn rate_window_description(l: &ZaiLimit, window_mins: Option<u32>) -> Option<String> {
+            if is_mcp_monthly_marker(l) {
+                return Some("Monthly".into());
+            }
+            if let Some(label) = window_label(l) {
+                return Some(label);
+            }
+            if matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")) {
+                // Bare time limit with monthly sentinel.
+                if window_mins == Some(30 * 24 * 60) {
+                    return Some("Monthly".into());
+                }
+            }
+            None
         }
 
         // Build windows based on upstream layout:
@@ -346,22 +384,22 @@ impl ZaiProvider {
             0 => {
                 // No token limits; use time_limit as primary if available
                 let p = time_limit
-                    .map(|l| make_window(l, Self::window_minutes(l)))
+                    .map(|l| make_window(l, rate_window_minutes(l)))
                     .unwrap_or_else(|| RateWindow::new(0.0));
                 (p, None, None)
             }
             1 => {
-                let p = make_window(token_limits[0], Self::window_minutes(token_limits[0]));
-                let s = time_limit.map(|l| make_window(l, Self::window_minutes(l)));
+                let p = make_window(token_limits[0], rate_window_minutes(token_limits[0]));
+                let s = time_limit.map(|l| make_window(l, rate_window_minutes(l)));
                 (p, s, None)
             }
             _ => {
                 // 2+ token limits: longest → primary (weekly), shortest → tertiary (5-hour)
                 let weekly = token_limits.last().unwrap();
                 let session = token_limits.first().unwrap();
-                let p = make_window(weekly, Self::window_minutes(weekly));
-                let s = time_limit.map(|l| make_window(l, Self::window_minutes(l)));
-                let t = Some(make_window(session, Self::window_minutes(session)));
+                let p = make_window(weekly, rate_window_minutes(weekly));
+                let s = time_limit.map(|l| make_window(l, rate_window_minutes(l)));
+                let t = Some(make_window(session, rate_window_minutes(session)));
                 (p, s, t)
             }
         };
@@ -377,10 +415,11 @@ impl ZaiProvider {
         Ok(usage)
     }
 
-    /// Compute window_minutes from a limit's unit + number fields
+    /// Compute window_minutes from a limit's unit + number fields.
+    /// Returns `None` when number ≤ 0 or unit is unknown (upstream windowMinutes).
     fn window_minutes(l: &ZaiLimit) -> Option<u32> {
+        let number = l.number.filter(|&n| n > 0)? as u32;
         let unit = l.unit?;
-        let number = l.number.unwrap_or(1) as u32;
         let minutes_per_unit = match unit {
             1 => 1440,  // days
             3 => 60,    // hours
@@ -390,6 +429,50 @@ impl ZaiProvider {
         };
         Some(number * minutes_per_unit)
     }
+}
+
+fn is_mcp_monthly_marker(l: &ZaiLimit) -> bool {
+    // Upstream: timeLimit + unit.minutes + number == 1 → monthly MCP marker.
+    matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp"))
+        && l.unit == Some(5)
+        && l.number == Some(1)
+}
+
+fn window_label(l: &ZaiLimit) -> Option<String> {
+    let number = l.number.filter(|&n| n > 0)?;
+    let unit = l.unit?;
+    let unit_label = match unit {
+        1 => {
+            if number == 1 {
+                "day"
+            } else {
+                "days"
+            }
+        }
+        3 => {
+            if number == 1 {
+                "hour"
+            } else {
+                "hours"
+            }
+        }
+        5 => {
+            if number == 1 {
+                "minute"
+            } else {
+                "minutes"
+            }
+        }
+        6 => {
+            if number == 1 {
+                "week"
+            } else {
+                "weeks"
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("{number} {unit_label} window"))
 }
 
 impl ZaiTeamContext {
@@ -598,6 +681,86 @@ mod tests {
         assert_eq!(usage.primary.used_percent, 75.0);
         assert_eq!(usage.primary.window_minutes, Some(300));
         assert!(usage.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn time_limit_with_explicit_duration_keeps_minutes() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [{
+                    "type": "TIME_LIMIT",
+                    "unit": 3,
+                    "number": 5,
+                    "usage": 100,
+                    "currentValue": 20,
+                    "remaining": 80,
+                    "percentage": 25,
+                    "nextResetTime": 123000_i64
+                }]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("5 hours window")
+        );
+    }
+
+    #[test]
+    fn time_limit_without_duration_uses_monthly_sentinel() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [{
+                    "type": "TIME_LIMIT",
+                    "unit": 1,
+                    "number": 0,
+                    "usage": 100,
+                    "currentValue": 20,
+                    "remaining": 80,
+                    "percentage": 25,
+                    "nextResetTime": 123000_i64
+                }]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.window_minutes, Some(30 * 24 * 60));
+        assert_eq!(usage.primary.reset_description.as_deref(), Some("Monthly"));
+    }
+
+    #[test]
+    fn mcp_one_minute_marker_is_monthly_sentinel() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [
+                    {
+                        "type": "TOKENS_LIMIT",
+                        "unit": 6,
+                        "number": 1,
+                        "percentage": 34
+                    },
+                    {
+                        "type": "TIME_LIMIT",
+                        "unit": 5,
+                        "number": 1,
+                        "percentage": 10
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        let secondary = usage.secondary.expect("time limit secondary");
+        assert_eq!(secondary.window_minutes, Some(30 * 24 * 60));
+        assert_eq!(secondary.reset_description.as_deref(), Some("Monthly"));
     }
 
     #[test]

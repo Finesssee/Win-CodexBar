@@ -99,7 +99,7 @@ impl CommandCodeProvider {
         if let Some(cached) = CookieHeaderCache::load(ProviderId::CommandCode) {
             match self.fetch_web(&cached.cookie_header).await {
                 Ok(result) => return Ok(result),
-                Err(err) if matches!(err, ProviderError::AuthRequired) => {
+                Err(ProviderError::AuthRequired) => {
                     CookieHeaderCache::clear(ProviderId::CommandCode);
                 }
                 Err(err) => return Err(err),

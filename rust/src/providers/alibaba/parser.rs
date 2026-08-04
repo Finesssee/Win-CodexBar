@@ -93,8 +93,7 @@ pub(crate) fn parse_response(json: &serde_json::Value) -> Result<UsageSnapshot, 
     let monthly_reset = ms_to_dt("perBillMonthQuotaNextRefreshTime");
     let monthly = RateWindow::with_details(
         pct("perBillMonthUsedQuota", "perBillMonthTotalQuota"),
-        RateWindow::monthly_window_minutes(monthly_reset)
-            .or(Some(30 * 24 * 60)),
+        RateWindow::monthly_window_minutes(monthly_reset).or(Some(30 * 24 * 60)),
         monthly_reset,
         detail("perBillMonthUsedQuota", "perBillMonthTotalQuota"),
     );

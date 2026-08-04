@@ -405,7 +405,8 @@ impl KimiProvider {
                     "Monthly",
                     RateWindow::with_details(
                         ratio * 100.0,
-                        None,
+                        // Verified monthly sentinel (#2431 / #2566).
+                        Some(30 * 24 * 60),
                         balance.expire_time.as_ref().and_then(parse_kimi_timestamp),
                         None,
                     ),
@@ -976,6 +977,7 @@ mod tests {
             .find(|window| window.id == "kimi-monthly")
             .unwrap();
         assert_eq!(monthly.title, "Monthly");
+        assert_eq!(monthly.window.window_minutes, Some(30 * 24 * 60));
         assert!((monthly.window.used_percent - 77.16).abs() < 0.0001);
         let code_7d = snapshot
             .extra_rate_windows

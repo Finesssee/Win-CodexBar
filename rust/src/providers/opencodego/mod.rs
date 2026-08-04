@@ -492,8 +492,7 @@ mod tests {
         assert!((secondary.used_percent - 13.0).abs() < 0.001);
         let tertiary = snap.tertiary.expect("monthly");
         assert!((tertiary.used_percent - 7.0).abs() < 0.001);
-        let expected = RateWindow::monthly_window_minutes(tertiary.resets_at)
-            .or(Some(43200));
+        let expected = RateWindow::monthly_window_minutes(tertiary.resets_at).or(Some(43200));
         assert_eq!(tertiary.window_minutes, expected);
         assert!(tertiary.resets_at.is_some());
     }

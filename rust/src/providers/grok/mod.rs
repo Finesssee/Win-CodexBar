@@ -323,6 +323,8 @@ fn result_from_billing(
     team_id: Option<String>,
     login_method: Option<String>,
 ) -> ProviderFetchResult {
+    // Upstream #2431 / #2566: do not infer windowMinutes from time-until-reset.
+    // A monthly quota near its reset would otherwise be misclassified as weekly.
     let mut usage = UsageSnapshot::new(RateWindow::with_details(
         billing.used_percent,
         None,
@@ -615,5 +617,24 @@ mod tests {
             &ProviderError::AuthRequired
         ));
         assert!(!is_cookie_authentication_failure(&ProviderError::NoCookies));
+    }
+
+    #[test]
+    fn billing_snapshot_leaves_window_minutes_unset() {
+        // A monthly quota with six days left must not be reported as weekly.
+        let resets = Utc::now() + chrono::Duration::days(6);
+        let result = result_from_billing(
+            GrokBillingSnapshot {
+                used_percent: 12.0,
+                resets_at: Some(resets),
+            },
+            "web",
+            None,
+            None,
+            Some("SuperGrok".into()),
+        );
+        assert_eq!(result.usage.primary.window_minutes, None);
+        assert_eq!(result.usage.primary.resets_at, Some(resets));
+        assert_eq!(result.usage.login_method.as_deref(), Some("SuperGrok"));
     }
 }

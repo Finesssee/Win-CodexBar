@@ -297,8 +297,7 @@ impl AlibabaTokenPlanProvider {
         .map(|percent| {
             RateWindow::with_details(
                 percent,
-                RateWindow::monthly_window_minutes(snapshot.resets_at)
-                    .or(Some(LEGACY_MINUTES)),
+                RateWindow::monthly_window_minutes(snapshot.resets_at).or(Some(LEGACY_MINUTES)),
                 snapshot.resets_at,
                 quota_detail(
                     snapshot.used_quota,

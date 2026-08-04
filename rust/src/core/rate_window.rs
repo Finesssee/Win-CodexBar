@@ -136,11 +136,7 @@ impl RateWindow {
 fn subtract_one_calendar_month(dt: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let y = dt.year();
     let m = dt.month();
-    let (py, pm) = if m == 1 {
-        (y - 1, 12)
-    } else {
-        (y, m - 1)
-    };
+    let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
     let max_day = days_in_month(py, pm);
     let day = dt.day().min(max_day);
     dt.date_naive()

@@ -185,6 +185,7 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "devin" => ProviderId::Devin,
         "opencodego" => ProviderId::OpenCodeGo,
         "zed" => ProviderId::Zed,
+        "xai" => ProviderId::Xai,
         _ => return None,
     })
 }

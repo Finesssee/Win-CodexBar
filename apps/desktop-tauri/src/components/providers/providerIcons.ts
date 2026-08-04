@@ -41,6 +41,7 @@ import mimo from "./icons/ProviderIcon-mimo.svg?raw";
 import minimax from "./icons/ProviderIcon-minimax.svg?raw";
 import mistral from "./icons/ProviderIcon-mistral.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
+import xai from "./icons/ProviderIcon-xai.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
 import opencode from "./icons/ProviderIcon-opencode.svg?raw";
 import opencodego from "./icons/ProviderIcon-opencodego.svg?raw";
@@ -120,6 +121,7 @@ const RAW: Record<string, string> = {
   mimo: tint(mimo),
   minimax: tint(minimax),
   notion: tint(notion),
+  xai: tint(xai),
   mistral: tint(mistral),
   ollama: tint(ollama),
   opencode: tint(opencode),
@@ -212,6 +214,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
   qwencloud:   { id: "qwencloud",   brandColor: "#615CED", fallbackLetter: "Q" },
   notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
+  xai:         { id: "xai",         brandColor: "#8e8e93", fallbackLetter: "X", svgPath: RAW.xai },
 };
 
 const ALIASES: Record<string, string> = {
@@ -274,8 +277,9 @@ const ALIASES: Record<string, string> = {
   "azure-openai": "azureopenai",
   "t3 chat": "t3chat",
   "t3-chat": "t3chat",
-  xai: "grok",
-  "x.ai": "grok",
+  // xai is its own Management API provider (not an alias of consumer Grok).
+  "x.ai": "xai",
+  "x-ai": "xai",
   supergrok: "grok",
   "super-grok": "grok",
   "eleven labs": "elevenlabs",

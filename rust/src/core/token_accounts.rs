@@ -265,6 +265,16 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: false,
                 cookie_name: None,
             }),
+            ProviderId::Xai => Some(TokenAccountSupport {
+                title: "Management API keys",
+                subtitle: "Store multiple xAI Management API keys. Team ID is set separately under provider settings.",
+                placeholder: "xai-... Management API key from console.x.ai",
+                injection: TokenInjection::Environment {
+                    key: "XAI_MANAGEMENT_API_KEY".to_string(),
+                },
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             // Upstream 0.45 #2271: labeled OpenRouter API keys via token accounts.
             ProviderId::OpenRouter => Some(TokenAccountSupport {
                 title: "API keys",

@@ -114,6 +114,7 @@ const WORKSPACE_EXTRA_IDS: Record<string, true> = {
   opencodego: true,
   zed: true,
   sub2api: true,
+  xai: true,
 };
 
 function extraConfig(providerId: string, t: Props["t"]) {
@@ -159,6 +160,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         label: t("Sub2ApiBaseUrlLabel"),
         placeholder: t("Sub2ApiBaseUrlPlaceholder"),
         help: t("Sub2ApiBaseUrlHelp"),
+      };
+    case "xai":
+      return {
+        title: "xAI team",
+        label: "Team ID",
+        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        help: "Required. Shown in the xAI Console URL and team settings. Or set XAI_TEAM_ID. Pair with a Management API key (not an inference key).",
       };
     default:
       return null;

@@ -411,6 +411,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://grok.com/settings/subscription"),
         },
         ProviderConfigInfo {
+            id: ProviderId::Xai,
+            name: "xAI",
+            requires_api_key: true,
+            api_key_env_var: Some("XAI_MANAGEMENT_API_KEY"),
+            api_key_help: Some(
+                "Create a Management API key at console.x.ai under Settings > Management Keys (inference keys are rejected). Team ID goes in provider workspace settings or XAI_TEAM_ID.",
+            ),
+            config_file_path: Some("~/.codexbar/config.json"),
+            dashboard_url: Some("https://console.x.ai"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::ElevenLabs,
             name: "ElevenLabs",
             requires_api_key: true,

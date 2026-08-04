@@ -38,6 +38,7 @@ export function CredentialsDispatcher({ providerId, t }: Props) {
     case "opencodego":
     case "zed":
     case "sub2api":
+    case "xai":
       return <OpenAiExtras providerId={providerId} t={t} />;
     default:
       return null;

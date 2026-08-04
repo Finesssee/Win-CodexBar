@@ -246,6 +246,7 @@ function providerSourceHintShort(
     case "deepgram":
     case "groq":
     case "llmproxy":
+    case "xai":
       return t("ProviderSourceApiShort");
     case "kiro":
       return t("ProviderSourceKiroEnvShort");

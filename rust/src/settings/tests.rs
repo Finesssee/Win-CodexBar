@@ -464,6 +464,7 @@ fn test_api_key_provider_catalog_includes_token_providers() {
         ProviderId::Grok,
         ProviderId::Groq,
         ProviderId::LLMProxy,
+        ProviderId::Xai,
     ] {
         assert!(
             providers.iter().any(|provider| provider.id == id),

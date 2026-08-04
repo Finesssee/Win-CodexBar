@@ -21,17 +21,17 @@ const HAS_DASHBOARD = new Set([
   "aiand", "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate",
   "doubao", "elevenlabs", "factory", "gemini", "grok", "groq",
   "infini", "jetbrains", "kilo", "kimi", "kimik2", "kiro", "manus",
-  "mimo", "minimax", "mistral", "nanogpt", "ollama", "openaiapi",
+  "mimo", "minimax", "mistral", "nanogpt", "notion", "ollama", "openaiapi",
   "opencode", "opencodego", "openrouter", "perplexity", "qoder", "sakana", "stepfun",
   "t3chat", "venice", "vertexai", "warp", "windsurf",
-  "zai",
+  "xai", "zai",
 ]);
 /** Provider IDs that have a status page URL in the backend */
 const HAS_STATUS_PAGE = new Set([
   "alibabatokenplan", "amp", "augment", "azureopenai", "bedrock",
   "claude", "codex", "copilot", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate", "elevenlabs",
   "gemini", "grok", "groq", "kiro", "mistral", "openaiapi",
-  "openrouter", "vertexai", "windsurf",
+  "openrouter", "vertexai", "windsurf", "xai",
 ]);
 
 /**

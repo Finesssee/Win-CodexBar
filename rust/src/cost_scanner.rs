@@ -350,14 +350,17 @@ impl CostScanner {
                 .count() as u32;
 
             // Pi-compatible sessions are outside the Codex JSONL cache.
-            let mut seen_pi = HashSet::new();
-            crate::pi_session_cost::scan_pi_compatible_into(
-                &mut summary,
-                crate::pi_session_cost::PiMappedProvider::Codex,
-                self.days,
-                cancel,
-                &mut seen_pi,
-            );
+            // Skip when tests inject sessions roots — avoid scanning the real home tree.
+            if self.sessions_dirs_override.is_none() {
+                let mut seen_pi = HashSet::new();
+                crate::pi_session_cost::scan_pi_compatible_into(
+                    &mut summary,
+                    crate::pi_session_cost::PiMappedProvider::Codex,
+                    self.days,
+                    cancel,
+                    &mut seen_pi,
+                );
+            }
             return (summary, stats);
         }
 
@@ -386,14 +389,17 @@ impl CostScanner {
         }
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
-        let mut seen_pi = HashSet::new();
-        crate::pi_session_cost::scan_pi_compatible_into(
-            &mut summary,
-            crate::pi_session_cost::PiMappedProvider::Codex,
-            self.days,
-            cancel,
-            &mut seen_pi,
-        );
+        // Skip when tests inject sessions roots — avoid scanning the real home tree.
+        if self.sessions_dirs_override.is_none() {
+            let mut seen_pi = HashSet::new();
+            crate::pi_session_cost::scan_pi_compatible_into(
+                &mut summary,
+                crate::pi_session_cost::PiMappedProvider::Codex,
+                self.days,
+                cancel,
+                &mut seen_pi,
+            );
+        }
 
         (summary, stats)
     }

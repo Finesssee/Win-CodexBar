@@ -331,14 +331,7 @@ impl HookTransitionDetector {
             && current >= self.reached_threshold
         {
             dispatches.push(HookDispatch {
-                event: build_lane_event(
-                    HookEventType::QuotaReached,
-                    provider,
-                    lane,
-                    current,
-                    rate_window.resets_at,
-                    now,
-                ),
+                event: build_lane_event(HookEventType::QuotaReached, provider, lane, current, now),
                 rules: None,
             });
         }
@@ -368,7 +361,6 @@ impl HookTransitionDetector {
             provider,
             lane,
             current,
-            rate_window.resets_at,
             now,
         ))
     }
@@ -412,14 +404,7 @@ impl HookTransitionDetector {
         }
 
         vec![HookDispatch {
-            event: build_lane_event(
-                HookEventType::QuotaLow,
-                provider,
-                lane,
-                current,
-                lane.rate_window.as_ref().and_then(|w| w.resets_at),
-                now,
-            ),
+            event: build_lane_event(HookEventType::QuotaLow, provider, lane, current, now),
             rules: Some(crossed),
         }]
     }
@@ -455,7 +440,6 @@ fn build_lane_event(
     provider: &str,
     lane: &HookQuotaLaneObservation,
     usage_fraction: f64,
-    _resets_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> HookEvent {
     let mut event = HookEvent::new(event_type, provider)

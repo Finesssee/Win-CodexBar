@@ -296,20 +296,26 @@ impl XaiProvider {
             .await
             .map_err(|e| ProviderError::Parse(format!("Could not parse xAI usage history: {e}")))?;
 
-        let mut totals: BTreeMap<String, f64> = BTreeMap::new();
-        for series in &envelope.time_series {
-            for point in &series.data_points {
-                let day = utc_day_from_timestamp(&point.timestamp)?;
-                let value = point.values.first().copied().unwrap_or(0.0);
-                *totals.entry(day).or_default() += value;
-            }
-        }
-        let daily = totals
-            .into_iter()
-            .map(|(day, cost_usd)| DailyBucket { day, cost_usd })
-            .collect();
-        Ok((daily, envelope.limit_reached.unwrap_or(false)))
+        aggregate_daily_usage(&envelope)
     }
+}
+
+fn aggregate_daily_usage(
+    envelope: &UsageEnvelope,
+) -> Result<(Vec<DailyBucket>, bool), ProviderError> {
+    let mut totals: BTreeMap<String, f64> = BTreeMap::new();
+    for series in &envelope.time_series {
+        for point in &series.data_points {
+            let day = utc_day_from_timestamp(&point.timestamp)?;
+            let value = point.values.first().copied().unwrap_or(0.0);
+            *totals.entry(day).or_default() += value;
+        }
+    }
+    let daily = totals
+        .into_iter()
+        .map(|(day, cost_usd)| DailyBucket { day, cost_usd })
+        .collect();
+    Ok((daily, envelope.limit_reached.unwrap_or(false)))
 }
 
 impl Default for XaiProvider {
@@ -525,21 +531,7 @@ fn parse_snapshot_for_testing(
 
     let (daily, limit_reached) = if let Some(usage_json) = usage_json {
         match serde_json::from_str::<UsageEnvelope>(usage_json) {
-            Ok(envelope) => {
-                let mut totals: BTreeMap<String, f64> = BTreeMap::new();
-                for series in &envelope.time_series {
-                    for point in &series.data_points {
-                        let day = utc_day_from_timestamp(&point.timestamp)?;
-                        let value = point.values.first().copied().unwrap_or(0.0);
-                        *totals.entry(day).or_default() += value;
-                    }
-                }
-                let daily = totals
-                    .into_iter()
-                    .map(|(day, cost_usd)| DailyBucket { day, cost_usd })
-                    .collect();
-                (daily, envelope.limit_reached.unwrap_or(false))
-            }
+            Ok(envelope) => aggregate_daily_usage(&envelope)?,
             Err(_) => (Vec::new(), false),
         }
     } else {

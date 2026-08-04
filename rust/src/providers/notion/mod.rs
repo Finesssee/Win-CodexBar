@@ -332,7 +332,10 @@ fn build_usage_snapshot(
         }
     };
 
-    let mut snapshot = UsageSnapshot::new(primary).with_secondary_opt(secondary);
+    let mut snapshot = UsageSnapshot::new(primary);
+    if let Some(secondary) = secondary {
+        snapshot = snapshot.with_secondary(secondary);
+    }
     snapshot.updated_at = now;
 
     if let Some(email) = account.and_then(|a| a.email.clone()) {
@@ -346,19 +349,6 @@ fn build_usage_snapshot(
     }
 
     Ok(snapshot)
-}
-
-trait WithSecondaryOpt {
-    fn with_secondary_opt(self, secondary: Option<RateWindow>) -> Self;
-}
-
-impl WithSecondaryOpt for UsageSnapshot {
-    fn with_secondary_opt(self, secondary: Option<RateWindow>) -> Self {
-        match secondary {
-            Some(window) => self.with_secondary(window),
-            None => self,
-        }
-    }
 }
 
 fn parse_rate_limit_status(json: &Value) -> Result<CreditRateLimitStatus, ProviderError> {

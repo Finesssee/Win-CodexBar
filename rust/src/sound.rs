@@ -12,43 +12,18 @@ const MB_ICONERROR: u32 = 0x00000010;
 const MB_ICONWARNING: u32 = 0x00000030;
 const MB_ICONINFORMATION: u32 = 0x00000040;
 
-const SAMPLE_RATE: u32 = 22_050;
-const CHANNEL_COUNT: u16 = 1;
-const BITS_PER_SAMPLE: u16 = 16;
-const BYTES_PER_SAMPLE: u16 = BITS_PER_SAMPLE / 8;
 const WAV_HEADER_SIZE: u32 = 44;
-const RIFF_CHUNK_OVERHEAD: u32 = 36;
-const PCM_FORMAT_CHUNK_SIZE: u32 = 16;
-const PCM_FORMAT: u16 = 1;
-const BASE_AMPLITUDE: f32 = 0.22;
-const ATTACK_MS: u32 = 12;
-const RELEASE_MS: u32 = 24;
-const TWO_PI: f32 = std::f32::consts::PI * 2.0;
-
-const NOTE_A3: f32 = 220.00;
-const NOTE_C4: f32 = 261.63;
-const NOTE_E4: f32 = 329.63;
-const NOTE_G4: f32 = 392.00;
-const NOTE_C5: f32 = 523.25;
-const NOTE_E5: f32 = 659.25;
-const NOTE_G5: f32 = 783.99;
-const NOTE_A5: f32 = 880.00;
-const NOTE_B5: f32 = 987.77;
-const NOTE_C6: f32 = 1_046.50;
-
-const SHORT_TONE_MS: u32 = 110;
-const MEDIUM_TONE_MS: u32 = 160;
-const LONG_TONE_MS: u32 = 260;
-const SHORT_GAP_MS: u32 = 35;
-const MEDIUM_GAP_MS: u32 = 55;
-const NO_GAP_MS: u32 = 0;
-const MILLISECONDS_PER_SECOND: u64 = 1_000;
-const MIN_ENVELOPE_SAMPLES: usize = 1;
-
 const TAG_SIZE: usize = 4;
 const RIFF_TAG_OFFSET: usize = 0;
 const WAVE_TAG_OFFSET: usize = 8;
-const DATA_TAG_OFFSET: usize = 36;
+
+const PREDICTIVE_WARNING_WAV: &[u8] = include_bytes!("../assets/sounds/predictive-warning.wav");
+const HIGH_USAGE_WAV: &[u8] = include_bytes!("../assets/sounds/high-usage.wav");
+const CRITICAL_USAGE_WAV: &[u8] = include_bytes!("../assets/sounds/critical-usage.wav");
+const EXHAUSTED_WAV: &[u8] = include_bytes!("../assets/sounds/exhausted.wav");
+const STATUS_ISSUE_WAV: &[u8] = include_bytes!("../assets/sounds/status-issue.wav");
+const SESSION_DEPLETED_WAV: &[u8] = include_bytes!("../assets/sounds/session-depleted.wav");
+const SESSION_RESTORED_WAV: &[u8] = include_bytes!("../assets/sounds/session-restored.wav");
 
 /// 個別の音を割り当てられる通知イベント。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -86,15 +61,15 @@ impl NotificationSoundEvent {
         }
     }
 
-    fn built_in_pattern(self) -> &'static [Tone] {
+    fn built_in_wav(self) -> &'static [u8] {
         match self {
-            Self::PredictiveWarning => &PREDICTIVE_WARNING_PATTERN,
-            Self::HighUsage => &HIGH_USAGE_PATTERN,
-            Self::CriticalUsage => &CRITICAL_USAGE_PATTERN,
-            Self::Exhausted => &EXHAUSTED_PATTERN,
-            Self::StatusIssue => &STATUS_ISSUE_PATTERN,
-            Self::SessionDepleted => &SESSION_DEPLETED_PATTERN,
-            Self::SessionRestored => &SESSION_RESTORED_PATTERN,
+            Self::PredictiveWarning => PREDICTIVE_WARNING_WAV,
+            Self::HighUsage => HIGH_USAGE_WAV,
+            Self::CriticalUsage => CRITICAL_USAGE_WAV,
+            Self::Exhausted => EXHAUSTED_WAV,
+            Self::StatusIssue => STATUS_ISSUE_WAV,
+            Self::SessionDepleted => SESSION_DEPLETED_WAV,
+            Self::SessionRestored => SESSION_RESTORED_WAV,
         }
     }
 }
@@ -114,56 +89,6 @@ pub enum SoundError {
     #[error("notification sound playback is not supported on this platform")]
     UnsupportedPlatform,
 }
-
-#[derive(Clone, Copy)]
-struct Tone {
-    frequency_hz: f32,
-    duration_ms: u32,
-    gap_after_ms: u32,
-}
-
-impl Tone {
-    const fn new(frequency_hz: f32, duration_ms: u32, gap_after_ms: u32) -> Self {
-        Self {
-            frequency_hz,
-            duration_ms,
-            gap_after_ms,
-        }
-    }
-}
-
-const PREDICTIVE_WARNING_PATTERN: [Tone; 2] = [
-    Tone::new(NOTE_G5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_B5, MEDIUM_TONE_MS, NO_GAP_MS),
-];
-const HIGH_USAGE_PATTERN: [Tone; 2] = [
-    Tone::new(NOTE_A5, SHORT_TONE_MS, MEDIUM_GAP_MS),
-    Tone::new(NOTE_A5, SHORT_TONE_MS, NO_GAP_MS),
-];
-const CRITICAL_USAGE_PATTERN: [Tone; 3] = [
-    Tone::new(NOTE_C6, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_G5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_C5, MEDIUM_TONE_MS, NO_GAP_MS),
-];
-const EXHAUSTED_PATTERN: [Tone; 2] = [
-    Tone::new(NOTE_G4, MEDIUM_TONE_MS, MEDIUM_GAP_MS),
-    Tone::new(NOTE_C4, LONG_TONE_MS, NO_GAP_MS),
-];
-const STATUS_ISSUE_PATTERN: [Tone; 3] = [
-    Tone::new(NOTE_E5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_C5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_E5, MEDIUM_TONE_MS, NO_GAP_MS),
-];
-const SESSION_DEPLETED_PATTERN: [Tone; 3] = [
-    Tone::new(NOTE_E4, MEDIUM_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_C4, MEDIUM_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_A3, LONG_TONE_MS, NO_GAP_MS),
-];
-const SESSION_RESTORED_PATTERN: [Tone; 3] = [
-    Tone::new(NOTE_C5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_E5, SHORT_TONE_MS, SHORT_GAP_MS),
-    Tone::new(NOTE_G5, LONG_TONE_MS, NO_GAP_MS),
-];
 
 /// 1つの通知イベントに設定された音を再生する。
 pub fn play_alert(event: NotificationSoundEvent, settings: &Settings) -> Result<(), SoundError> {
@@ -296,7 +221,7 @@ fn play_custom_wav(_path: &str) -> Result<(), SoundError> {
 
 #[cfg(target_os = "windows")]
 fn play_built_in_sound(event: NotificationSoundEvent) -> Result<(), SoundError> {
-    let wav = synthesize_wav(event.built_in_pattern());
+    let wav = event.built_in_wav();
     std::thread::Builder::new()
         .name("codexbar-notification-sound".to_string())
         .spawn(move || {
@@ -327,64 +252,28 @@ fn play_built_in_sound(_event: NotificationSoundEvent) -> Result<(), SoundError>
     Err(SoundError::UnsupportedPlatform)
 }
 
-fn synthesize_wav(pattern: &[Tone]) -> Vec<u8> {
-    let sample_count: usize = pattern
-        .iter()
-        .map(|tone| samples_for_ms(tone.duration_ms + tone.gap_after_ms))
-        .sum();
-    let data_size = sample_count * usize::from(BYTES_PER_SAMPLE);
-    let mut wav = Vec::with_capacity(WAV_HEADER_SIZE as usize + data_size);
-
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(RIFF_CHUNK_OVERHEAD + data_size as u32).to_le_bytes());
-    wav.extend_from_slice(b"WAVEfmt ");
-    wav.extend_from_slice(&PCM_FORMAT_CHUNK_SIZE.to_le_bytes());
-    wav.extend_from_slice(&PCM_FORMAT.to_le_bytes());
-    wav.extend_from_slice(&CHANNEL_COUNT.to_le_bytes());
-    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    let byte_rate = SAMPLE_RATE * u32::from(CHANNEL_COUNT) * u32::from(BYTES_PER_SAMPLE);
-    wav.extend_from_slice(&byte_rate.to_le_bytes());
-    let block_align = CHANNEL_COUNT * BYTES_PER_SAMPLE;
-    wav.extend_from_slice(&block_align.to_le_bytes());
-    wav.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&(data_size as u32).to_le_bytes());
-
-    for tone in pattern {
-        append_tone(&mut wav, *tone);
-        append_silence(&mut wav, tone.gap_after_ms);
-    }
-    wav
-}
-
-fn samples_for_ms(duration_ms: u32) -> usize {
-    (u64::from(SAMPLE_RATE) * u64::from(duration_ms) / MILLISECONDS_PER_SECOND) as usize
-}
-
-fn append_tone(wav: &mut Vec<u8>, tone: Tone) {
-    let tone_samples = samples_for_ms(tone.duration_ms);
-    let attack_samples = samples_for_ms(ATTACK_MS).max(MIN_ENVELOPE_SAMPLES);
-    let release_samples = samples_for_ms(RELEASE_MS).max(MIN_ENVELOPE_SAMPLES);
-    for sample_index in 0..tone_samples {
-        let attack = sample_index as f32 / attack_samples as f32;
-        let release = (tone_samples - sample_index) as f32 / release_samples as f32;
-        let envelope = attack.min(release).min(1.0);
-        let time = sample_index as f32 / SAMPLE_RATE as f32;
-        let sample =
-            (TWO_PI * tone.frequency_hz * time).sin() * envelope * BASE_AMPLITUDE * i16::MAX as f32;
-        wav.extend_from_slice(&(sample as i16).to_le_bytes());
-    }
-}
-
-fn append_silence(wav: &mut Vec<u8>, duration_ms: u32) {
-    for _ in 0..samples_for_ms(duration_ms) {
-        wav.extend_from_slice(&0_i16.to_le_bytes());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn has_non_empty_data_chunk(wav: &[u8]) -> bool {
+        let mut offset = 12;
+        while offset + 8 <= wav.len() {
+            let chunk_size = u32::from_le_bytes(
+                wav[offset + 4..offset + 8]
+                    .try_into()
+                    .expect("WAV chunk size"),
+            ) as usize;
+            let data_start = offset + 8;
+            let data_end = data_start.saturating_add(chunk_size);
+            if &wav[offset..offset + TAG_SIZE] == b"data" {
+                return chunk_size > 0 && data_end <= wav.len();
+            }
+            let padding = chunk_size % 2;
+            offset = data_end.saturating_add(padding);
+        }
+        false
+    }
 
     const ALL_EVENTS: [NotificationSoundEvent; 7] = [
         NotificationSoundEvent::PredictiveWarning,
@@ -424,10 +313,10 @@ mod tests {
     fn built_in_events_have_distinct_valid_wav_data() {
         let mut wav_data = Vec::new();
         for event in ALL_EVENTS {
-            let wav = synthesize_wav(event.built_in_pattern());
+            let wav = event.built_in_wav();
             assert_eq!(&wav[RIFF_TAG_OFFSET..RIFF_TAG_OFFSET + TAG_SIZE], b"RIFF");
             assert_eq!(&wav[WAVE_TAG_OFFSET..WAVE_TAG_OFFSET + TAG_SIZE], b"WAVE");
-            assert_eq!(&wav[DATA_TAG_OFFSET..DATA_TAG_OFFSET + TAG_SIZE], b"data");
+            assert!(has_non_empty_data_chunk(wav));
             assert!(wav.len() > WAV_HEADER_SIZE as usize);
             wav_data.push(wav);
         }

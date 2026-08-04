@@ -196,10 +196,7 @@ fn has_auth_key(path: &Path) -> bool {
 }
 
 fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
-    let conn =
-        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
-            ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
-        })?;
+    let conn = open_readonly_connection(db_path)?;
     conn.busy_timeout(std::time::Duration::from_millis(250))
         .map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
@@ -235,6 +232,72 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
         }
     }
     Ok(out)
+}
+
+/// Open a read-only connection without creating `-wal`/`-shm` sidecars for idle
+/// WAL-mode databases (upstream #2544).
+fn open_readonly_connection(db_path: &Path) -> Result<Connection, ProviderError> {
+    let map_err = |e: rusqlite::Error| {
+        ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
+    };
+
+    // Prefer immutable URI when sidecars are absent so a clean WAL shutdown
+    // (header still WAL, no -wal/-shm) does not recreate them on open.
+    if wal_sidecars_missing(db_path)
+        && let Ok(conn) = open_immutable(db_path)
+    {
+        return Ok(conn);
+    }
+
+    match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => Ok(conn),
+        Err(err) if is_cant_open(&err) && wal_sidecars_missing(db_path) => {
+            open_immutable(db_path).map_err(map_err)
+        }
+        Err(err) => Err(map_err(err)),
+    }
+}
+
+fn open_immutable(db_path: &Path) -> Result<Connection, rusqlite::Error> {
+    let uri = sqlite_immutable_uri(db_path);
+    Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+}
+
+fn sqlite_immutable_uri(db_path: &Path) -> String {
+    let abs = db_path
+        .canonicalize()
+        .unwrap_or_else(|_| db_path.to_path_buf());
+    let raw = abs.to_string_lossy();
+    // Windows canonicalize() yields `\\?\C:\...`; strip that for SQLite URIs.
+    let stripped = raw
+        .strip_prefix(r"\\?\")
+        .or_else(|| raw.strip_prefix("//?/"))
+        .unwrap_or(raw.as_ref());
+    let path = stripped.replace('\\', "/");
+    // Prefer `file:` (no authority) so drive letters stay valid on Windows.
+    format!("file:{path}?immutable=1")
+}
+
+fn wal_sidecars_missing(db_path: &Path) -> bool {
+    let wal = sidecar_path(db_path, "-wal");
+    let shm = sidecar_path(db_path, "-shm");
+    !wal.exists() && !shm.exists()
+}
+
+fn sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
+    let mut s = db_path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn is_cant_open(err: &rusqlite::Error) -> bool {
+    matches!(
+        err.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::CannotOpen)
+    ) || err.to_string().to_ascii_lowercase().contains("unable to open")
 }
 
 fn has_table(conn: &Connection, name: &str) -> bool {
@@ -534,5 +597,62 @@ mod tests {
             .timestamp_millis();
         assert_eq!(start, expected);
         assert_eq!(wed.weekday(), Weekday::Wed);
+    }
+
+    #[test]
+    fn idle_wal_mode_read_creates_no_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let auth = dir.path().join("auth.json");
+        std::fs::write(&auth, r#"{"opencode-go":{"key":"k"}}"#).unwrap();
+
+        // Build a WAL-mode DB, insert a row, leave journal_mode=WAL, then drop
+        // any writer-created sidecars so the main file is an idle WAL header.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            conn.execute_batch(
+                "CREATE TABLE message (
+                    id TEXT PRIMARY KEY,
+                    data TEXT,
+                    time_created INTEGER
+                );",
+            )
+            .unwrap();
+            let now = Utc::now();
+            let created = now.timestamp_millis() - 1_000;
+            let data = format!(
+                r#"{{"providerID":"opencode-go","role":"assistant","cost":3,"time":{{"created":{created}}}}}"#
+            );
+            conn.execute(
+                "INSERT INTO message (id, data, time_created) VALUES ('m1', ?1, ?2)",
+                rusqlite::params![data, created],
+            )
+            .unwrap();
+            // Truncate empties WAL content before close; journal_mode stays WAL.
+            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            drop(conn);
+        }
+
+        // Ensure idle-WAL case: header says WAL, no live sidecars.
+        let wal = sidecar_path(&db, "-wal");
+        let shm = sidecar_path(&db, "-shm");
+        // Prefer rename-away over delete if OS still holds handles.
+        for side in [&wal, &shm] {
+            if side.exists() {
+                let parked = side.with_extension("parked");
+                let _ = std::fs::rename(side, parked);
+            }
+        }
+        assert!(!wal.exists(), "precondition: no -wal");
+        assert!(!shm.exists(), "precondition: no -shm");
+
+        let snap = fetch_from_paths(&auth, &db, Utc::now()).expect("read idle WAL db");
+        assert!(snap.rolling_usage_percent > 0.0, "{snap:?}");
+
+        assert!(
+            !wal.exists() && !shm.exists(),
+            "reader must not create -wal/-shm sidecars"
+        );
     }
 }

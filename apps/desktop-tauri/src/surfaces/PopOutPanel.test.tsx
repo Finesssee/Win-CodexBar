@@ -134,7 +134,6 @@ function settings(): SettingsSnapshot {
       sessionDepleted: null,
       sessionRestored: null,
     },
-    soundVolume: 100,
     highUsageThreshold: 70,
     criticalUsageThreshold: 90,
     predictivePaceWarningEnabled: false,

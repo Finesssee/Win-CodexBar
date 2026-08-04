@@ -21,7 +21,6 @@ HighUsageThresholdHelper = Показывать предупреждение н�
 CriticalUsageThresholdHelper = Показывать критическое оповещение на этом уровне
 ShowNotifications = Показать уведомления
 SoundEnabled = Звуковые оповещения
-SoundVolume = Громкость оповещения
 HighUsageThreshold = Высокий порог использования
 HighUsageAlert = Оповещение о высокой загрузке
 CriticalUsageThreshold = Критический порог использования
@@ -379,7 +378,6 @@ RefreshIntervalLabel = Интервал обновления
 RefreshIntervalHelper = Секунды между автоматическими обновлениями провайдера (0 = вручную).
 RefreshAllProvidersOnMenuOpen = Обновить при открытии меню
 RefreshAllProvidersOnMenuOpenHelper = Провайдеры с включенным принудительным обновлением всякий раз, когда открывается меню на панели задач.
-SoundVolumeHelper = Громкость звуков порогового оповещения (0–100).
 HighUsageWarningHelper = Показывать предупреждение, когда использование превышает этот процент.
 CriticalUsageWarningHelper = Показывать критическое предупреждение, когда использование превышает этот процент.
 GlobalShortcutFieldLabel = Глобальный ярлык

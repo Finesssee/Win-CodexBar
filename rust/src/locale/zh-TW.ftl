@@ -43,7 +43,6 @@ NotificationSoundEventSessionDepleted = 工作階段配額用盡
 NotificationSoundEventSessionDepletedHelper = 工作階段配額達到 100% 時通知。
 NotificationSoundEventSessionRestored = 工作階段恢復
 NotificationSoundEventSessionRestoredHelper = 已用盡的工作階段恢復可用時通知。
-SoundVolume = 提示音音量
 HighUsageThreshold = 高用量臨界值
 HighUsageAlert = 高位預警
 CriticalUsageThreshold = 緊急用量臨界值
@@ -395,7 +394,6 @@ RefreshIntervalLabel = 重新整理間隔
 RefreshIntervalHelper = 兩次自動重新整理之間的秒數（0 = 手動）。
 RefreshAllProvidersOnMenuOpen = 開啟選單時重新整理
 RefreshAllProvidersOnMenuOpenHelper = 每次開啟系統匣選單時強制重新整理已啟用的提供商。
-SoundVolumeHelper = 臨界值告警音量（0–100）。
 HighUsageWarningHelper = 當用量超過該百分比時顯示預警。
 CriticalUsageWarningHelper = 當用量超過該百分比時顯示嚴重告警。
 GlobalShortcutFieldLabel = 全域性快捷鍵

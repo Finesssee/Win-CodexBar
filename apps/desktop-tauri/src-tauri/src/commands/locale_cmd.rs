@@ -178,12 +178,21 @@ mod locale_tests {
                 "chinesetraditional",
                 "japanese",
                 "korean",
-                "spanish"
+                "spanish",
+                "russian"
             ]
         );
         assert_eq!(
             displays,
-            vec!["English", "中文", "繁體中文", "日本語", "한국어", "Español"]
+            vec![
+                "English",
+                "中文",
+                "繁體中文",
+                "日本語",
+                "한국어",
+                "Español",
+                "Русский"
+            ]
         );
     }
 

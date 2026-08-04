@@ -110,7 +110,6 @@ pub fn play_alert(event: NotificationSoundEvent, settings: &Settings) -> Result<
     }
 
     if let Some(path) = event.custom_path(&settings.notification_sound_paths) {
-        validate_custom_sound_path(path)?;
         return play_custom_wav(path);
     }
 

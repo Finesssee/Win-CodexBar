@@ -464,7 +464,6 @@ pub struct SettingsSnapshot {
     sound_enabled: bool,
     notification_sound_theme: codexbar::settings::NotificationSoundTheme,
     notification_sound_paths: codexbar::settings::NotificationSoundPaths,
-    sound_volume: u8,
     high_usage_threshold: f64,
     critical_usage_threshold: f64,
     provider_usage_thresholds:
@@ -570,7 +569,6 @@ impl From<Settings> for SettingsSnapshot {
             sound_enabled: settings.sound_enabled,
             notification_sound_theme: settings.notification_sound_theme,
             notification_sound_paths: settings.notification_sound_paths,
-            sound_volume: settings.sound_volume,
             high_usage_threshold: settings.high_usage_threshold,
             critical_usage_threshold: settings.critical_usage_threshold,
             provider_usage_thresholds: settings.provider_usage_thresholds,

@@ -305,7 +305,6 @@ fn float_bar_raw_clamps_out_of_range_opacity_on_load() {
             "start_at_login": false,
             "show_notifications": true,
             "sound_enabled": true,
-            "sound_volume": 100,
             "high_usage_threshold": 70.0,
             "critical_usage_threshold": 90.0,
             "merge_tray_icons": false,

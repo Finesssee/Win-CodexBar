@@ -163,7 +163,6 @@ export interface SettingsSnapshot {
   soundEnabled: boolean;
   notificationSoundTheme: NotificationSoundTheme;
   notificationSoundPaths: NotificationSoundPaths;
-  soundVolume: number;
   highUsageThreshold: number;
   criticalUsageThreshold: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
@@ -244,7 +243,6 @@ export interface SettingsUpdate {
   soundEnabled?: boolean;
   notificationSoundTheme?: NotificationSoundTheme;
   notificationSoundPaths?: NotificationSoundPaths;
-  soundVolume?: number;
   highUsageThreshold?: number;
   criticalUsageThreshold?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;

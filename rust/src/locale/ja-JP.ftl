@@ -43,7 +43,6 @@ NotificationSoundEventSessionDepleted = セッション枯渇
 NotificationSoundEventSessionDepletedHelper = セッション使用量が 100% に達したときに通知します。
 NotificationSoundEventSessionRestored = セッション復旧
 NotificationSoundEventSessionRestoredHelper = 枯渇したセッションが再び利用可能になったときに通知します。
-SoundVolume = 通知音量
 HighUsageThreshold = 高使用量しきい値
 HighUsageAlert = 高使用量アラート
 CriticalUsageThreshold = 重大使用量しきい値
@@ -395,7 +394,6 @@ RefreshIntervalLabel = 更新間隔
 RefreshIntervalHelper = プロバイダーを自動更新する間隔(秒)(0 = 手動)。
 RefreshAllProvidersOnMenuOpen = メニュー表示時に更新
 RefreshAllProvidersOnMenuOpenHelper = トレイメニューを開くたびに有効なプロバイダーを強制更新。
-SoundVolumeHelper = しきい値通知音の音量(0〜100)。
 HighUsageWarningHelper = 使用量がこの割合を超えたら警告を表示。
 CriticalUsageWarningHelper = 使用量がこの割合を超えたら重大アラートを表示。
 GlobalShortcutFieldLabel = グローバルショートカット

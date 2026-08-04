@@ -70,9 +70,6 @@ pub struct Settings {
     #[serde(default)]
     pub notification_sound_theme: NotificationSoundTheme,
 
-    /// Sound volume for alerts (0-100)
-    pub sound_volume: u8,
-
     /// High usage threshold for warnings (percentage)
     pub high_usage_threshold: f64,
 
@@ -429,7 +426,6 @@ impl Default for Settings {
             sound_enabled: true,
             notification_sound_paths: NotificationSoundPaths::default(),
             notification_sound_theme: NotificationSoundTheme::default(),
-            sound_volume: 100,
             high_usage_threshold: 70.0,
             critical_usage_threshold: 90.0,
             provider_usage_thresholds: HashMap::new(),

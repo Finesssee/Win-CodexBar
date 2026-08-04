@@ -106,6 +106,10 @@ function blurOnEnter(event: { key: string; currentTarget: { blur: () => void } }
   if (event.key === "Enter") event.currentTarget.blur();
 }
 
+function isNotificationSoundTheme(v: string): v is NotificationSoundTheme {
+  return v === "windows" || v === "codexBar";
+}
+
 function ThresholdOverrideInputs({
   label,
   value,
@@ -330,9 +334,11 @@ export default function GeneralTab({
                     value: option.value,
                     label: t(option.labelKey),
                   }))}
-                  onChange={(value) =>
-                    set({ notificationSoundTheme: value as NotificationSoundTheme })
-                  }
+                  onChange={(value) => {
+                    if (isNotificationSoundTheme(value)) {
+                      set({ notificationSoundTheme: value });
+                    }
+                  }}
                 />
               </Field>
               {NOTIFICATION_SOUND_EVENTS.map((sound) => {

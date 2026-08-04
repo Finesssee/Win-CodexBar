@@ -43,7 +43,6 @@ NotificationSoundEventSessionDepleted = Session depleted
 NotificationSoundEventSessionDepletedHelper = A session quota reaches 100%.
 NotificationSoundEventSessionRestored = Session restored
 NotificationSoundEventSessionRestoredHelper = A depleted session becomes available again.
-SoundVolume = Alert Volume
 HighUsageThreshold = High Usage Threshold
 HighUsageAlert = High Usage Alert
 CriticalUsageThreshold = Critical Usage Threshold
@@ -401,7 +400,6 @@ RefreshIntervalLabel = Refresh interval
 RefreshIntervalHelper = Seconds between automatic provider refreshes (0 = manual).
 RefreshAllProvidersOnMenuOpen = Refresh on menu open
 RefreshAllProvidersOnMenuOpenHelper = Force-refresh enabled providers whenever the tray menu opens.
-SoundVolumeHelper = Volume for threshold alert sounds (0–100).
 HighUsageWarningHelper = Show a warning when usage exceeds this percentage.
 CriticalUsageWarningHelper = Show a critical alert when usage exceeds this percentage.
 GlobalShortcutFieldLabel = Global shortcut

@@ -43,7 +43,6 @@ NotificationSoundEventSessionDepleted = 会话配额耗尽
 NotificationSoundEventSessionDepletedHelper = 会话配额达到 100% 时通知。
 NotificationSoundEventSessionRestored = 会话恢复
 NotificationSoundEventSessionRestoredHelper = 已耗尽的会话恢复可用时通知。
-SoundVolume = 提示音音量
 HighUsageThreshold = 高用量阈值
 HighUsageAlert = 高位预警
 CriticalUsageThreshold = 紧急用量阈值
@@ -395,7 +394,6 @@ RefreshIntervalLabel = 刷新间隔
 RefreshIntervalHelper = 两次自动刷新之间的秒数（0 = 手动）。
 RefreshAllProvidersOnMenuOpen = 打开菜单时刷新
 RefreshAllProvidersOnMenuOpenHelper = 每次打开托盘菜单时强制刷新已启用的提供商。
-SoundVolumeHelper = 阈值告警音量（0–100）。
 HighUsageWarningHelper = 当用量超过该百分比时显示预警。
 CriticalUsageWarningHelper = 当用量超过该百分比时显示严重告警。
 GlobalShortcutFieldLabel = 全局快捷键

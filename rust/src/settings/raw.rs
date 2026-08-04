@@ -25,7 +25,6 @@ pub(super) struct RawSettings {
     sound_enabled: bool,
     notification_sound_paths: NotificationSoundPaths,
     notification_sound_theme: NotificationSoundTheme,
-    sound_volume: u8,
     high_usage_threshold: f64,
     critical_usage_threshold: f64,
     provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
@@ -179,7 +178,6 @@ impl Default for RawSettings {
             sound_enabled: s.sound_enabled,
             notification_sound_paths: s.notification_sound_paths,
             notification_sound_theme: s.notification_sound_theme,
-            sound_volume: s.sound_volume,
             high_usage_threshold: s.high_usage_threshold,
             critical_usage_threshold: s.critical_usage_threshold,
             provider_usage_thresholds: HashMap::new(),
@@ -485,7 +483,6 @@ impl From<RawSettings> for Settings {
             sound_enabled: raw.sound_enabled,
             notification_sound_paths: raw.notification_sound_paths,
             notification_sound_theme: raw.notification_sound_theme,
-            sound_volume: raw.sound_volume,
             high_usage_threshold: raw.high_usage_threshold,
             critical_usage_threshold: raw.critical_usage_threshold,
             provider_usage_thresholds: normalize_usage_threshold_overrides(

@@ -17,7 +17,6 @@ pub struct SettingsUpdate {
     pub sound_enabled: Option<bool>,
     pub notification_sound_theme: Option<codexbar::settings::NotificationSoundTheme>,
     pub notification_sound_paths: Option<codexbar::settings::NotificationSoundPaths>,
-    pub sound_volume: Option<u8>,
     pub high_usage_threshold: Option<f64>,
     pub critical_usage_threshold: Option<f64>,
     pub provider_usage_thresholds:
@@ -231,9 +230,6 @@ impl SettingsUpdate {
             )
             .map_err(|error| error.to_string())?;
             settings.notification_sound_paths = v;
-        }
-        if let Some(v) = self.sound_volume {
-            settings.sound_volume = v;
         }
         if let Some(v) = self.high_usage_threshold {
             settings.high_usage_threshold = v.clamp(0.0, 100.0);

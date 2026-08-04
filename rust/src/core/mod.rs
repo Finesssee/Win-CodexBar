@@ -4,7 +4,9 @@ mod adaptive_refresh;
 mod aws_signing;
 mod cost_pricing;
 pub mod curl_capture;
+mod hook_transition;
 mod hooks;
+
 mod http;
 mod http_proxy;
 mod jsonl_scanner;
@@ -25,7 +27,9 @@ pub use adaptive_refresh::*;
 pub use aws_signing::*;
 pub use cost_pricing::*;
 pub use curl_capture::*;
+pub use hook_transition::*;
 pub use hooks::*;
+
 pub use http::*;
 pub use http_proxy::*;
 pub use jsonl_scanner::*;

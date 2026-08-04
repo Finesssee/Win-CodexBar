@@ -103,6 +103,17 @@ impl HookEvent {
         self.status = Some(status.into());
         self
     }
+    pub fn with_usage_fraction(mut self, usage: f64) -> Self {
+        let usage = usage.clamp(0.0, 1.0);
+        self.usage_percent = Some(usage);
+        self.remaining_percent = Some((1.0 - usage) * 100.0);
+        self
+    }
+
+    pub fn with_timestamp(mut self, ts: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = format_unix_utc(ts.timestamp().max(0) as u64);
+        self
+    }
 
     /// `CODEXBAR_*` environment variables for the hook process.
     pub fn environment_variables(&self) -> HashMap<String, String> {

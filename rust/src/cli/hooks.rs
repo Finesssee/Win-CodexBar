@@ -1,10 +1,19 @@
-//! `codexbar hooks` — list / enable / disable / test external hook rules.
+//! `codexbar hooks` — list / enable / disable / test / watch external hook rules.
 
 use clap::{Args, Subcommand};
 use serde::Serialize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use crate::core::{HookEvent, HookEventType, HookRunner, HooksConfig, ProviderId};
-use crate::settings::Settings;
+use crate::core::{
+    FetchContext, HookEvent, HookEventType, HookProviderObservation, HookProviderStatus,
+    HookQuotaLaneKey, HookQuotaLaneObservation, HookQuotaWindow, HookRateLimiter, HookRunner,
+    HookTransitionDetector, HooksConfig, ProviderError, ProviderId, RateWindow, SourceMode,
+    instantiate_provider,
+};
+use crate::settings::{ApiKeys, Settings};
+use crate::status::{StatusLevel, fetch_provider_status};
 
 #[derive(Args, Debug, Clone)]
 pub struct HooksArgs {
@@ -22,6 +31,8 @@ pub enum HooksCommand {
     Disable(HooksToggleArgs),
     /// Run matching rules for a sample event
     Test(HooksTestArgs),
+    /// Continuously poll providers and fire hooks on real transitions
+    Watch(HooksWatchArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -59,6 +70,45 @@ pub struct HooksTestArgs {
     pub pretty: bool,
 }
 
+/// Default poll period (seconds). Longer than serve cache TTL — watch originates
+/// traffic against every enabled provider on every tick.
+pub const HOOKS_WATCH_DEFAULT_INTERVAL: u64 = 300;
+/// Floor for `--interval`. Rejected rather than clamped.
+pub const HOOKS_WATCH_MINIMUM_INTERVAL: u64 = 60;
+/// Sleep tick so Ctrl-C is noticed without waiting the full interval.
+const HOOKS_WATCH_SLEEP_TICK: Duration = Duration::from_millis(200);
+
+#[derive(Args, Debug, Clone)]
+pub struct HooksWatchArgs {
+    /// Poll period in seconds (default 300, minimum 60)
+    #[arg(long, default_value_t = HOOKS_WATCH_DEFAULT_INTERVAL)]
+    pub interval: u64,
+
+    /// Provider CLI name(s); comma-separated or repeated. Default: enabled providers.
+    #[arg(long, value_delimiter = ',')]
+    pub provider: Vec<String>,
+
+    /// Emit JSON hook events
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON
+    #[arg(long)]
+    pub pretty: bool,
+
+    /// Print fetch diagnostics
+    #[arg(long)]
+    pub verbose: bool,
+
+    /// Web fetch timeout in seconds (default 60)
+    #[arg(long = "web-timeout", default_value_t = 60)]
+    pub web_timeout: u64,
+
+    /// Data source: auto, web, cli, oauth
+    #[arg(long, default_value = "auto", value_parser = ["auto", "web", "cli", "oauth"])]
+    pub source: String,
+}
+
 #[derive(Debug, Serialize)]
 struct HooksListJson {
     enabled: bool,
@@ -93,7 +143,283 @@ pub async fn run(args: HooksArgs) -> anyhow::Result<()> {
         HooksCommand::Enable(a) => run_set_enabled(true, a),
         HooksCommand::Disable(a) => run_set_enabled(false, a),
         HooksCommand::Test(a) => run_test(a),
+        HooksCommand::Watch(a) => run_watch(a).await,
     }
+}
+
+/// Continuously poll providers and dispatch hooks on real quota/status transitions.
+async fn run_watch(args: HooksWatchArgs) -> anyhow::Result<()> {
+    // Validate command-only args before reading config (upstream ordering).
+    let interval = decode_hooks_watch_interval(args.interval)?;
+    let explicit = decode_hooks_watch_providers(&args.provider)?;
+
+    let hooks = HooksConfig::load();
+    let settings = Settings::load();
+    let providers = resolve_hooks_watch_providers(explicit, &settings)?;
+
+    if !hooks.enabled {
+        anyhow::bail!("Hooks are disabled. Run `codexbar hooks enable` first.");
+    }
+    if hooks.events.is_empty() {
+        anyhow::bail!("No hook rules configured. See `codexbar hooks list`.");
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_signal = Arc::clone(&stop);
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        stop_for_signal.store(true, Ordering::SeqCst);
+    });
+
+    let mut detector = HookTransitionDetector::new();
+    let rate_limiter = HookRateLimiter::default();
+    let source_mode = SourceMode::parse(&args.source).unwrap_or(SourceMode::Auto);
+
+    if !args.json {
+        let names = providers
+            .iter()
+            .map(|p| p.cli_name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "Watching {} provider(s) every {}s: {}",
+            providers.len(),
+            interval.as_secs(),
+            names
+        );
+        println!("Press Ctrl-C to stop.");
+    }
+
+    while !stop.load(Ordering::SeqCst) {
+        for provider in &providers {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let observation = hooks_watch_observation(
+                *provider,
+                &settings,
+                source_mode,
+                args.web_timeout,
+                args.verbose,
+            )
+            .await;
+
+            let dispatches = detector.evaluate(&observation, &hooks);
+            for dispatch in dispatches {
+                report_hook_event(&dispatch.event, args.json, args.pretty)?;
+                let dispatch_config = match &dispatch.rules {
+                    Some(rules) => HooksConfig {
+                        enabled: true,
+                        events: rules.clone(),
+                    },
+                    None => hooks.clone(),
+                };
+                HookRunner::dispatch(&dispatch.event, &dispatch_config, &rate_limiter);
+            }
+        }
+
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        sleep_interruptibly(interval, &stop).await;
+    }
+
+    Ok(())
+}
+
+fn decode_hooks_watch_interval(raw: u64) -> anyhow::Result<Duration> {
+    if raw < HOOKS_WATCH_MINIMUM_INTERVAL {
+        anyhow::bail!(
+            "--interval must be at least {} seconds.",
+            HOOKS_WATCH_MINIMUM_INTERVAL
+        );
+    }
+    Ok(Duration::from_secs(raw))
+}
+
+fn decode_hooks_watch_providers(names: &[String]) -> anyhow::Result<Option<Vec<ProviderId>>> {
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let mut selected = Vec::new();
+    for name in names {
+        let id = ProviderId::from_cli_name(name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown provider: {name}"))?;
+        if !selected.contains(&id) {
+            selected.push(id);
+        }
+    }
+    Ok(Some(selected))
+}
+
+fn resolve_hooks_watch_providers(
+    explicit: Option<Vec<ProviderId>>,
+    settings: &Settings,
+) -> anyhow::Result<Vec<ProviderId>> {
+    if let Some(list) = explicit {
+        return Ok(list);
+    }
+    let enabled = settings.get_enabled_provider_ids();
+    if enabled.is_empty() {
+        anyhow::bail!("No providers are enabled.");
+    }
+    Ok(enabled)
+}
+
+async fn hooks_watch_observation(
+    provider_id: ProviderId,
+    settings: &Settings,
+    source_mode: SourceMode,
+    web_timeout: u64,
+    verbose: bool,
+) -> HookProviderObservation {
+    let status = match fetch_provider_status(provider_id.cli_name()).await {
+        Some(s) => map_status_level(s.level),
+        None => HookProviderStatus::Unknown,
+    };
+
+    let workspace = settings.workspace_id(provider_id);
+    let region = settings.api_region(provider_id);
+    let gateway = settings.gateway_url(provider_id);
+
+    let mut ctx = FetchContext {
+        source_mode,
+        include_credits: false,
+        web_timeout,
+        verbose,
+        manual_cookie_header: None,
+        api_key: None,
+        workspace_id: (!workspace.is_empty()).then(|| workspace.to_string()),
+        api_region: (!region.is_empty()).then(|| region.to_string()),
+        gateway_url: (!gateway.is_empty()).then(|| gateway.to_string()),
+        auto_prefer_web: false,
+    };
+
+    if ctx.api_key.is_none() {
+        ctx.api_key = ApiKeys::load()
+            .get(provider_id.cli_name())
+            .map(|s| s.to_string());
+    }
+
+    let provider = instantiate_provider(provider_id);
+    match provider.fetch_usage(&ctx).await {
+        Ok(result) => {
+            let usage = &result.usage;
+            let account = usage.account_email.clone();
+            HookProviderObservation {
+                provider: provider_id.cli_name().to_string(),
+                lanes: hooks_watch_lanes(provider_id, usage, settings, account.as_deref()),
+                status,
+                refresh_failure_status: None,
+                account_display_name: account,
+            }
+        }
+        Err(err) => HookProviderObservation {
+            provider: provider_id.cli_name().to_string(),
+            lanes: Vec::new(),
+            status,
+            refresh_failure_status: Some(hook_refresh_failure_status(&err)),
+            account_display_name: None,
+        },
+    }
+}
+
+fn hooks_watch_lanes(
+    provider_id: ProviderId,
+    usage: &crate::core::UsageSnapshot,
+    settings: &Settings,
+    account: Option<&str>,
+) -> Vec<HookQuotaLaneObservation> {
+    let mut lanes = Vec::new();
+    let pairs: [(HookQuotaWindow, Option<&RateWindow>); 2] = [
+        (HookQuotaWindow::Session, Some(&usage.primary)),
+        (HookQuotaWindow::Weekly, usage.secondary.as_ref()),
+    ];
+    for (window, rate_window) in pairs {
+        let Some(rate_window) = rate_window else {
+            continue;
+        };
+        if rate_window.is_informational {
+            continue;
+        }
+        let thresholds = settings.usage_thresholds(provider_id, window.as_str());
+        // Settings store *used* percentages; detector math uses used fractions.
+        let fallback = [thresholds.high / 100.0, thresholds.critical / 100.0];
+        lanes.push(HookQuotaLaneObservation {
+            key: HookQuotaLaneKey::new(
+                provider_id.cli_name(),
+                window,
+                account.map(str::to_string),
+                None,
+            ),
+            label: window.display_name().to_string(),
+            rate_window: Some(rate_window.clone()),
+            fallback_thresholds: fallback.to_vec(),
+            account_display_name: account.map(str::to_string),
+        });
+    }
+    lanes
+}
+
+fn map_status_level(level: StatusLevel) -> HookProviderStatus {
+    match level {
+        StatusLevel::Operational => HookProviderStatus::None,
+        StatusLevel::Degraded => HookProviderStatus::Minor,
+        StatusLevel::Partial => HookProviderStatus::Major,
+        StatusLevel::Major => HookProviderStatus::Critical,
+        StatusLevel::Unknown => HookProviderStatus::Unknown,
+    }
+}
+
+/// Coarse, non-secret category for a refresh failure. Never forwards raw errors.
+fn hook_refresh_failure_status(error: &ProviderError) -> String {
+    match error {
+        ProviderError::AuthRequired | ProviderError::NoCookies | ProviderError::OAuth(_) => {
+            "auth_required".into()
+        }
+        ProviderError::Timeout => "timeout".into(),
+        ProviderError::Network(err) => {
+            if err.is_timeout() {
+                "timeout".into()
+            } else if err.is_connect() {
+                "offline".into()
+            } else {
+                "network_error".into()
+            }
+        }
+        ProviderError::NotInstalled(_) => "error".into(),
+        ProviderError::Parse(_) | ProviderError::UnsupportedSource(_) | ProviderError::Other(_) => {
+            "error".into()
+        }
+    }
+}
+
+async fn sleep_interruptibly(interval: Duration, stop: &AtomicBool) {
+    let mut remaining = interval;
+    while remaining > Duration::ZERO && !stop.load(Ordering::SeqCst) {
+        let tick = remaining.min(HOOKS_WATCH_SLEEP_TICK);
+        tokio::time::sleep(tick).await;
+        remaining = remaining.saturating_sub(tick);
+    }
+}
+
+fn report_hook_event(event: &HookEvent, json: bool, pretty: bool) -> anyhow::Result<()> {
+    if json {
+        print_json(event, pretty)?;
+        return Ok(());
+    }
+    let mut line = format!("{} {}", event.event.as_str(), event.provider);
+    if let Some(window) = &event.window {
+        line.push_str(&format!(" window={window}"));
+    }
+    if let Some(usage) = event.usage_percent {
+        line.push_str(&format!(" usage={:.0}%", usage * 100.0));
+    }
+    if let Some(status) = &event.status {
+        line.push_str(&format!(" status={status}"));
+    }
+    println!("{line}");
+    Ok(())
 }
 
 fn run_list(args: HooksListArgs) -> anyhow::Result<()> {
@@ -316,5 +642,25 @@ mod tests {
         assert!(e.remaining_percent.unwrap() < 20.0);
         assert_eq!(e.provider, "claude");
         assert!(e.environment_variables().contains_key("CODEXBAR_PROVIDER"));
+    }
+
+    #[test]
+    fn watch_interval_rejects_below_floor() {
+        assert!(decode_hooks_watch_interval(59).is_err());
+        assert!(decode_hooks_watch_interval(60).is_ok());
+        assert_eq!(
+            decode_hooks_watch_interval(300).unwrap(),
+            Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn watch_providers_reject_unknown_and_dedupe() {
+        assert!(decode_hooks_watch_providers(&["nosuch".into()]).is_err());
+        let got = decode_hooks_watch_providers(&["codex".into(), "codex".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, vec![ProviderId::Codex]);
+        assert!(decode_hooks_watch_providers(&[]).unwrap().is_none());
     }
 }

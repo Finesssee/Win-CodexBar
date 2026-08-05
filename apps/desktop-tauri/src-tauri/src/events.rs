@@ -15,6 +15,7 @@ pub const REFRESH_COMPLETE: &str = "refresh-complete";
 pub const UPDATE_STATE_CHANGED: &str = "update-state-changed";
 pub const LOCALE_CHANGED: &str = "locale-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
+pub const CODEX_ACCOUNTS_UPDATED: &str = "codex-accounts-updated";
 
 // ── Payloads ─────────────────────────────────────────────────────────
 
@@ -78,6 +79,13 @@ pub fn emit_refresh_complete(app: &AppHandle, provider_count: usize, error_count
             error_count,
         },
     );
+}
+
+/// Broadcast that the Codex account snapshot store was refreshed (ADR 0003
+/// multi-account lanes). Payload-less; listeners re-fetch via
+/// `get_codex_accounts_state`.
+pub fn emit_codex_accounts_updated(app: &AppHandle) {
+    let _ = app.emit(CODEX_ACCOUNTS_UPDATED, ());
 }
 
 pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) {

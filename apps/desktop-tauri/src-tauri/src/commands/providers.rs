@@ -352,6 +352,19 @@ fn spawn_provider_refreshes(
         }));
     }
 
+    // ADR 0003 multi-account lanes: when Codex is enabled, refresh every
+    // account snapshot (ambient + managed) on the same cycle, bounded by the
+    // shared fetch semaphore. The ambient account still publishes the single
+    // "codex" provider snapshot used by tray/menu; the lanes fill the account
+    // snapshot store consumed by the Settings accounts panel.
+    if inputs.enabled_ids.contains(&ProviderId::Codex) {
+        let app_handle = app.clone();
+        let fetch_permits = Arc::clone(&fetch_permits);
+        handles.push(tokio::spawn(async move {
+            super::codex_accounts::refresh_codex_account_lanes(app_handle, fetch_permits).await;
+        }));
+    }
+
     handles
 }
 

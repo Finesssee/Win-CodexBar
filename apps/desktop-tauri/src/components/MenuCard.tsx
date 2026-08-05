@@ -9,6 +9,7 @@ import { formatRelativeUpdated } from "../lib/relativeTime";
 import type { LocaleKey } from "../i18n/keys";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import MenuCardDetails, { describeCard, type MetricEntry } from "./MenuCardDetails";
+import CodexAccountsMenu from "./CodexAccountsMenu";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -52,7 +53,7 @@ interface MenuCardProps {
   onLayoutChange?: () => void;
 }
 
-function maskEmail(email: string): string {
+export function maskEmail(email: string): string {
   const at = email.indexOf("@");
   if (at <= 1) return "••••@••••";
   return email[0] + "•".repeat(at - 1) + email.slice(at);
@@ -239,6 +240,10 @@ export default function MenuCard({
           presence={presence}
           onLayoutChange={onLayoutChange}
         />
+      )}
+
+      {provider.providerId === "codex" && (
+        <CodexAccountsMenu hideEmail={hideEmail} />
       )}
     </article>
   );

@@ -3873,6 +3873,143 @@ html:has(.menu-surface--tray) {
   padding-bottom: var(--menu-card-section-y);
 }
 
+/* ── Multi-account Codex lanes (ADR 0003, option A) ─────────────────── */
+
+.codex-menu-accounts {
+  margin-top: 4px;
+  border-top: 1px solid var(--divider, var(--provider-row-divider, rgba(128, 128, 128, 0.18)));
+  padding-top: 4px;
+}
+
+.codex-menu-accounts__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--provider-row-text-secondary);
+  user-select: none;
+}
+
+.codex-menu-accounts__summary::-webkit-details-marker {
+  display: none;
+}
+
+.codex-menu-accounts__summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 0.8em;
+  color: var(--provider-row-text-secondary);
+  transition: transform 0.12s;
+}
+
+.codex-menu-accounts[open] > .codex-menu-accounts__summary::before {
+  transform: rotate(90deg);
+}
+
+.codex-menu-accounts__count {
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--provider-row-text-secondary);
+}
+
+.codex-menu-accounts__error {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: var(--provider-status-error);
+}
+
+.codex-menu-accounts__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-menu-accounts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.codex-menu-accounts__row--active .codex-menu-accounts__email {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.codex-menu-accounts__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.codex-menu-accounts__email {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  color: var(--provider-row-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.codex-menu-accounts__badge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--provider-status-ok, #4ade80);
+}
+
+.codex-menu-accounts__bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--provider-row-divider, rgba(128, 128, 128, 0.18));
+  overflow: hidden;
+}
+
+.codex-menu-accounts__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent, currentColor);
+}
+
+.codex-menu-accounts__switch {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--provider-row-divider, rgba(128, 128, 128, 0.3));
+  cursor: pointer;
+}
+
+.codex-menu-accounts__switch:hover:not(:disabled) {
+  border-color: var(--accent, currentColor);
+}
+
+.codex-menu-accounts__switch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* Header VStack(spacing: 4) with two HStacks */
 .menu-card__header {
   display: flex;

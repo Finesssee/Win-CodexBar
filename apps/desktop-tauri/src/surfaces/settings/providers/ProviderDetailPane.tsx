@@ -30,6 +30,7 @@ import { ChartsSection } from "./sections/charts/ChartsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { RegionSection } from "./sections/RegionSection";
 import { CodexUsageOptions } from "./sections/credentials/CodexUsageOptions";
+import { CodexAccountsSection } from "./sections/credentials/CodexAccountsSection";
 import { TokenAccountsPanel } from "../tokens/TokenAccountsPanel";
 import { ApiKeySection } from "./ApiKeySection";
 import { CookieSection } from "./CookieSection";
@@ -316,6 +317,7 @@ export function ProviderDetailPane({
       />
       <CredentialsDispatcher providerId={detail.id} t={t} />
       {detail.id === "codex" && <CodexUsageOptions t={t} />}
+      {detail.id === "codex" && <CodexAccountsSection t={t} />}
       <CredentialStorageSection
         status={credentialStatus}
         busy={busy}

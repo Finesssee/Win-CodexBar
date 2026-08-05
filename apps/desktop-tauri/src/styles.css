@@ -2446,6 +2446,44 @@ body:has(.tray-panel-reveal) {
   font-size: 0.82rem;
 }
 
+/* ── Codex multi-account (ADR 0003) ─────────────────────────────────── */
+
+.provider-detail-note {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--provider-status-ok, #4ade80);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-accounts-list {
+  gap: 6px;
+}
+
+.codex-accounts-card {
+  padding: 8px 10px;
+}
+
+.codex-accounts-add {
+  margin-top: 8px;
+}
+
+.codex-usage {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--provider-row-text-secondary);
+}
+
+.codex-usage--blocked {
+  color: var(--provider-status-error);
+}
+
 .provider-detail-pace__stage {
   font-size: 0.86rem;
   font-weight: 600;

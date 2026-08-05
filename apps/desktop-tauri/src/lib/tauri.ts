@@ -34,6 +34,10 @@ import type {
   TrayVisibilityStatusDto,
   UsageSpendSummary,
   CodexLocalProjectUsageSnapshot,
+  CodexAccount,
+  CodexAccountUsageSnapshot,
+  CodexAccountsStateBridge,
+  CodexSwitchResult,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -435,4 +439,52 @@ export function flyoutStoredSize(): Promise<[number, number] | null> {
 
 export function quitApp(): Promise<void> {
   return invoke<void>("quit_app");
+}
+
+// ── Codex multi-account (ADR 0003) ───────────────────────────────────
+
+export function codexAccountsList(): Promise<CodexAccount[]> {
+  return invoke<CodexAccount[]>("codex_accounts_list");
+}
+
+export function codexAccountAdd(): Promise<CodexAccount> {
+  return invoke<CodexAccount>("codex_account_add");
+}
+
+export function codexAccountRemove(id: string): Promise<void> {
+  return invoke<void>("codex_account_remove", { id });
+}
+
+export function codexAccountSwitch(id: string): Promise<CodexSwitchResult> {
+  return invoke<CodexSwitchResult>("codex_account_switch", { id });
+}
+
+export function codexAccountFetch(
+  id: string,
+): Promise<CodexAccountUsageSnapshot> {
+  return invoke<CodexAccountUsageSnapshot>("codex_account_fetch", { id });
+}
+
+export function codexAccountSnapshots(): Promise<
+  Record<string, CodexAccountUsageSnapshot>
+> {
+  return invoke<Record<string, CodexAccountUsageSnapshot>>(
+    "codex_account_snapshots",
+  );
+}
+
+export function codexAccountRestartDesktop(
+  sessionRoot?: string | null,
+  backupDestination?: string | null,
+  restoreSource?: string | null,
+): Promise<void> {
+  return invoke<void>("codex_account_restart_desktop", {
+    sessionRoot,
+    backupDestination,
+    restoreSource,
+  });
+}
+
+export function getCodexAccountsState(): Promise<CodexAccountsStateBridge> {
+  return invoke<CodexAccountsStateBridge>("get_codex_accounts_state");
 }

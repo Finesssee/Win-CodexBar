@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -138,5 +139,55 @@ describe("CodexAccountsSection", () => {
       screen.getByText("CodexAccountsRestartDesktop").click();
     });
     expect(tauriMocks.codexAccountRestartDesktop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Layout containment cannot be asserted via jsdom (vitest runs with
+// `css: false`, so styles.css is never applied and computed styles are
+// empty). Assert the stylesheet rules directly instead: these are the exact
+// properties that keep a long account email from painting over the actions
+// row at the fixed 720px settings window. import.meta.dirname (not .url)
+// survives vitest's jsdom transform as the real on-disk directory.
+if (!import.meta.dirname) {
+  throw new Error("import.meta.dirname unavailable to vitest runner");
+}
+const stylesSource = readFileSync(
+  `${import.meta.dirname}/../../../../../styles.css`,
+  "utf8",
+);
+
+function ruleBlock(source: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  expect(match).not.toBeNull();
+  return match![1];
+}
+
+describe("CodexAccountsSection containment styles", () => {
+  it("ellipsizes the info column and pins the actions row inside the card", () => {
+    const info = ruleBlock(
+      stylesSource,
+      ".codex-accounts-card .credential-card__info",
+    );
+    expect(info).toContain("min-width: 0");
+    expect(info).toContain("overflow: hidden");
+    expect(info).toContain("text-overflow: ellipsis");
+    expect(info).toContain("white-space: nowrap");
+
+    const title = ruleBlock(
+      stylesSource,
+      ".codex-accounts-card .credential-card__info strong",
+    );
+    expect(title).toContain("max-width: 100%");
+    expect(title).toContain("overflow: hidden");
+    expect(title).toContain("text-overflow: ellipsis");
+    expect(title).toContain("white-space: nowrap");
+
+    const actions = ruleBlock(
+      stylesSource,
+      ".codex-accounts-card .credential-card__actions",
+    );
+    expect(actions).toContain("flex-shrink: 0");
+    expect(actions).toContain("nowrap");
   });
 });

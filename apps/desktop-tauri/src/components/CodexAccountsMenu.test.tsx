@@ -112,6 +112,35 @@ describe("CodexAccountsMenu", () => {
     expect((fills[1] as HTMLElement).style.width).toBe("70%");
   });
 
+  it("renders a usage bar from a weekly-only snapshot (primaryWindow: null)", async () => {
+    const weeklyOnly: CodexAccountUsageSnapshot = {
+      email: "weekly@example.com",
+      providerAccountId: null,
+      plan: "pro",
+      allowed: true,
+      limitReached: false,
+      primaryWindow: null,
+      secondaryWindow: {
+        usedPercent: 42,
+        resetAt: null,
+        limitWindowSeconds: 604800,
+      },
+      credits: null,
+      updatedAt: "2024-01-01T00:00:00Z",
+    };
+    const { container } = renderMenu(false, {
+      accounts: [account("1", { source: "ambient" }), account("2")],
+      snapshots: { "1": weeklyOnly },
+    });
+    await screen.findByText("user-1@example.com");
+
+    const fills = container.querySelectorAll(
+      ".codex-menu-accounts__bar-fill",
+    );
+    expect(fills.length).toBe(1);
+    expect((fills[0] as HTMLElement).style.width).toBe("42%");
+  });
+
   it("switches an account and kicks a provider refresh", async () => {
     renderMenu(false, {
       accounts: [account("1", { source: "ambient" }), account("2")],

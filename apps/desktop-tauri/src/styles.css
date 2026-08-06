@@ -2484,6 +2484,31 @@ body:has(.tray-panel-reveal) {
   color: var(--provider-status-error);
 }
 
+/* CodexAccountsSection cards sit in the fixed 720px settings window next to a
+   3-button actions row (~242px). A long account email has no break
+   opportunities, so without containment it overflows the info column and
+   paints over the actions. Ellipsize the info column/title instead, and pin
+   the actions row in place with flex-shrink: 0 + nowrap. */
+.codex-accounts-card .credential-card__info {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-accounts-card .credential-card__info strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-accounts-card .credential-card__actions {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
 .provider-detail-pace__stage {
   font-size: 0.86rem;
   font-weight: 600;

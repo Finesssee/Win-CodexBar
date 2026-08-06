@@ -93,8 +93,15 @@ export default function CodexAccountsMenu({ hideEmail }: { hideEmail: boolean })
       <ul className="codex-menu-accounts__list">
         {accounts.map((account) => {
           const snapshot = snapshots[account.id];
-          const pct = snapshot?.primaryWindow
-            ? Math.round(snapshot.primaryWindow.usedPercent)
+          // Prefer the primary (session) window, but accounts whose backend
+          // only returns a weekly window have primaryWindow: null — fall back
+          // to the next filled window in canonical order (primary →
+          // secondary; the account-snapshot bridge carries no tertiary or
+          // extra rate windows) so the usage bar still renders.
+          const usageWindow =
+            snapshot?.primaryWindow ?? snapshot?.secondaryWindow ?? null;
+          const pct = usageWindow
+            ? Math.round(usageWindow.usedPercent)
             : null;
           const label =
             account.nickname ??

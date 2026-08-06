@@ -15,18 +15,17 @@ pub mod account_manager;
 pub mod api;
 pub mod codex_desktop;
 pub mod file_locations;
+pub mod login_runner;
 pub mod models;
 pub mod stores;
 
-pub use account_manager::{
-    CodexAccountManager, CodexAccountManagerError, CodexLoginOutcome, CodexLoginResult,
-    CodexSwitchResult, ManagedLoginProcess,
-};
+pub use account_manager::{CodexAccountManager, CodexAccountManagerError, CodexSwitchResult};
 pub use api::{AuthBackedIdentity, AuthCredentials, CodexAccountApi, CodexApiError, load_identity};
 pub use codex_desktop::{
     CodexDesktopControlError, build_restart_command, build_restart_script,
     encode_powershell_script, restart_codex_desktop,
 };
+pub use login_runner::{CodexLoginOutcome, CodexLoginResult, ManagedLoginProcess};
 pub use models::{
     AccountUsageSnapshot, CodexAccount, CodexAccountSource, CreditsBalanceSnapshot,
     RemovedAccountIdentity, UsageWindowSnapshot, utc_now,

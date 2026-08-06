@@ -496,6 +496,12 @@ fn append_usage_window_lines(
 }
 
 fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow, use_color: bool) {
+    if window.is_informational {
+        let description = window.reset_description.as_deref().unwrap_or("unavailable");
+        lines.push(format!("  {:<8} {}", format!("{}:", label), description));
+        return;
+    }
+
     let bar = render_progress_bar(window.used_percent, 20, use_color);
     let reset = window
         .format_countdown()
@@ -547,15 +553,20 @@ fn append_model_specific_line(
 pub fn render_brief_text(provider: ProviderId, result: &ProviderFetchResult) -> String {
     let metadata = instantiate_provider(provider).metadata().clone();
     let usage = &result.usage;
-    let reset = usage
-        .primary
-        .format_countdown()
-        .unwrap_or_else(|| "n/a".to_string());
-    let mut parts = vec![format!(
-        "{} {}",
-        metadata.session_label,
-        format_percent(usage.primary.used_percent)
-    )];
+    let mut parts = Vec::new();
+    let reset = if usage.primary.is_informational {
+        parts.push(format!("{} unavailable", metadata.session_label));
+        usage.secondary.as_ref().unwrap_or(&usage.primary)
+    } else {
+        parts.push(format!(
+            "{} {}",
+            metadata.session_label,
+            format_percent(usage.primary.used_percent)
+        ));
+        &usage.primary
+    }
+    .format_countdown()
+    .unwrap_or_else(|| "n/a".to_string());
     if let Some(secondary) = &usage.secondary {
         parts.push(format!(
             "{} {}",

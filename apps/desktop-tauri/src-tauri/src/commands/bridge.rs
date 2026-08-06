@@ -157,7 +157,16 @@ impl ProviderUsageSnapshot {
     ) -> Self {
         let usage = &result.usage;
 
-        let primary_pace = codexbar::core::UsagePace::weekly(&usage.primary, None, 10080);
+        // A missing session is represented by an informational primary so the
+        // weekly lane keeps its canonical role. Use that weekly lane for the
+        // provider-level pace summary instead of returning no pace at all.
+        let primary_pace_window = if usage.primary.is_informational {
+            usage.secondary.as_ref()
+        } else {
+            Some(&usage.primary)
+        };
+        let primary_pace = primary_pace_window
+            .and_then(|window| codexbar::core::UsagePace::weekly(window, None, 10080));
 
         let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace_stage_str(p.stage),
@@ -311,6 +320,13 @@ pub(crate) fn compact_tray_status_label(
     window: &RateWindowSnapshot,
     lang: codexbar::settings::Language,
 ) -> String {
+    if window.is_informational {
+        return window
+            .reset_description
+            .clone()
+            .unwrap_or_else(|| "Unavailable".to_string());
+    }
+
     let pct = format!("{:.0}%", window.used_percent);
     if let Some(reset) = compact_reset_description(window, lang) {
         format!("{pct} • {reset}")

@@ -93,6 +93,7 @@ function UsageBar({
 }) {
   const usedPct = Number.isFinite(rate.usedPercent) ? Math.max(0, rate.usedPercent) : 0;
   const pct = Math.min(100, usedPct);
+  const isInformational = rate.isInformational === true;
   const formattedReset = useFormattedResetTime(
     rate.resetsAt,
     rate.resetDescription,
@@ -112,21 +113,25 @@ function UsageBar({
           className="provider-usage-bar__pct"
           data-exhausted={rate.isExhausted || undefined}
         >
-          {rate.isExhausted
+          {isInformational
+            ? rate.resetDescription?.trim() || formattedReset || "—"
+            : rate.isExhausted
             ? usedPct > 100
               ? `${usedPct.toFixed(0)}%`
               : t("DetailWindowExhausted")
             : `${usedPct.toFixed(0)}%`}
         </span>
       </div>
-      <div className="provider-usage-bar__track">
-        <div
-          className="provider-usage-bar__fill"
-          style={{ width: `${pct}%` }}
-          data-exhausted={rate.isExhausted || undefined}
-        />
-      </div>
-      {resetHint && (
+      {!isInformational && (
+        <div className="provider-usage-bar__track">
+          <div
+            className="provider-usage-bar__fill"
+            style={{ width: `${pct}%` }}
+            data-exhausted={rate.isExhausted || undefined}
+          />
+        </div>
+      )}
+      {!isInformational && resetHint && (
         <span className="provider-usage-bar__reset">{resetHint}</span>
       )}
     </div>

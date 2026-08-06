@@ -661,6 +661,15 @@ pub(super) fn parse_coding_plan_value(
     parse_remains(json, now)
 }
 
+/// True when the coding-plan endpoint reports that this account has no coding
+/// plan because it runs on a Token Plan subscription instead — live evidence:
+/// base_resp 2062 "no active token plan subscription" (issue #254). Such
+/// accounts are served by the console token-plan endpoints, so `mod.rs` uses
+/// this to switch fetch paths.
+pub(crate) fn is_token_plan_without_coding_plan(err: &ProviderError) -> bool {
+    matches!(err, ProviderError::Other(msg) if msg.to_ascii_lowercase().contains("token plan"))
+}
+
 #[cfg(test)]
 #[cfg(test)]
 mod tests {
@@ -894,5 +903,37 @@ mod tests {
             }
             _ => panic!("expected Services"),
         }
+    }
+
+    #[test]
+    fn token_plan_predicate_matches_reporter_2062_message() {
+        // Live reporter evidence (issue #254): the legacy remains endpoint 200s
+        // with base_resp 2062 for Token Plan accounts.
+        let json = serde_json::json!({
+            "base_resp": {
+                "status_code": 2062,
+                "status_msg": "no active token plan subscription"
+            }
+        });
+        let err = parse_coding_plan_value(&json, now()).unwrap_err();
+        assert!(matches!(err, ProviderError::Other(_)));
+        assert!(is_token_plan_without_coding_plan(&err));
+    }
+
+    #[test]
+    fn token_plan_predicate_rejects_unrelated_errors() {
+        assert!(!is_token_plan_without_coding_plan(
+            &ProviderError::AuthRequired
+        ));
+        assert!(!is_token_plan_without_coding_plan(&ProviderError::Other(
+            "MiniMax coding plan status 2000".to_string()
+        )));
+        assert!(!is_token_plan_without_coding_plan(&ProviderError::Parse(
+            "Missing coding plan data.".to_string()
+        )));
+        // Case-insensitive match on the message itself.
+        assert!(is_token_plan_without_coding_plan(&ProviderError::Other(
+            "No Active Token Plan Subscription".to_string()
+        )));
     }
 }

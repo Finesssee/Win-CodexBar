@@ -1,8 +1,8 @@
-const accountAgeDays = 30;
+const accountAgeDays = 14;
 const windowDays = 7;
 const limits = {
   issue: { count: 10, label: "issues" },
-  pull_request: { count: 4, label: "pull requests" },
+  pull_request: { count: 15, label: "pull requests" }, // 15 PRs per 7-day window; relax in 2026-08 from 4 (was aggressively blocking legit contributors)
 };
 // Must match the fromJSON list in the guard job's `if:` in
 // .github/workflows/interaction-guard.yml.

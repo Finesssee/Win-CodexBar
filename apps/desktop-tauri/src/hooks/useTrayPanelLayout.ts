@@ -16,6 +16,18 @@ const TRAY_OVERVIEW_MIN_HEIGHT = 200;
 const TRAY_DETAIL_MIN_HEIGHT = 420;
 const TRAY_DENSE_OVERVIEW_HEIGHT = 776;
 
+/** Scale a measured content height into the window's pixel space. TrayPanel
+ * renders the surface with `zoom: trayScale` (CSS zoom), but every DOM metric
+ * the layout pass reads — scrollHeight AND bounding rects — is reported in
+ * the surface's LOCAL, pre-zoom px (measured identical at 100/150/200%). The
+ * WIN32 window must be sized in POST-zoom px or tall cards clip below the
+ * fold (and the zoomed width overflows into a horizontal scrollbar), so the
+ * raw measure is multiplied by the active zoom before clamping (#265). */
+export function scaledContentHeight(rawHeight: number, zoom: number): number {
+  if (!Number.isFinite(zoom) || zoom <= 0 || zoom === 1) return rawHeight;
+  return Math.round(rawHeight * zoom);
+}
+
 export interface TrayPanelLayoutOptions {
   canMeasure: boolean;
   denseOverview: boolean;
@@ -29,6 +41,10 @@ export interface TrayPanelLayoutOptions {
   /** Whether the flyout is currently open (surface mode === trayPanel). Used as
    *  the "just opened" trigger for the fixed-size restore + re-anchor. */
   isOpen?: boolean;
+  /** Active tray-panel zoom factor (the CSS `zoom` TrayPanel applies to the
+   *  surface). Auto-fit scales its measured content height by this before
+   *  clamping — see `scaledContentHeight`. Defaults to 1 (no zoom). */
+  zoom?: number;
   /** Called with the new logical size on a genuine user drag-resize. */
   onUserResize?: (width: number, height: number) => void;
 }
@@ -46,6 +62,7 @@ export function useTrayPanelLayout({
   autoFit = true,
   fixedSize = null,
   isOpen = false,
+  zoom = 1,
   onUserResize,
 }: TrayPanelLayoutOptions): TrayPanelLayout {
   const [layoutReady, setLayoutReady] = useState(false);
@@ -261,19 +278,32 @@ export function useTrayPanelLayout({
         if (run !== resizeRunRef.current) return;
 
         const surfaceRect = surface.getBoundingClientRect();
-        let contentHeight = Math.max(
-          surface.scrollHeight,
-          Math.ceil(surfaceRect.height),
+        // Everything measured here is in the surface's LOCAL, pre-zoom px;
+        // scale into post-zoom window px via `scaledContentHeight` at each
+        // derivation point so the clamped window fits the rendered content.
+        let contentHeight = scaledContentHeight(
+          Math.max(surface.scrollHeight, Math.ceil(surfaceRect.height)),
+          zoom,
         );
         let maxBottom = surfaceRect.top + contentHeight;
         const bodyRect = body?.getBoundingClientRect();
-        if (bodyRect && bodyRect.height > 0 && bodyRect.bottom > maxBottom) {
-          maxBottom = bodyRect.bottom;
+        if (bodyRect && bodyRect.height > 0) {
+          const scaledBottom =
+            surfaceRect.top +
+            scaledContentHeight(bodyRect.bottom - surfaceRect.top, zoom);
+          if (scaledBottom > maxBottom) {
+            maxBottom = scaledBottom;
+          }
         }
         const footer = surface.querySelector<HTMLElement>(".menu-surface__footer");
         const footerRect = footer?.getBoundingClientRect();
-        if (footerRect && footerRect.height > 0 && footerRect.bottom > maxBottom) {
-          maxBottom = footerRect.bottom;
+        if (footerRect && footerRect.height > 0) {
+          const scaledBottom =
+            surfaceRect.top +
+            scaledContentHeight(footerRect.bottom - surfaceRect.top, zoom);
+          if (scaledBottom > maxBottom) {
+            maxBottom = scaledBottom;
+          }
         }
         contentHeight = Math.ceil(maxBottom - surfaceRect.top) + 4;
 
@@ -331,7 +361,7 @@ export function useTrayPanelLayout({
       window.clearTimeout(timer);
       resizeRunRef.current += 1;
     };
-  }, [autoFit, canMeasure, denseOverview, detailMode, layoutRevision, applySize]);
+  }, [autoFit, canMeasure, denseOverview, detailMode, layoutRevision, applySize, zoom]);
 
   return { layoutReady, requestLayout };
 }

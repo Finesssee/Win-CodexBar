@@ -129,12 +129,78 @@ pub fn activate(app: &AppHandle) {
     }
 }
 
+/// Bottom inset (physical px) kept between the proof panel's bottom edge and
+/// the monitor work-area bottom (#265).
+const PROOF_BOTTOM_INSET_PX: i32 = 8;
+
+/// Mirror of the frontend auto-fit ceiling (`TRAY_MAX_MEASURE_HEIGHT`,
+/// logical px in `useTrayPanelLayout.ts`): the proof panel can settle
+/// anywhere up to this height.
+const PROOF_MAX_SETTLE_HEIGHT_LOGICAL: f64 = 920.0;
+
+/// Justified proof-panel anchor (#265). The harness anchors `main` once and
+/// never re-anchors (the flyout-only `reanchor_tray_panel` path is a no-op
+/// here, and Win32 ignores `set_max_size` for programmatic resizes), so an
+/// anchor computed from the DEFAULT initial size lets a tall auto-fit settle
+/// (up to the frontend's 920px cap) push the bottom edge under the taskbar.
+/// When `anchor_y + max settle` would exceed `work_bottom - inset`, move the
+/// anchor up just enough that even the tallest settle stays fully on screen;
+/// otherwise keep the historical anchor unchanged.
+fn proof_anchor_y(anchor_y: i32, work_bottom: i32, max_settle_height_px: i32) -> i32 {
+    let justified = work_bottom - PROOF_BOTTOM_INSET_PX - max_settle_height_px;
+    anchor_y.min(justified)
+}
+
+/// Bottom edge of a settled panel anchored via [`proof_anchor_y`].
+#[cfg(test)]
+fn proof_settled_bottom(
+    anchor_y: i32,
+    settled_height: i32,
+    work_bottom: i32,
+    max_settle_height_px: i32,
+) -> i32 {
+    proof_anchor_y(anchor_y, work_bottom, max_settle_height_px) + settled_height
+}
+
 /// Calculate a predictable window position for proof captures.
 ///
 /// Proof mode needs a reliable on-screen position. We skip
 /// `inferred_tray_panel_position` because its DPI-scaled maths can
 /// produce off-screen coords on high-DPI setups.
 fn proof_window_position(app: &AppHandle) -> Option<(i32, i32)> {
+    let (x, y) = proof_window_position_unjustified(app)?;
+
+    // #265: justify above the taskbar when the tallest legitimate auto-fit
+    // settle (the frontend's 920px cap) would otherwise push the bottom edge
+    // under it — the harness anchors `main` once and never re-anchors, so
+    // the anchor itself must reserve the settle room.
+    let Some(window) = app.get_webview_window("main") else {
+        return Some((x, y));
+    };
+    let Some(m) = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.available_monitors().ok()?.into_iter().next())
+    else {
+        return Some((x, y));
+    };
+    let work_area = m.work_area();
+    let work_bottom = work_area.position.y + work_area.size.height as i32;
+    let scale = m.scale_factor().max(1.0);
+    let max_settle = (PROOF_MAX_SETTLE_HEIGHT_LOGICAL * scale) as i32;
+    let justified_y = proof_anchor_y(y, work_bottom, max_settle);
+    if justified_y != y {
+        tracing::info!(
+            "proof-pos: #265 justified anchor y={y} → {justified_y} \
+             (work_bottom={work_bottom} max_settle={max_settle})"
+        );
+    }
+    Some((x, justified_y))
+}
+
+/// Raw proof-capture anchor, before the #265 above-taskbar justification.
+fn proof_window_position_unjustified(app: &AppHandle) -> Option<(i32, i32)> {
     if let Some(pos) = shell::tray_panel_position(app) {
         return Some(pos);
     }
@@ -203,6 +269,28 @@ mod tests {
     use std::sync::LazyLock;
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn tall_panel_bottom_edge_never_passes_work_bottom_minus_inset() {
+        // 1920x1080 proof rig at 100% display scale: historical anchor y=252
+        // (1040 work bottom - 776 default height - 12 margin); the tallest
+        // legitimate settle is the frontend auto-fit cap, 920px.
+        let max_settle = 920;
+        // y is justified up to 112 so the capped settle bottoms out exactly
+        // on the inset boundary...
+        assert_eq!(proof_anchor_y(252, 1040, max_settle), 112);
+        let bottom = proof_settled_bottom(252, max_settle, 1040, max_settle);
+        assert!(bottom <= 1040 - PROOF_BOTTOM_INSET_PX);
+        assert_eq!(bottom, 1032);
+        // ...and any shorter settle keeps its bottom edge on screen too.
+        assert!(proof_settled_bottom(252, 780, 1040, max_settle) <= 1040 - PROOF_BOTTOM_INSET_PX);
+        assert!(proof_settled_bottom(252, 568, 1040, max_settle) <= 1040 - PROOF_BOTTOM_INSET_PX);
+        // Tall displays where even the capped settle already fits keep the
+        // historical anchor unchanged.
+        assert_eq!(proof_anchor_y(252, 2000, max_settle), 252);
+        // Degenerate anchors below the work bottom move fully above it.
+        assert_eq!(proof_anchor_y(1500, 1040, max_settle), 112);
+    }
 
     fn with_proof_mode_env(value: Option<&str>, test: impl FnOnce()) {
         let _guard = ENV_LOCK.lock().unwrap();

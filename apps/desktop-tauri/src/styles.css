@@ -4501,6 +4501,12 @@ html:has(.menu-surface--tray) {
   border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   overflow: hidden;
+  /* #265: TrayPanel applies CSS `zoom` on this surface, so it lays out in
+     windowWidth/zoom local px; the 260px `min-width` floor from .menu-surface
+     would be multiplied by the zoom on render (→ 390px at 150%) and force a
+     horizontal scrollbar in the 328px tray window. The window's own 300px
+     minimum already covers the floor — let the zoomed surface wrap instead. */
+  min-width: 0;
 }
 .menu-surface--popout {
   width: 100%;

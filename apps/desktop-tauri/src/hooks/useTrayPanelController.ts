@@ -273,6 +273,7 @@ export function useTrayPanelController(state: BootstrapState) {
     autoFit: flyoutSize === null && !autoFitKilled,
     fixedSize: fixedFlyoutSize,
     isOpen: isFlyoutOpen,
+    zoom: trayScale,
     onUserResize: handleUserResize,
   });
 

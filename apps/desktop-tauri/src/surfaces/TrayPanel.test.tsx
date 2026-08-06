@@ -850,4 +850,48 @@ describe("TrayPanel provider grid", () => {
       );
     });
   });
+
+  it("scales the auto-fit measure by the active tray zoom before clamping (#265)", async () => {
+    const setSize = vi.fn().mockResolvedValue(undefined);
+    windowMocks.getCurrentWindow.mockReturnValue({
+      setSize,
+      close: vi.fn().mockResolvedValue(undefined),
+      scaleFactor: vi.fn().mockResolvedValue(1),
+      onResized: vi.fn().mockResolvedValue(() => {}),
+      innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+    });
+    // jsdom has no layout engine (scrollHeight always reads 0), so pin it
+    // globally to a deterministic PRE-zoom content height: TrayPanel applies
+    // `zoom: trayScale` via CSS and the hook must size the window in POST-zoom
+    // px or tall cards clip below the fold (#265).
+    const scrollHeight = vi
+      .spyOn(Element.prototype, "scrollHeight", "get")
+      .mockReturnValue(505);
+
+    const first = renderTrayPanel([provider("codex", "Codex", 61)], {
+      trayScalePercent: 150,
+    });
+
+    // 505 raw × 1.5 zoom = 757.5 → 758 rounded, + the 4px fudge = 762.
+    await waitFor(() => {
+      expect(setSize).toHaveBeenCalledWith(
+        expect.objectContaining({ width: 328, height: 762 }),
+      );
+    });
+    first.unmount();
+    setSize.mockClear();
+
+    // Same zoom, taller content: round(700 × 1.5) + 4 = 1054 exceeds the
+    // mocked work-area cap (900 - 16 = 884), so the clamp still wins.
+    scrollHeight.mockReturnValue(700);
+    renderTrayPanel([provider("codex", "Codex", 61)], {
+      trayScalePercent: 150,
+    });
+
+    await waitFor(() => {
+      expect(setSize).toHaveBeenCalledWith(
+        expect.objectContaining({ width: 328, height: 884 }),
+      );
+    });
+  });
 });

@@ -189,6 +189,14 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: true,
                 cookie_name: None,
             }),
+            ProviderId::CodeBuddy => Some(TokenAccountSupport {
+                title: "Session tokens",
+                subtitle: "Store CodeBuddy CN Cookie headers (from plans-usage DevTools cURL).",
+                placeholder: "Cookie: session=...; ... (or paste full Cookie header)",
+                injection: TokenInjection::CookieHeader,
+                requires_manual_cookie_source: true,
+                cookie_name: None,
+            }),
             ProviderId::Sakana => Some(TokenAccountSupport {
                 title: "Session tokens",
                 subtitle: "Store multiple Sakana Console Cookie headers.",

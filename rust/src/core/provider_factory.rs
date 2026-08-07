@@ -17,7 +17,8 @@ use crate::providers::{
     LongCatProvider, ManusProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
     NanoGPTProvider, NeuralwattProvider, NotionProvider, OllamaProvider, OpenAIApiProvider,
     OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider, PerplexityProvider, PoeProvider,
-    QoderProvider, QwenCloudProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider,
+    CodeBuddyProvider, QoderProvider, QwenCloudProvider, SakanaProvider, StepFunProvider,
+    Sub2ApiProvider,
     T3ChatProvider, VeniceProvider, VertexAIProvider, WarpProvider, WayfinderProvider,
     WindsurfProvider, XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider, ZoomMateProvider,
 };
@@ -85,6 +86,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Zed => Box::new(ZedProvider::new()),
         ProviderId::CrossModel => Box::new(CrossModelProvider::new()),
         ProviderId::Qoder => Box::new(QoderProvider::new()),
+        ProviderId::CodeBuddy => Box::new(CodeBuddyProvider::new()),
         ProviderId::Sakana => Box::new(SakanaProvider::new()),
         ProviderId::Sub2Api => Box::new(Sub2ApiProvider::new()),
         ProviderId::Wayfinder => Box::new(WayfinderProvider::new()),

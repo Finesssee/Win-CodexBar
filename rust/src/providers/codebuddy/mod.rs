@@ -73,11 +73,36 @@ impl CodeBuddyProvider {
 
     async fn fetch_web(&self, cookie_header: &str) -> Result<ProviderFetchResult, ProviderError> {
         let cookie = normalize_cookie_header(cookie_header).ok_or(ProviderError::NoCookies)?;
+        // One retry for transient proxy/WAF/network flakes (common on EdgeOne).
+        let mut last_err = None;
+        for attempt in 0..2u8 {
+            match self.fetch_web_once(&cookie).await {
+                Ok(result) => {
+                    // Persist a short cache so Auto can soft-fail on the next flake.
+                    if let Err(err) = write_credits_cache_from_snapshot(&result.usage) {
+                        tracing::debug!(?err, "CodeBuddy: failed to write local credits cache");
+                    }
+                    return Ok(result);
+                }
+                Err(err) => {
+                    let retryable = is_retryable_error(&err);
+                    last_err = Some(err);
+                    if !retryable || attempt == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                }
+            }
+        }
+        Err(last_err.unwrap_or(ProviderError::Other("CodeBuddy fetch failed".into())))
+    }
+
+    async fn fetch_web_once(&self, cookie: &str) -> Result<ProviderFetchResult, ProviderError> {
         let body = request_body();
         let response = self
             .client
             .post(CN_API)
-            .header("Cookie", &cookie)
+            .header("Cookie", cookie)
             .header("Accept", "application/json, text/plain, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.7")
             .header("Content-Type", "application/json")
@@ -90,11 +115,20 @@ impl CodeBuddyProvider {
             .header("sec-fetch-site", "same-origin")
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(ProviderError::from)?;
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(ProviderError::AuthRequired);
+        }
+        if status.as_u16() == 429
+            || status.is_server_error()
+            || status == reqwest::StatusCode::BAD_GATEWAY
+        {
+            return Err(ProviderError::Other(format!(
+                "CodeBuddy temporary HTTP {status}"
+            )));
         }
         if !status.is_success() {
             return Err(ProviderError::Other(format!(
@@ -102,9 +136,19 @@ impl CodeBuddyProvider {
             )));
         }
 
-        let value = response
-            .json::<Value>()
-            .await
+        let bytes = response.bytes().await.map_err(ProviderError::from)?;
+        // EdgeOne sometimes returns HTML 200/401 pages instead of JSON.
+        if bytes
+            .iter()
+            .find(|b| !b.is_ascii_whitespace())
+            .is_some_and(|b| *b == b'<')
+        {
+            return Err(ProviderError::Other(
+                "CodeBuddy WAF/HTML response (retry later)".into(),
+            ));
+        }
+
+        let value: Value = serde_json::from_slice(&bytes)
             .map_err(|e| ProviderError::Parse(format!("Failed to parse CodeBuddy response: {e}")))?;
 
         let snapshot = snapshot_from_api_payload(&value)?;
@@ -311,10 +355,9 @@ fn snapshot_from_api_payload(value: &Value) -> Result<UsageSnapshot, ProviderErr
         0.0
     };
 
-    let description = Some(format!(
-        "{remaining:.2}/{total:.2} credits remaining ({used:.2} used, {} pkgs)",
-        accounts.len()
-    ));
+    // Keep this short — tray card puts it on the right of the metric row
+    // (`.menu-metric__reset { white-space: nowrap }`), so long copy overflows.
+    let description = Some(format_credits_short(remaining, total));
 
     Ok(UsageSnapshot::new(RateWindow::with_details(
         used_percent,
@@ -336,11 +379,12 @@ fn snapshot_from_cache_payload(value: &Value) -> Result<UsageSnapshot, ProviderE
     } else {
         0.0
     };
-    let description = Some(format!(
-        "{remaining:.2}/{total:.2} credits remaining (local cache)"
-    ));
+    // Compact: "1,234 / 5,678 left" — avoid "(local cache)" which overflows tray.
+    let description = Some(format_credits_short(remaining, total));
+    // Prefer real package expiry from cache if present; do not treat updatedAt
+    // as a quota reset (that previously looked like a bogus reset countdown).
     let reset = value
-        .get("updatedAt")
+        .get("resetsAt")
         .and_then(|v| v.as_str())
         .and_then(parse_datetime);
     Ok(UsageSnapshot::new(RateWindow::with_details(
@@ -349,7 +393,131 @@ fn snapshot_from_cache_payload(value: &Value) -> Result<UsageSnapshot, ProviderE
         reset,
         description,
     ))
-    .with_login_method("CodeBuddy cache"))
+    .with_login_method("CodeBuddy CN"))
+}
+
+/// Compact credit label for the tray metric row: `1,234 / 5,678 left`.
+fn format_credits_short(remaining: f64, total: f64) -> String {
+    format!(
+        "{} / {} left",
+        format_credit_number(remaining),
+        format_credit_number(total)
+    )
+}
+
+fn format_credit_number(value: f64) -> String {
+    if !value.is_finite() {
+        return "0".into();
+    }
+    let rounded = (value * 100.0).round() / 100.0;
+    if (rounded - rounded.round()).abs() < 0.001 {
+        format_int_with_commas(rounded.round() as i64)
+    } else {
+        let s = format!("{rounded:.2}");
+        let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+        // Insert commas into the integer part only.
+        if let Some((whole, frac)) = trimmed.split_once('.') {
+            format!(
+                "{}.{}",
+                format_int_with_commas(whole.parse().unwrap_or(0)),
+                frac
+            )
+        } else {
+            format_int_with_commas(trimmed.parse().unwrap_or(0))
+        }
+    }
+}
+
+fn format_int_with_commas(value: i64) -> String {
+    let negative = value < 0;
+    let digits = value.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    let mut s: String = out.chars().rev().collect();
+    if negative {
+        s.insert(0, '-');
+    }
+    s
+}
+
+fn write_credits_cache_from_snapshot(usage: &UsageSnapshot) -> Result<(), String> {
+    let path = credits_cache_path().ok_or_else(|| "no cache path".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // Recover remaining/total from description when possible is fragile; store
+    // used_percent + free-form fields derived from description text is worse.
+    // Instead re-parse from the short description format "X / Y left".
+    let (remaining, total) = parse_short_credits_desc(
+        usage
+            .primary
+            .reset_description
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .unwrap_or((0.0, 0.0));
+    let used = if total > 0.0 {
+        (total - remaining).max(0.0)
+    } else {
+        0.0
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert("total".into(), json!(round2(total)));
+    obj.insert("used".into(), json!(round2(used)));
+    obj.insert("remaining".into(), json!(round2(remaining)));
+    obj.insert("source".into(), json!("api"));
+    obj.insert("updatedAt".into(), json!(Utc::now().to_rfc3339()));
+    if let Some(resets) = usage.primary.resets_at {
+        obj.insert("resetsAt".into(), json!(resets.to_rfc3339()));
+    }
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&Value::Object(obj)).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn parse_short_credits_desc(desc: &str) -> Option<(f64, f64)> {
+    // "1,234.5 / 5,678 left"
+    let left = desc.split(" left").next()?.trim();
+    let (rem_s, tot_s) = left.split_once('/')?;
+    let remaining = rem_s.trim().replace(',', "").parse::<f64>().ok()?;
+    let total = tot_s.trim().replace(',', "").parse::<f64>().ok()?;
+    Some((remaining, total))
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn is_retryable_error(err: &ProviderError) -> bool {
+    match err {
+        ProviderError::Network(_) => true,
+        ProviderError::Other(msg) => {
+            let lower = msg.to_ascii_lowercase();
+            lower.contains("temporary")
+                || lower.contains("waf")
+                || lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("connection")
+                || lower.contains("http 429")
+                || lower.contains("http 5")
+                || lower.contains("502")
+                || lower.contains("503")
+                || lower.contains("504")
+        }
+        ProviderError::Parse(msg) => {
+            // Transient HTML/WAF sometimes fails JSON parse mid-body.
+            let lower = msg.to_ascii_lowercase();
+            lower.contains("html") || lower.contains("eof") || lower.contains("expected")
+        }
+        _ => false,
+    }
 }
 
 fn precise_or_field(account: &Value, precise_key: &str, fallback_key: &str) -> Option<f64> {
@@ -490,13 +658,17 @@ mod tests {
         let snapshot = snapshot_from_api_payload(&payload).unwrap();
         // used 111 / total 3100 ≈ 3.58%
         assert!((snapshot.primary.used_percent - (111.0 / 3100.0 * 100.0)).abs() < 0.01);
-        assert!(snapshot
-            .primary
-            .reset_description
-            .as_deref()
-            .unwrap()
-            .contains("2989.00/3100.00"));
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("2,989 / 3,100 left")
+        );
         assert!(snapshot.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn formats_compact_credit_labels() {
+        assert_eq!(format_credits_short(1989.0, 3100.0), "1,989 / 3,100 left");
+        assert_eq!(format_credits_short(12.5, 100.0), "12.5 / 100 left");
     }
 
     #[test]

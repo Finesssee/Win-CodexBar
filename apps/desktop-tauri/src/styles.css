@@ -4228,6 +4228,7 @@ html:has(.menu-surface--tray) {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0; /* allow children to shrink/ellipsis inside flex */
 }
 
 .menu-metric__pct {
@@ -4235,12 +4236,20 @@ html:has(.menu-surface--tray) {
   font-size: 11px;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
 }
 
 .menu-metric__reset {
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
+  /* Long provider descriptions (credits remaining, etc.) used to overflow
+     the tray card because nowrap had no max-width/ellipsis. */
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 
 .menu-metric__exhausted {

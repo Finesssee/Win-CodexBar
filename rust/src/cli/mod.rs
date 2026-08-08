@@ -12,6 +12,7 @@ pub mod account;
 pub mod autostart;
 pub mod config;
 pub mod cost;
+pub mod dashboard;
 pub mod diagnose;
 pub mod guard;
 pub mod hooks;
@@ -82,6 +83,9 @@ pub enum Commands {
 
     /// Serve usage and cost JSON on 127.0.0.1
     Serve(serve::ServeArgs),
+
+    /// Emit a one-shot dashboard snapshot (JSON to stdout or --output file)
+    Dashboard(dashboard::DashboardArgs),
 
     /// Manage auto-start on Windows boot
     Autostart(autostart::AutostartArgs),

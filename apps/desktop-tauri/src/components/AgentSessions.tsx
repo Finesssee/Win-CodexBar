@@ -22,6 +22,14 @@ export default function AgentSessions() {
 
   useEffect(refresh, [refresh]);
 
+  const sessionLabel = (session: AgentSession): string => {
+    if (session.provider === "codex") return t("ProviderNameCodex");
+    if (session.provider === "claude") return t("ProviderNameClaude");
+    return session.dialect === "omp"
+      ? t("AgentSessionsProviderOmp")
+      : t("AgentSessionsProviderPi");
+  };
+
   if (result?.status === "disabled") return null;
   const hosts = result?.status === "hosts" ? result.hosts : [];
   const sessions = hosts.flatMap((host) => host.sessions);
@@ -52,12 +60,10 @@ export default function AgentSessions() {
           key={`${session.host}:${session.provider}:${session.id}`}
           onClick={() => focus(session)}
         >
+          <span>{sessionLabel(session)}</span>
           <span>
-            {session.provider === "codex"
-              ? t("ProviderNameCodex")
-              : t("ProviderNameClaude")}
+            {session.sessionName ?? session.workspace.projectName ?? session.host}
           </span>
-          <span>{session.workspace.projectName ?? session.host}</span>
           <span>{session.state}</span>
         </button>
       ))}

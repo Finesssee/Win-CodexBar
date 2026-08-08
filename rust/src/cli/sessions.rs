@@ -10,6 +10,8 @@ mod tests {
         AgentSession {
             id: "session-1".into(),
             provider: AgentSessionProvider::Codex,
+            dialect: None,
+            session_name: None,
             source: AgentSessionSource::Cli,
             state: AgentSessionState::Active,
             pid: Some(42),
@@ -41,6 +43,39 @@ mod tests {
         assert!(output.contains("\"focusTarget\""));
         assert!(!output.contains("rawCommand"));
     }
+
+    #[test]
+    fn legacy_json_filters_pi_family_and_v2_keeps_them() {
+        let mut pi_session = sample();
+        pi_session.id = "pid:7".into();
+        pi_session.provider = crate::agent_sessions::AgentSessionProvider::Pi;
+        pi_session.dialect = Some(crate::agent_sessions::PiSessionDialect::Omp);
+        let sessions = vec![sample(), pi_session];
+
+        let legacy = sessions_for_json(&sessions, false);
+        let v2 = sessions_for_json(&sessions, true);
+
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(v2.len(), 2);
+        assert_eq!(
+            v2[1].dialect,
+            Some(crate::agent_sessions::PiSessionDialect::Omp)
+        );
+        // v2 rows carry dialect; v1 rows never emit it.
+        let legacy_output = serde_json::to_string(legacy[0]).unwrap();
+        assert!(!legacy_output.contains("dialect"));
+        let v2_output = serde_json::to_string(v2[1]).unwrap();
+        assert!(v2_output.contains("\"dialect\":\"omp\""));
+    }
+
+    #[test]
+    fn legacy_v1_remote_array_still_decodes() {
+        // An older host's `--json` (v1) array has no dialect/sessionName keys.
+        let legacy_json = serde_json::to_string(&sample()).unwrap();
+        let decoded: AgentSession = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(decoded.dialect, None);
+        assert_eq!(decoded.session_name, None);
+    }
 }
 use crate::agent_sessions::{
     AgentSession, AgentSessionDiscovery, AgentSessionDiscoveryMode, AgentSessionDiscoveryResult,
@@ -51,9 +86,13 @@ use serde::Serialize;
 
 #[derive(Args, Debug, Default)]
 pub struct SessionsArgs {
-    /// Emit machine-readable session data.
+    /// Emit machine-readable session data (legacy v1: Codex and Claude only).
     #[arg(long)]
     pub json: bool,
+
+    /// Emit complete JSON, including Pi-family sessions (upstream 0.48.0 v2).
+    #[arg(long = "json-v2")]
+    pub json_v2: bool,
 
     /// Pretty-print JSON output.
     #[arg(long)]
@@ -75,7 +114,7 @@ pub struct SessionsArgs {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionsOutput<'a> {
-    sessions: &'a [AgentSession],
+    sessions: Vec<&'a AgentSession>,
     errors: Vec<&'a str>,
 }
 
@@ -107,7 +146,7 @@ pub async fn run(args: SessionsArgs) -> anyhow::Result<()> {
             .find(|session| session.id == id)
             .map(focus_session)
             .unwrap_or_else(|| SessionFocusResult::failed("Session was not found."));
-        if args.json {
+        if args.json || args.json_v2 {
             println!(
                 "{}",
                 if args.pretty {
@@ -122,9 +161,9 @@ pub async fn run(args: SessionsArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if args.json {
+    if args.json || args.json_v2 {
         let output = SessionsOutput {
-            sessions: &sessions,
+            sessions: sessions_for_json(&sessions, args.json_v2),
             errors,
         };
         println!(
@@ -173,6 +212,25 @@ fn print_focus_result(id: &str, result: &SessionFocusResult) {
     }
 }
 
+/// Upstream 0.48.0 #2626 protocol split: legacy `--json` (v1) arrays carry
+/// only Codex and Claude sessions (older remote clients keep decoding);
+/// `--json-v2` emits the complete set including Pi-family dialects.
+fn sessions_for_json(sessions: &[AgentSession], include_pi_family: bool) -> Vec<&AgentSession> {
+    if include_pi_family {
+        sessions.iter().collect()
+    } else {
+        sessions
+            .iter()
+            .filter(|session| {
+                !matches!(
+                    session.provider,
+                    crate::agent_sessions::AgentSessionProvider::Pi
+                )
+            })
+            .collect()
+    }
+}
+
 fn render_brief(session: &AgentSession) -> String {
     format!(
         "{} {} {} {} {} ({})",
@@ -193,5 +251,6 @@ fn provider_label(session: &AgentSession) -> &'static str {
     match session.provider {
         crate::agent_sessions::AgentSessionProvider::Codex => "codex",
         crate::agent_sessions::AgentSessionProvider::Claude => "claude",
+        crate::agent_sessions::AgentSessionProvider::Pi => "pi",
     }
 }

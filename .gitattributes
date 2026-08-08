@@ -3,3 +3,7 @@
 Sources/** linguist-vendored
 Tests/** linguist-vendored
 Package.swift linguist-vendored
+
+# Pi-family session fixtures are byte-exact copies of upstream wire shapes;
+# never EOL-convert them (parsers split on LF).
+rust/src/agent_sessions/fixtures/** -text

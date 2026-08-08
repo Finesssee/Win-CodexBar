@@ -735,6 +735,8 @@ export const ALL_LOCALE_KEYS = [
   "RefreshInterval1Hour",
   "ProviderNameCodex",
   "ProviderNameClaude",
+  "AgentSessionsProviderPi",
+  "AgentSessionsProviderOmp",
 
   // Tauri desktop shell — misc singletons
   "ProvidersAriaLabel",

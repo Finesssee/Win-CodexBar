@@ -103,7 +103,11 @@ export interface CurrentSurfaceState {
 
 export interface AgentSession {
   id: string;
-  provider: "codex" | "claude";
+  provider: "codex" | "claude" | "pi";
+  /** Pi-family dialect (upstream 0.48.0 #2626); absent for Codex/Claude. */
+  dialect?: "pi" | "omp";
+  /** Optional session title (Pi-family `session_info`/`title` records). */
+  sessionName?: string;
   source: "cli" | "desktopApp" | "ide" | "unknown";
   state: "active" | "idle";
   pid: number | null;

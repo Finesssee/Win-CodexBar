@@ -47,6 +47,8 @@ bad line
         let session = AgentSession {
             id: "session-1".to_string(),
             provider: AgentSessionProvider::Codex,
+            dialect: None,
+            session_name: None,
             source: AgentSessionSource::DesktopApp,
             state: AgentSessionState::Active,
             pid: Some(1234),
@@ -159,6 +161,8 @@ bad line
             sessions: vec![AgentSession {
                 id: "session-1".to_string(),
                 provider: AgentSessionProvider::Claude,
+                dialect: None,
+                session_name: None,
                 source: AgentSessionSource::Cli,
                 state: AgentSessionState::Idle,
                 pid: None,
@@ -274,6 +278,8 @@ bad line
         let remote = AgentSession {
             id: "remote".to_string(),
             provider: AgentSessionProvider::Codex,
+            dialect: None,
+            session_name: None,
             source: AgentSessionSource::Cli,
             state: AgentSessionState::Active,
             pid: Some(42),
@@ -326,6 +332,20 @@ bad line
                 .any(|pair| pair == ["-o", "ConnectTimeout=3"])
         );
         assert!(options.extra_args.iter().any(|arg| arg == "user@devbox"));
+    }
+
+    #[test]
+    fn ssh_remote_command_prefers_json_v2_with_legacy_fallback() {
+        let options =
+            RemoteSessionFetcher::ssh_options("user@devbox", Duration::from_secs(5)).unwrap();
+        let shell = options.extra_args.last().expect("shell string").as_str();
+
+        let v2 = shell.find("codexbar sessions --json-v2").expect("v2 command");
+        let v1 = shell.find("codexbar sessions --json ||").expect("v1 fallback");
+        let bundled_v2 = shell.rfind("sessions --json-v2").expect("bundled v2 fallback");
+        assert!(v2 < v1, "v2 negotiated before legacy PATH fallback");
+        assert!(v1 < bundled_v2, "PATH fallback before bundled CLI");
+        assert!(shell.ends_with("sessions --json"), "bundled legacy fallback present");
     }
 
     #[tokio::test]

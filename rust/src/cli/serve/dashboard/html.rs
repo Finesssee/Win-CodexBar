@@ -50,4 +50,49 @@ mod tests {
             "#2723: chip must be hidden whenever no provider status exists"
         );
     }
+
+    /// The daily chart gate and every per-row value read must agree with the
+    /// `/cost` wire key (`totalCost`). The shell is static, so the agreement is
+    /// pinned by exact-string assertions on the rendered template.
+    #[test]
+    fn daily_chart_gate_reads_upstream_total_cost_key() {
+        let html = render_shell(60);
+        // Gate: render only when some row has a positive totalCost.
+        assert!(
+            html.contains("daily.some(v => (v.totalCost || 0) > 0)"),
+            "chart gate must gate on the upstream totalCost key"
+        );
+        // Every per-row value read uses the upstream key — no stale costUSD.
+        assert!(
+            !html.contains("costUSD"),
+            "stale costUSD reads must not survive the totalCost rename"
+        );
+        assert!(
+            !html.contains("daily.some(v => v > 0)"),
+            "bare value gate must be replaced with the totalCost key gate"
+        );
+    }
+
+    #[test]
+    fn daily_chart_behavior_positive_zero_empty() {
+        let html = render_shell(60);
+        // The wire key the shell reads matches the data.rs `daily_json` key.
+        assert!(html.contains("d.totalCost"));
+        // Zero rows are rendered with the `.zero` class (kept, not hidden by the
+        // gate), and the gate hides an all-zero / empty daily series entirely.
+        assert!(html.contains("\" zero\""));
+        // Mirror the JS gate predicate in Rust over wire-shaped rows to lock
+        // the positive / zero / empty behavior the chart depends on.
+        let gate = |rows: &[serde_json::Value]| {
+            rows.iter()
+                .any(|v| v["totalCost"].as_f64().unwrap_or(0.0) > 0.0)
+        };
+        assert!(gate(&[
+            serde_json::json!({"date":"2026-08-08","totalCost":4.25})
+        ]));
+        assert!(!gate(&[
+            serde_json::json!({"date":"2026-08-07","totalCost":0.0})
+        ]));
+        assert!(!gate(&[]));
+    }
 }

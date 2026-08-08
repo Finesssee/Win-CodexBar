@@ -57,36 +57,48 @@ impl SnapshotCoordinator {
     /// share the in-flight build when one is running (late result delivered,
     /// not discarded), or start a new build otherwise.
     pub async fn get(&self) -> Result<Arc<SnapshotPayload>, String> {
-        enum Step {
-            Serve(Arc<SnapshotPayload>),
-            Wait(Arc<Notify>),
-            Build(Arc<Notify>),
-        }
         loop {
             // Decide under the lock; the guard is always dropped before awaits.
-            let step = {
+            enum Decision {
+                Serve(Arc<SnapshotPayload>),
+                Wait(Arc<Notify>),
+                Build(Arc<Notify>),
+            }
+            let decision = {
                 let mut slot = self.slot.lock().expect("coordinator poisoned");
                 match &mut *slot {
                     Slot::Ready(payload, built_at) if built_at.elapsed() < self.ttl => {
-                        Step::Serve(payload.clone())
+                        Decision::Serve(payload.clone())
                     }
-                    Slot::Building(notify) => Step::Wait(notify.clone()),
-                    _ => {
+                    Slot::Building(notify) => {
+                        // Wait on this build. The Notified is registered under
+                        // the lock in `await_build` (closing the lost-wakeup
+                        // window) and only awaited after the guard is released.
+                        Decision::Wait(notify.clone())
+                    }
+                    Slot::Empty | Slot::Ready(_, _) => {
                         let notify = Arc::new(Notify::new());
                         *slot = Slot::Building(notify.clone());
-                        Step::Build(notify)
+                        Decision::Build(notify)
                     }
                 }
             };
-            match step {
-                Step::Serve(payload) => return Ok(payload),
-                Step::Wait(notify) => {
-                    // Mid-build waiter: stays until the build finishes, then
-                    // receives the completed (late) result instead of a timeout.
-                    notify.notified().await;
+            match decision {
+                Decision::Serve(payload) => return Ok(payload),
+                Decision::Wait(notify) => {
+                    // Registered under the lock, awaited after unlock. On wake
+                    // we re-scan, so a completed build surfaces its cached result
+                    // and a cancelled/panicked build surfaces `Empty` to retry
+                    // instead of hanging on a dead `Notify`.
+                    Self::await_build(&self.slot, &notify).await;
                     continue;
                 }
-                Step::Build(notify) => {
+                Decision::Build(notify) => {
+                    // A build that exits, is cancelled, or panics resets the
+                    // stranded `Slot::Building` to `Empty` and wakes waiters so
+                    // they start a fresh build instead of hanging forever on a
+                    // `Notify` that can no longer fire.
+                    let mut guard = BuildGuard::new(self.slot.clone(), notify.clone());
                     let result = (self.build)().await;
 
                     let mut slot = self.slot.lock().expect("coordinator poisoned");
@@ -102,10 +114,74 @@ impl SnapshotCoordinator {
                             Err(message)
                         }
                     };
+                    // The slot now reflects completion; defuse the guard so its
+                    // drop does not reset a build we already finished.
+                    guard.disarm();
                     notify.notify_waiters();
                     return outcome;
                 }
             }
+        }
+    }
+
+    /// Register interest in `notify` while holding the lock (closing the
+    /// `notify_waiters` lost-wakeup window), then drop the guard and await the
+    /// notification. The `Notified` borrows the owned `notify` argument (not the
+    /// guard), so it cleanly outlives the critical section.
+    async fn await_build(slot: &Arc<StdMutex<Slot>>, notify: &Arc<Notify>) {
+        // Register the waiter under the lock (closing the lost-wakeup window),
+        // then drop the guard and await. The pinned `Notified` borrows the
+        // `notify` argument (not the guard), so it outlives the critical section.
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        {
+            let _guard = slot.lock().expect("coordinator poisoned");
+            notified.as_mut().enable();
+        }
+        notified.await;
+    }
+}
+
+/// Completion guard for an in-flight build. A `get()` call that is cancelled
+/// or whose build panics drops this mid-build; the guard then resets the
+/// stranded `Slot::Building` back to `Empty` and wakes waiters so the next
+/// request starts a fresh build rather than hanging on a dead `Notify`. On a
+/// normal completion path the builder calls `disarm()` first so the drop is a
+/// no-op.
+struct BuildGuard {
+    slot: Arc<StdMutex<Slot>>,
+    notify: Arc<Notify>,
+    armed: bool,
+}
+
+impl BuildGuard {
+    fn new(slot: Arc<StdMutex<Slot>>, notify: Arc<Notify>) -> Self {
+        Self {
+            slot,
+            notify,
+            armed: true,
+        }
+    }
+
+    /// The builder has already updated the slot itself; suppress the reset.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BuildGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // A poisoned lock means another thread panicked while holding it; do
+        // not double-panic during unwinding — leave the slot as it is.
+        if let Ok(mut slot) = self.slot.lock()
+            && matches!(&*slot, Slot::Building(current) if Arc::ptr_eq(current, &self.notify))
+        {
+            *slot = Slot::Empty;
+            drop(slot);
+            self.notify.notify_waiters();
         }
     }
 }
@@ -268,5 +344,160 @@ mod tests {
         );
         let clone = coordinator.clone();
         assert_eq!(clone.ttl, coordinator.ttl);
+    }
+
+    // ── F1 lost-wakeup / cancellation / panic regressions ───────────────────
+
+    /// A waiter that observes `Slot::Building` must register its `Notified`
+    /// before the lock drops, so a builder completing the instant the waiter
+    /// unlocks cannot lose the wakeup. Bounding the whole join by a timeout
+    /// turns a regression (a waiter hanging on a `Notify` that already fired)
+    /// into a fast test failure instead of an infinite hang.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn waiters_racing_completion_never_lose_the_wakeup() {
+        for round in 0..25 {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let coordinator = SnapshotCoordinator::new(
+                Duration::from_secs(3600),
+                counting_source(calls.clone(), Duration::from_millis(2)),
+            );
+            // Builder starts first, then waiters pile on around completion.
+            let mut join = Vec::new();
+            join.push({
+                let coordinator = coordinator.clone();
+                tokio::spawn(async move { coordinator.get().await })
+            });
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            for _ in 0..8 {
+                let coordinator = coordinator.clone();
+                join.push(tokio::spawn(async move { coordinator.get().await }));
+            }
+            let payloads = tokio::time::timeout(Duration::from_secs(5), async {
+                let mut out = Vec::new();
+                for handle in join {
+                    out.push(handle.await.unwrap().unwrap());
+                }
+                out
+            })
+            .await
+            .expect("lost wakeup: a waiter never resolved within 5s");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "single-flight preserved across round {round}"
+            );
+            for payload in &payloads[1..] {
+                assert!(Arc::ptr_eq(&payloads[0], payload));
+            }
+        }
+    }
+
+    /// When the builder task is cancelled mid-build, the stranded
+    /// `Slot::Building` must reset to `Empty` and wake any waiters, so a later
+    /// `get()` starts a fresh build instead of hanging on a dead `Notify`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_builder_resets_slot_and_wakes_waiters() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let build: SnapshotBuildFn = {
+            let calls = calls.clone();
+            let started = started.clone();
+            Arc::new(move || {
+                let calls = calls.clone();
+                let started = started.clone();
+                Box::pin(async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    started.notify_waiters();
+                    if attempt == 0 {
+                        // Never resolves — only cancellation ends this build.
+                        std::future::pending::<Result<_, String>>().await
+                    } else {
+                        Ok(build_snapshot(&stub_input()))
+                    }
+                })
+            })
+        };
+        let coordinator = SnapshotCoordinator::new(Duration::from_secs(3600), build);
+
+        let builder = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.get().await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("builder never started within 5s");
+
+        // A waiter parked on the in-flight build.
+        let waiter = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.get().await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        builder.abort(); // cancel the builder mid-build
+        let _ = builder.await;
+
+        // The waiter and a fresh caller both complete via a rebuilt (attempt 2).
+        let fresh = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.get().await })
+        };
+        let outcomes = tokio::time::timeout(Duration::from_secs(5), async {
+            [waiter.await.unwrap(), fresh.await.unwrap()]
+        })
+        .await
+        .expect("stranded Building: a get() never resolved within 5s");
+        assert!(outcomes[0].is_ok());
+        assert!(outcomes[1].is_ok());
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "cancelled build did not deliver; a fresh build ran"
+        );
+    }
+
+    /// A build that panics must reset `Slot::Building` to `Empty` and wake
+    /// waiters, so the next `get()` rebuilds instead of hanging on the panicked
+    /// build's `Notify`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn panicked_builder_resets_slot_and_wakes_waiters() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let build: SnapshotBuildFn = {
+            let calls = calls.clone();
+            let started = started.clone();
+            Arc::new(move || {
+                let calls = calls.clone();
+                let started = started.clone();
+                Box::pin(async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    started.notify_waiters();
+                    if attempt == 0 {
+                        panic!("simulated build failure");
+                    }
+                    Ok(build_snapshot(&stub_input()))
+                })
+            })
+        };
+        let coordinator = SnapshotCoordinator::new(Duration::from_secs(3600), build);
+
+        // The panicking build runs in a spawned task so the test body survives.
+        let builder = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.get().await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("builder never started within 5s");
+
+        // The panic (caught by the spawned task) resets the slot.
+        let join_err = builder.await.unwrap_err();
+        assert!(join_err.is_panic(), "expected the build to panic");
+
+        // A later get() rebuilds fresh and succeeds within a timeout.
+        let retry = tokio::time::timeout(Duration::from_secs(5), coordinator.get())
+            .await
+            .expect("stranded Building: retry never resolved within 5s");
+        assert!(retry.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

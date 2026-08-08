@@ -173,12 +173,12 @@ function providerCard(row, dailyCharts) {
     inner += '<div class="costline">Today ' + today + " · last 30 days " + month + "</div>";
   }
   const daily = dailyCharts[row.id];
-  if (daily && daily.some(v => v > 0)) {
-    const max = Math.max.apply(null, daily.map(d => d.costUSD || 0));
+  if (daily && daily.some(v => (v.totalCost || 0) > 0)) {
+    const max = Math.max.apply(null, daily.map(d => d.totalCost || 0));
     inner += '<div class="charts" role="img" aria-label="Daily spend for ' + esc(row.name) + '">';
     daily.forEach(d => {
-      const h = max > 0 ? Math.max(2, Math.round(((d.costUSD || 0) / max) * 44)) : 0;
-      inner += '<span class="col' + ((d.costUSD || 0) > 0 ? "" : " zero") + '" style="height:' + h + 'px" title="' + esc(d.date) + ": $" + Number(d.costUSD || 0).toFixed(2) + '"></span>';
+      const h = max > 0 ? Math.max(2, Math.round(((d.totalCost || 0) / max) * 44)) : 0;
+      inner += '<span class="col' + ((d.totalCost || 0) > 0 ? "" : " zero") + '" style="height:' + h + 'px" title="' + esc(d.date) + ": $" + Number(d.totalCost || 0).toFixed(2) + '"></span>';
     });
     inner += "</div>";
     inner += '<div class="chtitle"><span>' + esc(daily[0].date) + "</span><span>" + esc(daily[daily.length - 1].date) + "</span></div>";

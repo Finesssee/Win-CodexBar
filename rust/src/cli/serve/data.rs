@@ -102,12 +102,12 @@ pub async fn cost_response(provider: Option<&str>) -> String {
     json_response(200, serde_json::Value::Array(results))
 }
 
-/// Dashboard-charts shape for one provider's daily spend: [{date, cost_usd}].
+/// Dashboard-charts shape for one provider's daily spend: [{date, totalCost}].
 fn daily_json(daily: Vec<(String, f64)>) -> serde_json::Value {
     serde_json::Value::Array(
         daily
             .into_iter()
-            .map(|(date, cost_usd)| json!({ "date": date, "cost_usd": cost_usd }))
+            .map(|(date, cost_usd)| json!({ "date": date, "totalCost": cost_usd }))
             .collect(),
     )
 }
@@ -124,6 +124,38 @@ mod tests {
         ]);
         let rows = daily.as_array().unwrap();
         assert_eq!(rows[0]["date"], "2026-08-07");
-        assert_eq!(rows[1]["cost_usd"], 4.25);
+        assert_eq!(rows[1]["totalCost"], 4.25);
+        assert_eq!(rows[0]["totalCost"], 0.0);
+    }
+
+    #[test]
+    fn daily_rows_use_upstream_total_cost_key_only() {
+        let daily = daily_json(vec![
+            ("2026-08-07".to_string(), 0.0),
+            ("2026-08-08".to_string(), 4.25),
+        ]);
+        let serialized = daily.to_string();
+        assert!(
+            serialized.contains("\"totalCost\""),
+            "wire key is totalCost"
+        );
+        assert!(
+            !serialized.contains("cost_usd") && !serialized.contains("costUSD"),
+            "no stale daily cost keys may leak to the wire"
+        );
+    }
+
+    #[test]
+    fn daily_empty_array_has_no_rows() {
+        let daily = daily_json(vec![]);
+        assert_eq!(daily.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn daily_zero_values_are_preserved_not_filtered() {
+        let daily = daily_json(vec![("2026-08-07".to_string(), 0.0)]);
+        let rows = daily.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["totalCost"], 0.0);
     }
 }

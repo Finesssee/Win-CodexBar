@@ -84,6 +84,7 @@ pub struct SnapshotProvider {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusPayload {
     pub level: String,
     pub label: String,
@@ -138,6 +139,7 @@ pub struct ProviderErrorPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountPayload {
     pub id: String,
     pub label: String,
@@ -732,6 +734,56 @@ mod tests {
             "redacted@corp.example"
         );
         assert!(json["providers"][1].get("accounts").is_none());
+    }
+
+    #[test]
+    fn account_payload_serializes_camel_case_updated_at() {
+        // Pinned v1: AccountPayload's snake_case `updated_at` field must cross
+        // the wire as `updatedAt`. An errored account carries the deterministic
+        // `generated_at` timestamp, so this golden is reproducible.
+        let mut input = input(
+            vec![provider_envelope(Ok(fetch_result(3.0, None, None)))],
+            DashboardIdentity::Redacted,
+        );
+        input.claude_accounts = Some(ClaudeAccountsInput {
+            accounts: Ok(vec![AccountFetchEnvelope {
+                id: "uuid-1".to_string(),
+                label: "Broken".to_string(),
+                active: false,
+                fetch: Err("cookie expired".to_string()),
+            }]),
+        });
+        let json = serde_json::to_value(build_snapshot(&input)).unwrap();
+        let account = &json["providers"][0]["accounts"][0];
+        assert_eq!(account["error"], "cookie expired");
+        assert_eq!(account["updatedAt"], "2026-08-08T01:02:03Z");
+        assert!(
+            account.get("updated_at").is_none(),
+            "snake_case updated_at must not appear on the v1 wire"
+        );
+    }
+
+    #[test]
+    fn status_payload_serializes_camel_case_updated_at() {
+        // v1 has no live status pipeline (status is null on rows), but the
+        // schema struct itself must still serialize camelCase to match the
+        // pinned v1 contract when a status is eventually attached.
+        let status = StatusPayload {
+            level: "ok".to_string(),
+            label: "Healthy".to_string(),
+            updated_at: Some(
+                DateTime::parse_from_rfc3339("2026-08-08T01:02:03Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert!(json.get("updatedAt").is_some(), "updatedAt must be present");
+        assert_eq!(json["updatedAt"], "2026-08-08T01:02:03Z");
+        assert!(
+            json.get("updated_at").is_none(),
+            "snake_case updated_at must not appear on the v1 wire"
+        );
     }
 
     #[test]

@@ -78,7 +78,10 @@ fn parse_timeout(seconds: f64) -> anyhow::Result<Option<std::time::Duration>> {
 /// (harness policy: no delete APIs); zero-length `.tmp-*` siblings are
 /// harmless and overwritten by the next run.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
         anyhow::bail!(
             "output directory does not exist: {} (it is not created)",
@@ -156,5 +159,56 @@ mod tests {
             .join("snapshot.json");
         let err = write_atomic(&target, b"{}").unwrap_err();
         assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn atomic_write_bare_relative_name_uses_cwd_as_parent() {
+        // `--output bare-name.json` yields an empty `Path::parent()`; the fix
+        // treats that as `.` so the snapshot lands in the working directory.
+        // This is the only test that relies on the process CWD, and it restores
+        // it before returning; every other test uses absolute temp paths, so a
+        // transient chdir cannot corrupt their IO.
+        let original = std::env::current_dir().unwrap();
+        let dir = scratch("bare-relative");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        // A defer-style guard restores the CWD even if an assertion panics,
+        // so a failed test cannot strand the suite in the temp directory.
+        struct CwdGuard {
+            original: PathBuf,
+            restore: bool,
+        }
+        impl Drop for CwdGuard {
+            fn drop(&mut self) {
+                if self.restore {
+                    let _ = std::env::set_current_dir(&self.original);
+                }
+            }
+        }
+        let mut cwd_guard = CwdGuard {
+            original: original.clone(),
+            restore: true,
+        };
+        let bare = PathBuf::from("bare-name.json");
+        write_atomic(&bare, b"{\"v\":1}").unwrap();
+        assert_eq!(std::fs::read(&bare).unwrap(), b"{\"v\":1}");
+
+        // Replacement must reuse the same bare path.
+        write_atomic(&bare, b"{\"v\":2}").unwrap();
+        assert_eq!(std::fs::read(&bare).unwrap(), b"{\"v\":2}");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp siblings must not survive: {leftovers:?}"
+        );
+        // Success: suppress the manual restore (the guard handles it) and
+        // confirm the CWD is restored for the rest of the suite.
+        cwd_guard.restore = false;
+        std::env::set_current_dir(&original).unwrap();
     }
 }

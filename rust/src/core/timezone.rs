@@ -135,10 +135,14 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn globalization_dll_pin_succeeds_and_stays_settled() {
-        assert!(*GLOBALIZATION_PINNED);
-        // Forcing again observes the stored result without rerunning the
-        // initializer, so pinning is one-shot.
-        assert!(LazyLock::force(&GLOBALIZATION_PINNED));
+    fn globalization_dll_pin_decision_settles_once() {
+        // The pin *outcome* is host-dependent: stripped Windows images
+        // without registered WinRT types may not expose
+        // Windows.Globalization.dll, in which case the helper deliberately
+        // falls back to UTC without calling iana-time-zone. What must hold
+        // on every host is that the attempt happens exactly once and every
+        // caller observes the same settled decision.
+        let settled = *GLOBALIZATION_PINNED;
+        assert_eq!(LazyLock::force(&GLOBALIZATION_PINNED), &settled);
     }
 }

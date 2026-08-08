@@ -1429,6 +1429,64 @@ mod tests {
     }
 
     #[test]
+    fn is_line_boundary_offset_zero_returns_true() {
+        // F2: offset 0 is always a valid boundary (start of file).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        std::fs::write(
+            &path,
+            b"hello
+world
+",
+        )
+        .unwrap();
+        assert!(JsonlScanner::is_line_boundary_offset(&path, 0));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_at_or_past_size_returns_true() {
+        // F2: offset >= file_size returns true (EOF or beyond is a valid boundary).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        let content = b"line1
+line2
+";
+        std::fs::write(&path, content).unwrap();
+        let size = content.len() as i64;
+        assert!(JsonlScanner::is_line_boundary_offset(&path, size));
+        assert!(JsonlScanner::is_line_boundary_offset(&path, size + 100));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_exact_newline_returns_true() {
+        // F2: offset pointing right after a newline is a valid boundary.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        // "line1\nline2\n" — offset 6 is right after first \n
+        std::fs::write(&path, b"line1\nline2\n").unwrap();
+        assert!(JsonlScanner::is_line_boundary_offset(&path, 6));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_midline_returns_false() {
+        // F2: offset pointing mid-line (byte before is not \n) returns false.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        // "line1\nline2\n" — offset 3 is mid-line (byte before is 'n')
+        std::fs::write(&path, b"line1\nline2\n").unwrap();
+        assert!(!JsonlScanner::is_line_boundary_offset(&path, 3));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_missing_file_returns_false() {
+        // F2: missing file returns false (probe fails).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("nonexistent.jsonl");
+        // offset > 0 so it doesn't short-circuit to true
+        assert!(!JsonlScanner::is_line_boundary_offset(&path, 10));
+    }
+
+    #[test]
     fn save_cache_persists_small_codex_artifact() {
         // F19 integration: a normal-sized Codex cache is persisted and
         // reloadable — the MAX_LOAD_BYTES refusal does not false-positive.

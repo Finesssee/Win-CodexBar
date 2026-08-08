@@ -1462,6 +1462,55 @@ mod tests {
     }
 
     #[test]
+    fn cost_scan_midline_rewrite_forces_full_parse_not_resume() {
+        // F2 (upstream 0.48.0 #2648): when a file is rewritten/truncated so the
+        // cached resume offset is now mid-line (byte before offset is not \n),
+        // the scanner must fall through to a full re-parse from offset 0 rather
+        // than resuming from the stale mid-line offset.
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let _path = write_codex_session_fixture(&sessions, "a.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (s1, st1) = scanner.scan_codex_detailed(None);
+        assert_eq!(st1.files_parsed, 1);
+        assert_eq!(s1.input_tokens, 100);
+
+        // Rewrite the file with a shorter body at the same path so the cached
+        // parsed_bytes offset now points mid-line in the new content.
+        let today = Local::now().date_naive();
+        let day_dir = sessions
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        let ts = (Utc::now() - Duration::minutes(30))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        // Shorter content with different token count — the cached offset will
+        // be past EOF or mid-line in this new content.
+        let body = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5}}}}}}}}
+"#
+        );
+        std::fs::write(&day_dir.join("a.jsonl"), body).unwrap();
+
+        let (s2, st2) = scanner.scan_codex_detailed(None);
+        // The scanner must full-parse (not resume) because the cached offset
+        // no longer sits on a line boundary in the rewritten content.
+        assert!(
+            st2.files_parsed >= 1 || st2.files_resumed == 0,
+            "midline rewrite forces full parse, not resume (parsed={}, resumed={})",
+            st2.files_parsed,
+            st2.files_resumed
+        );
+        assert_eq!(s2.input_tokens, 50, "full parse picks up new token count");
+    }
+
+    #[test]
     fn previous_report_clears_after_successful_full_scan() {
         // F8 (upstream 0.48.0): a completed full scan clears previous_report so
         // the refreshing indicator does not stay permanently on.

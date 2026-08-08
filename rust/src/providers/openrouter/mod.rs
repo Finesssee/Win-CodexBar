@@ -59,6 +59,12 @@ struct KeyResponse {
 #[derive(Debug, Deserialize)]
 struct KeyData {
     limit: Option<f64>,
+    /// Server-reported current-period remaining for the key limit
+    /// (upstream 0.48.0 F14: `limit_remaining`).
+    limit_remaining: Option<f64>,
+    /// Declared reset window for the key limit, e.g. `"monthly"`
+    /// (`limit_reset`); picks which period usage field is the quota fallback.
+    limit_reset: Option<String>,
     usage: Option<f64>,
     usage_daily: Option<f64>,
     usage_weekly: Option<f64>,
@@ -75,6 +81,24 @@ struct RateLimitInfo {
 /// OpenRouter provider
 pub struct OpenRouterProvider {
     metadata: ProviderMetadata,
+}
+
+/// Usage value for quota math when the server does not report remaining: the
+/// field matching the declared reset window when known, otherwise cumulative
+/// usage (upstream `OpenRouterUsageSnapshot.quotaFallbackUsage`).
+fn quota_fallback_usage(key_data: &KeyData) -> Option<f64> {
+    let reset_usage = match key_data
+        .limit_reset
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("daily") => key_data.usage_daily,
+        Some("weekly") => key_data.usage_weekly,
+        Some("monthly") => key_data.usage_monthly,
+        _ => None,
+    };
+    reset_usage.or(key_data.usage)
 }
 
 impl OpenRouterProvider {
@@ -234,18 +258,38 @@ impl OpenRouterProvider {
         );
     }
 
+    /// Key-limit meter derivation (upstream 0.48.0 #2612): prefer the
+    /// server-reported current-period remaining (`limit_remaining`), clamped to
+    /// [0, limit] so an overspent key reads 100% and an above-limit reading
+    /// reads 0%. Without it, fall back to the period usage matching the
+    /// declared reset window, then cumulative usage; with no usable source the
+    /// meter stays hidden.
     fn add_key_quota(usage: &mut UsageSnapshot, key_data: &KeyData) {
-        let (Some(limit), Some(key_usage)) = (key_data.limit, key_data.usage) else {
+        let Some(limit) = key_data.limit else {
             return;
         };
-
-        if limit <= 0.0 {
+        if limit <= 0.0 || !limit.is_finite() {
             return;
         }
 
-        let key_percent = ((key_usage / limit) * 100.0).clamp(0.0, 100.0);
+        let used = if let Some(remaining) = key_data.limit_remaining {
+            if !remaining.is_finite() {
+                return;
+            }
+            limit - remaining.clamp(0.0, limit)
+        } else {
+            let Some(fallback) = quota_fallback_usage(key_data) else {
+                return;
+            };
+            if fallback < 0.0 || !fallback.is_finite() {
+                return;
+            }
+            fallback
+        };
+
+        let key_percent = ((used / limit) * 100.0).clamp(0.0, 100.0);
         let mut key_window = RateWindow::new(key_percent);
-        key_window.reset_description = Some(format!("${:.2}/${:.2} key quota", key_usage, limit));
+        key_window.reset_description = Some(format!("${used:.2}/${limit:.2} key quota"));
         *usage = usage.clone().with_secondary(key_window);
     }
 
@@ -336,5 +380,156 @@ mod tests {
     fn key_url_resolves_to_canonical_path() {
         let url = format!("{}/key", OPENROUTER_API_BASE);
         assert_eq!(url, "https://openrouter.ai/api/v1/key");
+    }
+
+    // ── F14: server-reported current-period remaining drives the key meter ──
+
+    fn key_data(
+        limit: Option<f64>,
+        remaining: Option<f64>,
+        reset: Option<&str>,
+        usage: Option<f64>,
+        daily: Option<f64>,
+        weekly: Option<f64>,
+        monthly: Option<f64>,
+    ) -> KeyData {
+        KeyData {
+            limit,
+            limit_remaining: remaining,
+            limit_reset: reset.map(str::to_string),
+            usage,
+            usage_daily: daily,
+            usage_weekly: weekly,
+            usage_monthly: monthly,
+            rate_limit: None,
+        }
+    }
+
+    fn key_quota_percent(key_data: KeyData) -> Option<f64> {
+        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
+        OpenRouterProvider::add_key_quota(&mut usage, &key_data);
+        usage.secondary.map(|window| window.used_percent)
+    }
+
+    #[test]
+    fn server_remaining_replaces_lifetime_usage_for_meter() {
+        // limit 50, server says 12.50 left this period → 75% used, even though
+        // cumulative lifetime usage would imply a different ratio.
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            Some(12.5),
+            None,
+            Some(40.0),
+            None,
+            None,
+            None,
+        ));
+        assert_eq!(pct, Some(75.0));
+    }
+
+    #[test]
+    fn negative_server_remaining_reads_exhausted() {
+        // Upstream: "treat negative remaining as exhausted quota".
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            Some(-3.0),
+            None,
+            Some(10.0),
+            None,
+            None,
+            None,
+        ));
+        assert_eq!(pct, Some(100.0));
+    }
+
+    #[test]
+    fn above_limit_server_remaining_reads_zero() {
+        // Inclusive [0, keyLimit] clamp: a server remaining above the
+        // configured limit renders 0% used, not a suppressed meter.
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            Some(75.0),
+            None,
+            Some(10.0),
+            None,
+            None,
+            None,
+        ));
+        assert_eq!(pct, Some(0.0));
+    }
+
+    #[test]
+    fn reset_window_usage_is_the_preferred_fallback() {
+        // No remaining: `limit_reset: "monthly"` picks usage_monthly (25/50).
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            None,
+            Some("monthly"),
+            Some(40.0),
+            Some(1.0),
+            Some(2.0),
+            Some(25.0),
+        ));
+        assert_eq!(pct, Some(50.0));
+        // Case-insensitive reset label.
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            None,
+            Some("WEEKLY"),
+            Some(40.0),
+            Some(1.0),
+            Some(2.0),
+            Some(25.0),
+        ));
+        assert_eq!(pct, Some(4.0));
+    }
+
+    #[test]
+    fn cumulative_usage_is_the_last_fallback() {
+        let pct = key_quota_percent(key_data(
+            Some(50.0),
+            None,
+            None,
+            Some(20.0),
+            Some(1.0),
+            None,
+            None,
+        ));
+        assert_eq!(pct, Some(40.0));
+    }
+
+    #[test]
+    fn no_usable_quota_source_hides_the_meter() {
+        assert_eq!(
+            key_quota_percent(key_data(Some(50.0), None, None, None, None, None, None)),
+            None
+        );
+        assert_eq!(
+            key_quota_percent(key_data(
+                Some(0.0),
+                Some(5.0),
+                None,
+                Some(1.0),
+                None,
+                None,
+                None
+            )),
+            None
+        );
+        assert_eq!(
+            key_quota_percent(key_data(None, Some(5.0), None, Some(1.0), None, None, None)),
+            None
+        );
+    }
+
+    #[test]
+    fn parsed_key_wire_fields_decode() {
+        let parsed: KeyResponse = serde_json::from_str(
+            r#"{"data":{"limit":50,"limit_remaining":12.5,"limit_reset":"monthly","usage":40,"usage_monthly":25}}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.data.limit, Some(50.0));
+        assert_eq!(parsed.data.limit_remaining, Some(12.5));
+        assert_eq!(parsed.data.limit_reset.as_deref(), Some("monthly"));
     }
 }

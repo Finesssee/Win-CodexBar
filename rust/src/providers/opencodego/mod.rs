@@ -479,8 +479,20 @@ impl OpenCodeGoProvider {
         // still lands in CLI/serve usage reads without stacking a second wait.
         let (zen_task, zen_started) =
             self.spawn_zen_balance_task(cookie_header, Some(&workspace_id), ctx.web_timeout);
-        let page = Self::fetch_usage_page(&self.client, &workspace_id, cookie_header).await?;
-        let usage = Self::parse_usage_text(&page)?;
+        let page = match Self::fetch_usage_page(&self.client, &workspace_id, cookie_header).await {
+            Ok(page) => page,
+            Err(err) => {
+                zen_task.abort();
+                return Err(err);
+            }
+        };
+        let usage = match Self::parse_usage_text(&page) {
+            Ok(usage) => usage,
+            Err(err) => {
+                zen_task.abort();
+                return Err(err);
+            }
+        };
         // The /go page states embed the balance for some deployments — the
         // zero-cost parse wins over the dedicated fetch when it works.
         let balance = match Self::parse_zen_balance(&page) {

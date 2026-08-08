@@ -30,9 +30,10 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
-        // Serve `/usage` is a foreground completeness read like `codexbar usage`
-        // (upstream #2583).
-        requires_optional_usage_completeness: true,
+        // Serve `/usage` is a background poll read: keep the short optional-
+        // join grace (upstream #2583), unlike `codexbar usage` which blocks
+        // for the full completeness window.
+        requires_optional_usage_completeness: false,
     };
 
     let mut results = Vec::new();

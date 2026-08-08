@@ -62,14 +62,28 @@ impl RefreshFailure {
             "Token refresh failed ({status}): {}",
             body.chars().take(200).collect::<String>()
         );
+        // Upstream `refreshFailureDisposition` (ClaudeOAuthCredentials.swift):
+        // only HTTP 400/401 with an OAuth `error` of `invalid_grant` (case-
+        // insensitive) is terminal -- the stored refresh token is dead for
+        // good. 403, other 4xx, and 5xx are transient (a retry can still heal
+        // them); 400/401 *without* invalid_grant is likewise transient.
         let kind = match status.as_u16() {
-            // invalid_grant / unauthorized / forbidden: the stored refresh
-            // token is dead for good.
-            400 | 401 | 403 => RefreshFailureKind::Terminal,
+            400 | 401
+                if extract_oauth_error(body)
+                    .is_some_and(|err| err.eq_ignore_ascii_case("invalid_grant")) =>
+            {
+                RefreshFailureKind::Terminal
+            }
             _ => RefreshFailureKind::Transient,
         };
         Self { kind, message }
     }
+}
+
+/// Parse the OAuth `error` field from a refresh-failure response body.
+fn extract_oauth_error(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("error")?.as_str().map(str::to_string)
 }
 
 /// POST `grant_type=refresh_token` to the OAuth token endpoint, mirroring the
@@ -166,16 +180,50 @@ mod tests {
         assert_eq!(resp.scope.as_deref(), Some("user:inference user:profile"));
     }
 
-    // Upstream 0.48.0 #2650: a rejected stored refresh token is terminal —
-    // retrying the identical grant cannot succeed.
+    // Upstream 0.48.0 #2650: only 400/401 with `error: invalid_grant` is
+    // terminal -- the stored refresh token is dead for good. 403, other 4xx,
+    // and 5xx stay transient (a retry can still heal them); 400/401 *without*
+    // invalid_grant is likewise transient.
     #[test]
-    fn refresh_rejection_is_terminal() {
-        for status in [400, 401, 403] {
+    fn invalid_grant_on_400_or_401_is_terminal() {
+        for status in [400, 401] {
             let failure = RefreshFailure::from_http_status(
                 reqwest::StatusCode::from_u16(status).unwrap(),
                 r#"{"error":"invalid_grant"}"#,
             );
             assert_eq!(failure.kind, RefreshFailureKind::Terminal, "HTTP {status}");
+        }
+        // Case-insensitive match.
+        let failure = RefreshFailure::from_http_status(
+            reqwest::StatusCode::from_u16(400).unwrap(),
+            r#"{"error":"INVALID_GRANT"}"#,
+        );
+        assert_eq!(failure.kind, RefreshFailureKind::Terminal);
+    }
+
+    #[test]
+    fn forbidden_and_non_grant_4xx_stay_transient() {
+        // 403 is never terminal, even with invalid_grant in the body.
+        let failure = RefreshFailure::from_http_status(
+            reqwest::StatusCode::from_u16(403).unwrap(),
+            r#"{"error":"invalid_grant"}"#,
+        );
+        assert_eq!(failure.kind, RefreshFailureKind::Transient);
+        // 400/401 with a different OAuth error are transient.
+        for status in [400, 401] {
+            let failure = RefreshFailure::from_http_status(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                r#"{"error":"invalid_client"}"#,
+            );
+            assert_eq!(failure.kind, RefreshFailureKind::Transient, "HTTP {status}");
+        }
+        // 400/401 with no parseable error field are transient.
+        for status in [400, 401] {
+            let failure = RefreshFailure::from_http_status(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                "busy",
+            );
+            assert_eq!(failure.kind, RefreshFailureKind::Transient, "HTTP {status}");
         }
     }
 

@@ -2,17 +2,57 @@
 //!
 //! Upstream 0.44 #2227: bind host + optional dashboard bearer token gate.
 //! Non-loopback binds require a token and `--allow-plain-http`.
+//! Upstream 0.48.0 #2684: the request head is bounded as a whole — 16,384-byte
+//! cap and a single 10 s monotonic deadline across ALL reads, enforced before
+//! any Host allowlist or bearer handling; over-cap connections close instantly.
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Args;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 
 use super::usage::ProviderSelection;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::CostScanner;
 
 const DASHBOARD_TOKEN_ENV: &str = "CODEXBAR_DASHBOARD_TOKEN";
+
+/// Maximum bytes accepted for one complete HTTP request head, `\r\n\r\n`
+/// terminator included. A terminator whose final byte is exactly byte 16,384 is
+/// valid; anything more is rejected without being consumed or parsed.
+/// Upstream 0.48.0 #2684: `readRequest` loops `while data.count < 16384`.
+const HEAD_CAP: usize = 16 * 1024;
+
+/// Bytes read per socket poll while assembling the head (upstream uses 4096).
+const HEAD_READ_CHUNK: usize = 4096;
+
+/// Overall budget for delivering one complete request head. Upstream 0.48.0
+/// #2684: `requestTotalReadTimeoutMilliseconds = 10000` — one monotonic budget
+/// across all reads; a per-read timeout alone can be reset indefinitely by a
+/// client trickling one byte per window.
+const HEAD_READ_TIMEOUT: Duration = Duration::from_millis(10_000);
+
+/// Maximum concurrent client connections; over-cap connections are closed
+/// immediately without a response. Upstream 0.48.0 `maximumConnections = 16`.
+const MAX_CONNECTIONS: usize = 16;
+
+/// Why assembling a request head failed. Every variant maps to a single
+/// 400 Bad Request + close (upstream `.invalidRequest`); nothing is parsed,
+/// authenticated, or routed on a failed head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeadReadError {
+    /// The overall head-read budget elapsed before the head was complete.
+    Deadline,
+    /// The head reached [`HEAD_CAP`] bytes without a complete `\r\n\r\n`
+    /// terminator.
+    Oversize,
+    /// The client half-closed or errored before the head was complete.
+    UnexpectedEof,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
@@ -43,6 +83,10 @@ struct ServeConfig {
     host: String,
     port: u16,
     token_digest: Option<[u8; 32]>,
+    /// Overall budget for reading one request head. Production uses
+    /// [`HEAD_READ_TIMEOUT`]; tests inject a short budget (upstream 0.48.0
+    /// #2684 makes the deadline injectable for exactly this reason).
+    head_read_budget: Duration,
 }
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -59,10 +103,30 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         );
     }
 
+    serve_listener(listener, Arc::new(config), MAX_CONNECTIONS).await
+}
+
+/// Accept loop with the upstream-parity concurrency gate: at most
+/// `max_connections` clients are served at once; a connection arriving when
+/// every slot is held is closed immediately without a response. Combined with
+/// the whole-head deadline in [`read_request_head`], slow-trickle clients can
+/// no longer exhaust every slot pre-auth (upstream 0.48.0 #2684).
+async fn serve_listener(
+    listener: TcpListener,
+    config: Arc<ServeConfig>,
+    max_connections: usize,
+) -> anyhow::Result<()> {
+    let gate = Arc::new(Semaphore::new(max_connections));
     loop {
         let (stream, _) = listener.accept().await?;
+        let Ok(permit) = gate.clone().try_acquire_owned() else {
+            // Over-cap: close immediately without a response (upstream parity).
+            drop(stream);
+            continue;
+        };
         let config = config.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(error) = handle_client(stream, &config).await {
                 tracing::debug!("serve client error: {error}");
             }
@@ -97,6 +161,7 @@ fn validate_serve_args(args: &ServeArgs) -> anyhow::Result<ServeConfig> {
         host,
         port: args.port,
         token_digest: token.as_ref().map(|t| sha256_digest(t.as_bytes())),
+        head_read_budget: HEAD_READ_TIMEOUT,
     })
 }
 
@@ -212,9 +277,17 @@ fn bearer_token(authorization: Option<&str>) -> Option<String> {
 }
 
 async fn handle_client(mut stream: TcpStream, config: &ServeConfig) -> anyhow::Result<()> {
-    let mut buffer = vec![0_u8; 8192];
-    let n = stream.read(&mut buffer).await?;
-    let request = String::from_utf8_lossy(&buffer[..n]);
+    // Upstream 0.48.0 #2684: the head is assembled inside one overall budget and
+    // byte cap BEFORE any Host allowlist or bearer handling. Any head failure is
+    // a single 400 + close; nothing is parsed, authenticated, or routed.
+    let head = match read_request_head(&mut stream, config.head_read_budget).await {
+        Ok(head) => head,
+        Err(_) => {
+            respond_and_close_gracefully(&mut stream, invalid_request_response().as_bytes()).await;
+            return Ok(());
+        }
+    };
+    let request = String::from_utf8_lossy(&head);
     let response = match parse_request(&request) {
         Ok(request) => route_request(&request, config).await,
         Err(status) => json_response(status, serde_json::json!({ "error": "bad request" })),
@@ -222,6 +295,87 @@ async fn handle_client(mut stream: TcpStream, config: &ServeConfig) -> anyhow::R
     stream.write_all(response.as_bytes()).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+/// Read one complete request head under one overall deadline.
+///
+/// Upstream 0.48.0 #2684 (`CLILocalHTTPServer.readRequest`): the deadline is a
+/// single monotonic budget for the WHOLE head (default 10 s) — never a per-read
+/// timeout that a client sending one byte per window could reset forever.
+/// `tokio::time::timeout` around the entire loop implements exactly that
+/// semantic and cannot be extended by arriving bytes.
+async fn read_request_head(
+    stream: &mut TcpStream,
+    budget: Duration,
+) -> Result<Vec<u8>, HeadReadError> {
+    tokio::time::timeout(budget, read_head_loop(stream))
+        .await
+        .map_err(|_| HeadReadError::Deadline)?
+}
+
+/// Assemble the head until the `\r\n\r\n` terminator, capped at [`HEAD_CAP`]
+/// bytes. A terminator whose final byte is exactly byte 16,384 is valid; at the
+/// cap without a complete terminator the request is rejected, and each read is
+/// length-clamped so byte 16,385 is never consumed.
+async fn read_head_loop(stream: &mut TcpStream) -> Result<Vec<u8>, HeadReadError> {
+    let mut buf = Vec::with_capacity(HEAD_READ_CHUNK);
+    let mut chunk = [0_u8; HEAD_READ_CHUNK];
+    loop {
+        if let Some(end) = find_header_end(&buf) {
+            buf.truncate(end);
+            return Ok(buf);
+        }
+        if buf.len() >= HEAD_CAP {
+            return Err(HeadReadError::Oversize);
+        }
+        // Clamp the read so we can never pull past the cap.
+        let want = (HEAD_CAP - buf.len()).min(HEAD_READ_CHUNK);
+        let n = stream
+            .read(&mut chunk[..want])
+            .await
+            .map_err(|_| HeadReadError::UnexpectedEof)?;
+        if n == 0 {
+            return Err(HeadReadError::UnexpectedEof);
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+/// Offset just past `\r\n\r\n` when `buf` holds a complete head terminator.
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
+}
+
+/// Upstream 0.48.0 pinned failure response for head-deadline / oversize /
+/// incomplete-EOF: 400 Bad Request with `{"error":"invalid request"}`,
+/// `Cache-Control: no-store`, `Connection: close`. Upstream has no 408/431.
+fn invalid_request_response() -> String {
+    json_response_with_headers(
+        400,
+        serde_json::json!({ "error": "invalid request" }),
+        &[("Cache-Control", "no-store")],
+    )
+}
+
+/// Deliver an error response on a rejected head reliably: write it, half-close
+/// the write side so the client sees FIN right after the bytes, then briefly
+/// drain whatever the client already sent. Closing a socket with unread data in
+/// its receive queue tears the connection down with RST on Windows, discarding
+/// the response before the client reads it — the drain keeps the close clean.
+/// The drain is bounded independently of the head-read budget, so this cannot
+/// re-open the slow-trickle hold that #2684 closes.
+async fn respond_and_close_gracefully(stream: &mut TcpStream, response: &[u8]) {
+    let _ = stream.write_all(response).await;
+    let _ = stream.shutdown().await;
+    let drain = async {
+        let mut sink = [0_u8; 512];
+        while let Ok(n) = stream.read(&mut sink).await {
+            if n == 0 {
+                break;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(1), drain).await;
 }
 
 async fn route_request(request: &ServeRequest, config: &ServeConfig) -> String {
@@ -469,6 +623,14 @@ fn url_decode(raw: &str) -> String {
 }
 
 fn json_response(status: u16, payload: serde_json::Value) -> String {
+    json_response_with_headers(status, payload, &[])
+}
+
+fn json_response_with_headers(
+    status: u16,
+    payload: serde_json::Value,
+    extra_headers: &[(&str, &str)],
+) -> String {
     let body = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     let reason = match status {
         200 => "OK",
@@ -479,8 +641,12 @@ fn json_response(status: u16, payload: serde_json::Value) -> String {
         405 => "Method Not Allowed",
         _ => "Internal Server Error",
     };
+    let extra = extra_headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -619,5 +785,355 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("empty"));
+    }
+
+    // ── Upstream 0.48.0 #2684: whole-head bound (16 KiB cap + 10 s TOTAL deadline) ──
+
+    use std::time::Instant;
+
+    /// Connected (server, client) TCP pair on loopback.
+    async fn connected_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (server, client)
+    }
+
+    fn head_test_config(budget: Duration, token: Option<&str>) -> ServeConfig {
+        ServeConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            token_digest: token.map(|t| sha256_digest(t.as_bytes())),
+            head_read_budget: budget,
+        }
+    }
+
+    /// Generous budget for tests that must not trip the deadline.
+    fn fast_budget() -> Duration {
+        Duration::from_millis(2_000)
+    }
+
+    /// Complete request head whose `\r\n\r\n` terminator's final byte is
+    /// exactly byte 16,384 — the upstream-valid boundary.
+    fn head_at_exact_cap() -> Vec<u8> {
+        let mut head = String::from("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pad: ");
+        let pad = HEAD_CAP - head.len() - 4;
+        head.push_str(&"a".repeat(pad));
+        head.push_str("\r\n\r\n");
+        assert_eq!(head.len(), HEAD_CAP);
+        head.into_bytes()
+    }
+
+    /// Send `request`, read until the server closes, return the raw response.
+    /// Strict outer timeouts turn a hang into a test failure, not a stalled CI.
+    async fn request_roundtrip(request: &[u8], budget: Duration, token: Option<&str>) -> String {
+        let (server, mut client) = connected_pair().await;
+        let config = head_test_config(budget, token);
+        let server_task = tokio::spawn(async move { handle_client(server, &config).await });
+        client.write_all(request).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut response))
+            .await
+            .expect("client read timed out")
+            .unwrap();
+        // Dropping the client lets the server-side drain finish immediately.
+        drop(client);
+        server_task.await.unwrap().unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    #[test]
+    fn invalid_request_response_is_pinned() {
+        let response = invalid_request_response();
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(response.contains("Cache-Control: no-store\r\n"));
+        assert!(response.contains("Connection: close\r\n"));
+        assert!(response.ends_with(r#"{"error":"invalid request"}"#));
+    }
+
+    #[test]
+    fn find_header_end_offsets() {
+        assert_eq!(find_header_end(b"\r\n\r\n"), Some(4));
+        assert_eq!(find_header_end(b"a\r\n\r\n"), Some(5));
+        assert_eq!(find_header_end(b"aa\r\n\r\n"), Some(6));
+        assert_eq!(find_header_end(b"a\r\n\r"), None);
+        assert_eq!(find_header_end(b"a\r\n\rXX"), None);
+        // Terminator straddling a chunk boundary.
+        assert_eq!(find_header_end(b"abc\r\n\r"), None);
+        assert_eq!(find_header_end(b"abc\r\n\r\ndef"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn head_reader_accepts_terminator_ending_exactly_at_cap() {
+        // Upstream boundary: a terminator whose final byte is byte 16,384 is valid.
+        let (mut server, mut client) = connected_pair().await;
+        client.write_all(&head_at_exact_cap()).await.unwrap();
+        let head = read_request_head(&mut server, fast_budget()).await.unwrap();
+        assert_eq!(head.len(), HEAD_CAP);
+    }
+
+    #[tokio::test]
+    async fn head_ending_exactly_at_cap_parses_and_routes_normally() {
+        let response = request_roundtrip(&head_at_exact_cap(), fast_budget(), None).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "exact-cap head must route to /health, got: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn head_reader_rejects_at_cap_without_terminator() {
+        let (mut server, mut client) = connected_pair().await;
+        client.write_all(&[b'x'; HEAD_CAP]).await.unwrap();
+        let result = read_request_head(&mut server, fast_budget()).await;
+        assert_eq!(result, Err(HeadReadError::Oversize));
+    }
+
+    #[tokio::test]
+    async fn head_reader_maps_incomplete_eof() {
+        let (mut server, mut client) = connected_pair().await;
+        client
+            .write_all(b"GET /health HTTP/1.1\r\nHost: 127.")
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        let result = read_request_head(&mut server, fast_budget()).await;
+        assert_eq!(result, Err(HeadReadError::UnexpectedEof));
+    }
+
+    #[tokio::test]
+    async fn head_reader_maps_total_deadline_on_silent_client() {
+        let (mut server, _client) = connected_pair().await;
+        let result = read_request_head(&mut server, Duration::from_millis(150)).await;
+        assert_eq!(result, Err(HeadReadError::Deadline));
+    }
+
+    #[tokio::test]
+    async fn oversized_head_rejected_before_auth_or_routing() {
+        // A complete-looking authenticated request line drowned past the cap with
+        // no terminator: must be rejected before any bearer evaluation.
+        let mut junk = String::from(
+            "GET /usage HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer s3cret\r\nX-Pad: ",
+        );
+        junk.push_str(&"a".repeat(HEAD_CAP));
+        assert!(junk.len() > HEAD_CAP);
+        let response = request_roundtrip(junk.as_bytes(), fast_budget(), Some("s3cret")).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "got: {response}");
+        // Proof the bearer gate / routing never ran: not 401, not the usage payload.
+        assert!(!response.starts_with("HTTP/1.1 401"));
+        assert!(response.contains("Cache-Control: no-store\r\n"));
+        assert!(response.contains("Connection: close\r\n"));
+        assert!(response.contains(r#""error":"invalid request""#));
+    }
+
+    #[tokio::test]
+    async fn incomplete_head_eof_gets_pinned_400() {
+        let (server, mut client) = connected_pair().await;
+        let config = head_test_config(fast_budget(), None);
+        let server_task = tokio::spawn(async move { handle_client(server, &config).await });
+        client
+            .write_all(b"GET /health HTTP/1.1\r\nHost: 127.")
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        drop(client);
+        server_task.await.unwrap().unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 400"), "got: {response}");
+        assert!(response.contains("Cache-Control: no-store\r\n"));
+        assert!(response.contains(r#""error":"invalid request""#));
+    }
+
+    #[tokio::test]
+    async fn silent_client_is_closed_at_total_deadline() {
+        let budget = Duration::from_millis(250);
+        let (server, mut client) = connected_pair().await;
+        let config = head_test_config(budget, None);
+        let server_task = tokio::spawn(async move { handle_client(server, &config).await });
+        let started = Instant::now();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        let elapsed = started.elapsed();
+        drop(client);
+        server_task.await.unwrap().unwrap();
+        assert!(
+            elapsed >= budget,
+            "deadline fired early: {elapsed:?} < {budget:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "silent client outlived the total deadline: {elapsed:?}"
+        );
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 400"), "got: {response}");
+    }
+
+    #[tokio::test]
+    async fn trickling_bytes_do_not_reset_total_head_deadline() {
+        // One byte every 60 ms: under a per-read timeout this client would hold its
+        // connection for the full 3 s loop; the 400 ms TOTAL budget must kill it.
+        // (Red→green mirrored from upstream CLIServeRequestDeadlineLinuxTests.)
+        let budget = Duration::from_millis(400);
+        let (server, mut client) = connected_pair().await;
+        let config = head_test_config(budget, None);
+        let server_task = tokio::spawn(async move { handle_client(server, &config).await });
+
+        let started = Instant::now();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            if client.write_all(b"a").await.is_err() {
+                break;
+            }
+            // Stop trickling the moment the server answers or closes.
+            // peek() does NOT consume bytes — the full response stays readable.
+            let mut peek = [0_u8; 1];
+            if tokio::time::timeout(Duration::from_millis(10), client.peek(&mut peek))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+        }
+        let mut response = Vec::new();
+        let _ = client.read_to_end(&mut response).await;
+        let elapsed = started.elapsed();
+        drop(client);
+        server_task.await.unwrap().unwrap();
+
+        assert!(
+            elapsed >= budget,
+            "deadline fired early: {elapsed:?} < {budget:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "trickling bytes extended the overall deadline: {elapsed:?}"
+        );
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.starts_with("HTTP/1.1 400"),
+            "trickling client must get the pinned 400, got: {response}"
+        );
+        assert!(response.contains("Cache-Control: no-store\r\n"));
+        assert!(response.contains(r#""error":"invalid request""#));
+    }
+
+    #[tokio::test]
+    async fn authenticated_request_succeeds_and_bad_tokens_stay_401() {
+        // Deterministic 200: /cost with a provider the local scanner reports as
+        // unsupported — full auth pass, zero network/disk access.
+        let ok = request_roundtrip(
+            b"GET /cost?provider=gemini HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer s3cret\r\n\r\n",
+            fast_budget(),
+            Some("s3cret"),
+        )
+        .await;
+        assert!(ok.starts_with("HTTP/1.1 200"), "got: {ok}");
+        assert!(ok.contains("\"supported\":false"));
+
+        let wrong = request_roundtrip(
+            b"GET /cost?provider=gemini HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer nope\r\n\r\n",
+            fast_budget(),
+            Some("s3cret"),
+        )
+        .await;
+        assert!(wrong.starts_with("HTTP/1.1 401"), "got: {wrong}");
+
+        let missing = request_roundtrip(
+            b"GET /cost?provider=gemini HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            fast_budget(),
+            Some("s3cret"),
+        )
+        .await;
+        assert!(missing.starts_with("HTTP/1.1 401"), "got: {missing}");
+    }
+
+    #[tokio::test]
+    async fn host_gate_unchanged_on_hardened_path() {
+        let forbidden = request_roundtrip(
+            b"GET /health HTTP/1.1\r\nHost: example.com\r\n\r\n",
+            fast_budget(),
+            None,
+        )
+        .await;
+        assert!(forbidden.starts_with("HTTP/1.1 403"), "got: {forbidden}");
+        assert!(forbidden.contains(r#""error":"forbidden host""#));
+
+        let ok = request_roundtrip(
+            b"GET /health HTTP/1.1\r\nHost: localhost:9999\r\n\r\n",
+            fast_budget(),
+            None,
+        )
+        .await;
+        assert!(ok.starts_with("HTTP/1.1 200"), "got: {ok}");
+    }
+
+    #[tokio::test]
+    async fn over_cap_connection_closes_immediately_without_response() {
+        // Upstream 0.48.0 parity: maximumConnections = 16; slot 17 is closed at
+        // once, no response bytes, and a freed slot is usable again.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = Arc::new(head_test_config(Duration::from_secs(60), None));
+        let server_task = tokio::spawn(serve_listener(listener, config, MAX_CONNECTIONS));
+
+        // Fill every permit with trickling clients that never complete a head.
+        let mut tricklers = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            tricklers.push(tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if client.write_all(b"a").await.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+
+        // Probe until the gate is provably full: an over-cap connection gets an
+        // immediate EOF with zero response bytes.
+        let mut rejected_seen = false;
+        for _ in 0..40 {
+            let mut probe = TcpStream::connect(addr).await.unwrap();
+            let mut buf = [0_u8; 16];
+            match tokio::time::timeout(Duration::from_millis(300), probe.read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    rejected_seen = true;
+                    break;
+                }
+                // Probe landed in a still-filling slot; free it and retry.
+                _ => drop(probe),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            rejected_seen,
+            "over-cap connection never got the immediate close"
+        );
+
+        // Ending the tricklers releases their permits via EOF; a normal client
+        // must then be served (strict outer timeout).
+        for task in &tricklers {
+            task.abort();
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let mut good = TcpStream::connect(addr).await.unwrap();
+        good.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), good.read_to_end(&mut response))
+            .await
+            .expect("no connection slot freed after trickling clients ended")
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"),
+            "freed slot must serve a normal request, got: {}",
+            String::from_utf8_lossy(&response)
+        );
+        server_task.abort();
     }
 }

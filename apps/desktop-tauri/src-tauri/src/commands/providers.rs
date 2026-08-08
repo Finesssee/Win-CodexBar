@@ -388,6 +388,15 @@ async fn refresh_provider(
             None
         } else {
             let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
+            // F6 (upstream 0.48.0): backfill missing reset timestamps from the
+            // cached snapshot before persisting and publishing.
+            let cached = guard
+                .provider_cache
+                .iter()
+                .find(|c| c.provider_id == snapshot.provider_id && c.error.is_none())
+                .cloned();
+            let mut snapshot = snapshot;
+            codex_reset_backfill(&mut snapshot, cached.as_ref());
             upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
             Some(snapshot)
         }
@@ -398,6 +407,68 @@ async fn refresh_provider(
     if let Some(snapshot) = published {
         events::emit_provider_updated(&app, &snapshot);
     }
+}
+
+/// F6 (upstream 0.48.0 UsageStore+CodexResetBackfill): backfill missing
+/// `resets_at` / `reset_description` on fresh Codex windows from the cached
+/// lane data when the cached reset is still future. Fresh `used_percent` is
+/// untouched; only the reset timestamp/description are backfilled.
+///
+/// This is Codex-scoped by design (upstream: "Provider-specific by design"):
+/// other providers do not carry bounded resume state.
+///
+/// Applies to the bridge snapshot before publishing so every surface (tray,
+/// CLI, frontend) sees the backfilled reset instead of a missing one.
+pub(super) fn codex_reset_backfill(
+    snapshot: &mut ProviderUsageSnapshot,
+    cached: Option<&ProviderUsageSnapshot>,
+) {
+    let Some(cached) = cached else { return };
+    if snapshot.provider_id != "codex" {
+        return;
+    }
+
+    // Backfill each slot from the corresponding cached slot.
+    backfill_slot_window(&mut snapshot.primary, &cached.primary);
+    if let (Some(fresh), Some(cached_sec)) =
+        (&mut snapshot.secondary, &cached.secondary)
+    {
+        backfill_slot_window(fresh, cached_sec);
+    }
+    // Tertiary (monthly/other): the Codex bridge doesn't normally populate this,
+    // but the slot exists for forward-compat. Backfill when available.
+    if let (Some(fresh), Some(cached_ter)) =
+        (&mut snapshot.tertiary, &cached.tertiary)
+    {
+        backfill_slot_window(fresh, cached_ter);
+    }
+}
+
+/// Backfill `resets_at` and `reset_description` on a fresh window from the
+/// cached window whose reset is still in the future. `used_percent` is never
+/// overwritten (upstream: "fresh used_percent untouched").
+fn backfill_slot_window(
+    fresh: &mut bridge::RateWindowSnapshot,
+    cached: &bridge::RateWindowSnapshot,
+) {
+    if fresh.resets_at.is_some() {
+        return;
+    }
+    let Some(cached_reset) = &cached.resets_at else { return };
+    // Only backfill when the cached reset is still future — a stale reset is
+    // worse than a missing one.
+    if let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) {
+        if cached_dt <= chrono::Utc::now() {
+            return;
+        }
+    } else {
+        return;
+    }
+    fresh.resets_at = Some(cached_reset.clone());
+    fresh.reset_description = fresh
+        .reset_description
+        .clone()
+        .or_else(|| cached.reset_description.clone());
 }
 
 pub(super) fn preserve_last_good_transient_failure(

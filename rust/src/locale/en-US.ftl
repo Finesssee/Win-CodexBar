@@ -326,6 +326,7 @@ UsageSpendTitle = Usage & Spend
 UsageSpendCaption = Local estimated cost history for Codex and Claude (JSONL logs), plus period cost snapshots from other providers when available.
 UsageSpendRefresh = Refresh
 UsageSpendLoading = Scanning…
+UsageSpendRefreshing = Refreshing…
 UsageSpendEmpty = No spend data yet.
 UsageSpendColProvider = Provider
 UsageSpendCol7d = 7 days

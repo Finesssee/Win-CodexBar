@@ -81,6 +81,11 @@ pub struct CostSummary {
     /// Completeness of pricing coverage (Complete vs Partial). Surfaced in the CLI
     /// cost JSON so callers can label a partial breakdown (upstream 0.48.0 F18).
     pub model_pricing_completeness: ModelPricingCompleteness,
+    /// Whether the scan's coverage of the requested history window is established
+    /// (not pending a catch-up re-scan). `true` when the cache is fresh (within the
+    /// debounce window) or the scan just completed; `false` when the cache is stale
+    /// or empty and a re-scan would be required (upstream 0.48.0 A16).
+    pub history_coverage_established: bool,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
@@ -365,6 +370,11 @@ impl CostScanner {
             && (!cache.days.is_empty() || !cache.files.is_empty())
         {
             stats.used_cache_debounce = true;
+            // A16 (upstream 0.48.0): cache hit within debounce = coverage established
+            // when the cache has data and no catch-up is pending (previous_report set
+            // means entries were trimmed for budget → re-scan may be needed).
+            summary.history_coverage_established =
+                !cache.days.is_empty() && cache.previous_report.is_none();
             let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
             summary.total_cost_usd += cost;
             summary.sessions_count = cache
@@ -415,6 +425,10 @@ impl CostScanner {
             cache.scan_until_key = Some(range.until_key.clone());
             JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
+
+        // A16 (upstream 0.48.0): after a completed scan, coverage IS established
+        // unless cache pruning during save marked a catch-up pending.
+        summary.history_coverage_established = cache.previous_report.is_none();
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.

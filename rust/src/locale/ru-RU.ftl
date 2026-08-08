@@ -291,6 +291,7 @@ UsageSpendTitle = Использование и расходы
 UsageSpendCaption = Локальная история расчетных затрат для Codex и Claude (журналы JSONL), а также снимки затрат за период от других провайдеров, если они доступны.
 UsageSpendRefresh = Обновить
 UsageSpendLoading = Сканирование…
+UsageSpendRefreshing = Обновление…
 UsageSpendEmpty = Данных о расходах пока нет.
 UsageSpendColProvider = Провайдер
 UsageSpendCol7d = 7 дней

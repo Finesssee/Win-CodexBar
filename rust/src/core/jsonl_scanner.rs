@@ -933,7 +933,7 @@ impl JsonlScanner {
         let _ = fs::create_dir_all(parent);
 
         if crate::core::is_bounded_provider(provider) {
-            crate::core::prune_out_of_window_for_budget(
+            let pruned = crate::core::prune_out_of_window_for_budget(
                 &mut cache.files,
                 &mut cache.days,
                 cache.scan_since_key.as_deref(),
@@ -941,14 +941,46 @@ impl JsonlScanner {
                 false,
             );
             let estimate = crate::core::estimated_cache_bytes(&cache.files, &cache.days);
-            if estimate > crate::core::CostUsageCacheBudget::MAX_FILE_BYTES {
+            let trimmed = if estimate > crate::core::CostUsageCacheBudget::MAX_FILE_BYTES {
                 crate::core::trim_in_window_for_budget(
                     &mut cache.files,
                     &mut cache.days,
                     cache.scan_since_key.as_deref(),
                     cache.scan_until_key.as_deref(),
                     crate::core::CostUsageCacheBudget::MAX_FILE_BYTES,
-                );
+                )
+            } else {
+                Vec::new()
+            };
+            // A16 (upstream 0.48.0): when entries were trimmed for budget, the persisted
+            // artifact no longer covers the full window — set previous_report so the
+            // next refresh can signal catch-up is pending (and spend surfaces can show
+            // the last-validated snapshot during the rescan).
+            if (!pruned.is_empty() || !trimmed.is_empty()) && cache.previous_report.is_none() {
+                cache.previous_report = Some(crate::core::CachedCostReport {
+                    total_cost_usd: 0.0, // cost not tracked in day aggregates
+                    input_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[0])
+                        .sum(),
+                    cached_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[1])
+                        .sum(),
+                    output_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[2])
+                        .sum(),
+                    sessions_count: cache.files.len() as i32,
+                    updated_at: None,
+                    partial: false,
+                });
             }
         }
 

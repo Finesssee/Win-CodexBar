@@ -496,6 +496,16 @@ fn append_usage_window_lines(
         use_color,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
+    // F5 (upstream 0.48.0): monthly (30-day) lane. Label by duration cadence.
+    if let Some(tertiary) = usage.tertiary.as_ref() {
+        let cadence =
+            crate::core::RateWindowCadence::from_minutes(tertiary.window_minutes.unwrap_or(0));
+        let label = match cadence {
+            crate::core::RateWindowCadence::Monthly => "Monthly",
+            _ => "Tertiary",
+        };
+        append_window_line(lines, label, tertiary, use_color);
+    }
 }
 
 fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow, use_color: bool) {

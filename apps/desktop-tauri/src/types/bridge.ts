@@ -315,6 +315,10 @@ export interface UsageSpendRow {
   thirtyDay: number | null;
   currency: string;
   source: string;
+  /** F8: true when served from stale cache while a re-scan is in progress. */
+  refreshing?: boolean;
+  /** ISO 8601 timestamp of the stale snapshot when refreshing. */
+  staleUpdatedAt?: string;
 }
 
 export interface UsageSpendSummary {
@@ -447,6 +451,8 @@ export interface ProviderUsageSnapshot {
   secondaryLabel?: string;
   modelSpecific: RateWindowSnapshot | null;
   tertiary: RateWindowSnapshot | null;
+  /** F5: duration-cadence label for tertiary ("monthly", "weekly" etc.) */
+  tertiaryLabel?: string;
   extraRateWindows: Array<{
     id: string;
     title: string;

@@ -261,3 +261,41 @@ fn test_codex_fast_cost_none_above_long_context_threshold() {
         None
     );
 }
+
+#[test]
+fn test_codex_fast_cost_usd_suffixed_models_resolve_to_base() {
+    // gpt-5.5-fast → base gpt-5.5 → 2.5x multiplier
+    let base = CostUsagePricing::codex_cost_usd("gpt-5.5", 1000, 0, 500).unwrap();
+    let fast = CostUsagePricing::codex_fast_cost_usd("gpt-5.5-fast", 1000, 0, 500).unwrap();
+    assert!(
+        (fast - base * 2.5).abs() < 1e-10,
+        "gpt-5.5-fast should be gpt-5.5 × 2.5"
+    );
+
+    // gpt-5.6-sol-priority → base gpt-5.6-sol → 2.0x multiplier
+    let sol_base = CostUsagePricing::codex_cost_usd("gpt-5.6-sol", 1000, 400, 1000).unwrap();
+    let sol_fast =
+        CostUsagePricing::codex_fast_cost_usd("gpt-5.6-sol-priority", 1000, 400, 1000).unwrap();
+    assert!(
+        (sol_fast - sol_base * 2.0).abs() < 1e-10,
+        "gpt-5.6-sol-priority should be gpt-5.6-sol × 2.0"
+    );
+}
+
+#[test]
+fn test_codex_fast_cost_usd_base_model_unsuffixed() {
+    // Unsuffixed base models still resolve to themselves.
+    assert_eq!(
+        CostUsagePricing::codex_fast_base_model("gpt-5.6-terra"),
+        "gpt-5.6-terra"
+    );
+    assert_eq!(
+        CostUsagePricing::codex_fast_base_model("gpt-5.5"),
+        "gpt-5.5"
+    );
+    // Unknown models return normalized original.
+    assert_eq!(
+        CostUsagePricing::codex_fast_base_model("my-custom-model"),
+        "my-custom-model"
+    );
+}

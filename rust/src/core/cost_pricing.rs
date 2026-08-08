@@ -694,19 +694,27 @@ impl CostUsagePricing {
         trimmed
     }
 
+    /// Strip Fast/priority suffix to find the base model for pricing lookup.
+    ///
+    /// Fast-tier models ("gpt-5.5-fast", "gpt-5.6-sol-priority") price as the
+    /// standard base × multiplier. Both `codex_api_fast_multiplier` and
+    /// `codex_fast_cost_usd` must use this helper so the original suffix does
+    /// not leak into the base lookup (audit C4).
+    pub fn codex_fast_base_model(model: &str) -> String {
+        let key = Self::normalize_codex_model(model);
+        key.strip_suffix("-fast")
+            .or_else(|| key.strip_suffix("-priority"))
+            .map(Self::normalize_codex_model)
+            .unwrap_or(key)
+    }
+
     /// Fast-tier multiplier per model (upstream 0.48.0 C4). Fast USD = Standard
     /// cost × multiplier. Returns `None` for models without a Fast lane.
     ///
     /// Multipliers: gpt-5.4, gpt-5.4-mini, gpt-5.6-sol, gpt-5.6-terra,
     /// gpt-5.6-luna → 2.0; gpt-5.5 → 2.5; else nil.
     pub fn codex_api_fast_multiplier(model: &str) -> Option<f64> {
-        // Strip fast/priority suffix to find the base model, then match.
-        let key = Self::normalize_codex_model(model);
-        let base = key
-            .strip_suffix("-fast")
-            .or_else(|| key.strip_suffix("-priority"))
-            .map(Self::normalize_codex_model)
-            .unwrap_or(key);
+        let base = Self::codex_fast_base_model(model);
         match base.as_str() {
             "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => {
                 Some(2.0)
@@ -718,7 +726,7 @@ impl CostUsagePricing {
 
     /// Fast-tier cost in USD for a model (upstream 0.48.0 C4).
     ///
-    /// Computes the standard cost for the base model (stripping fast/priority
+    /// Computes the standard cost for the BASE model (stripping fast/priority
     /// suffixes), then applies the Fast multiplier. Returns `None` when the
     /// model has no Fast lane or when long-context input exceeds the 272 000
     /// threshold guard (Fast is not offered above that).
@@ -728,13 +736,14 @@ impl CostUsagePricing {
         if (input as u64) > CODEX_LONG_CONTEXT_THRESHOLD {
             return None;
         }
-        let base = Self::codex_cost_usd(
-            model,
+        let base = Self::codex_fast_base_model(model);
+        let base_cost = Self::codex_cost_usd(
+            &base,
             input.max(0) as u64,
             cached.max(0) as u64,
             output.max(0) as u64,
         )?;
-        Some(base * multiplier)
+        Some(base_cost * multiplier)
     }
 
     /// Calculate cost for Codex usage in USD

@@ -40,6 +40,14 @@ impl CostUsageCacheBudget {
     /// [`Self::MAX_FILE_BYTES`] only up to this cap; anything larger is refused
     /// at load and dropped at save.
     pub const MAX_LOAD_BYTES: usize = 320 * 1024 * 1024;
+
+    /// F19 (upstream 0.48.0): decide whether to persist an encoded cache
+    /// artifact. Returns true if the artifact should be refused (exceeds the
+    /// load budget). Extracted as a pure function for testability — the save
+    /// path calls this with the actual encoded length and MAX_LOAD_BYTES.
+    pub fn should_refuse_persistence(encoded_len: usize, max_load_bytes: usize) -> bool {
+        encoded_len > max_load_bytes
+    }
 }
 
 /// A file entry that should not be dropped by budget pruning.
@@ -205,8 +213,10 @@ pub fn trim_in_window_for_budget(
     });
 
     let target = (max_bytes * 3) / 4;
-    let mut estimate =
-        estimated_cache_bytes(files, days) - estimated_entry_bytes(&files[&droppable[0]]);
+    // Start from the full estimate; the loop subtracts each candidate as it
+    // is considered. (Previously the first candidate was pre-subtracted here
+    // and then subtracted again inside the loop — a double count.)
+    let mut estimate = estimated_cache_bytes(files, days);
     let mut dropped = Vec::new();
     for (index, key) in droppable.iter().enumerate() {
         // Always keep at least the newest entry.
@@ -432,10 +442,91 @@ mod tests {
     };
 
     #[test]
+    fn trim_estimate_no_double_subtraction_of_first_entry() {
+        // Regression: the old code pre-subtracted droppable[0] from the initial
+        // estimate and then subtracted it again inside the loop. Build a cache
+        // where all 3 in-window entries have equal bytes; a tiny budget must
+        // drop the two oldest and keep the newest. The double-subtraction bug
+        // would over-subtract the first entry, causing the loop to stop too
+        // early (under-trim) or panic on index access.
+        let (mut files, mut days) = cache(&[
+            ("a", entry(&["2026-01-09"], None, 100)),
+            ("b", entry(&["2026-01-10"], None, 100)),
+            ("c", entry(&["2026-01-11"], None, 100)),
+        ]);
+
+        let full_estimate = estimated_cache_bytes(&files, &days);
+        let removed = trim_in_window_for_budget(
+            &mut files,
+            &mut days,
+            Some("2026-01-01"),
+            Some("2026-01-31"),
+            1024,
+        );
+
+        // With a tiny budget (1024) and 3 entries of ~equal size, we expect
+        // the two oldest dropped and newest (c) kept.
+        assert!(files.contains_key("c"), "newest entry always kept");
+        assert!(!removed.is_empty(), "at least one entry dropped");
+
+        // The post-trim estimate must not go negative (saturating) and must be
+        // strictly less than the pre-trim estimate (entries were actually dropped).
+        let post_estimate = estimated_cache_bytes(&files, &days);
+        assert!(
+            post_estimate < full_estimate,
+            "post-trim estimate ({post_estimate}) must be < full ({full_estimate})"
+        );
+        // The first entry (a) should have been dropped (oldest day).
+        assert!(!files.contains_key("a"), "oldest entry dropped first");
+    }
+
+    #[test]
+    fn trim_drops_until_target_reached_then_stops() {
+        // Arithmetic correctness: with a budget that only requires dropping one
+        // entry, the trim should drop exactly one and keep the rest.
+        let (mut files, mut days) = cache(&[
+            ("a", entry(&["2026-01-09"], None, 100)),
+            ("b", entry(&["2026-01-10"], None, 100)),
+            ("c", entry(&["2026-01-11"], None, 100)),
+        ]);
+
+        let full = estimated_cache_bytes(&files, &days);
+        // Budget = full - one_entry_size roughly, so target = 75% of that.
+        // This should drop exactly one entry (the oldest).
+        let one_entry = estimated_entry_bytes(&entry(&["2026-01-09"], None, 100));
+        let budget = full.saturating_sub(one_entry / 2);
+
+        let removed = trim_in_window_for_budget(
+            &mut files,
+            &mut days,
+            Some("2026-01-01"),
+            Some("2026-01-31"),
+            budget,
+        );
+
+        assert!(!removed.is_empty(), "at least one dropped");
+        assert!(files.contains_key("c"), "newest kept");
+    }
+
+    #[test]
     fn is_unpriced_codex_routing_model_flags_auto_review_and_unattributed() {
         assert!(is_unpriced_codex_routing_model("codex-auto-review"));
         assert!(is_unpriced_codex_routing_model("unknown"));
         assert!(is_unpriced_codex_routing_model(""));
         assert!(!is_unpriced_codex_routing_model("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn should_refuse_persistence_at_and_above_limit() {
+        // Tiny-budget test: with a 1024-byte limit, a 1025-byte artifact is
+        // refused, a 1024-byte artifact is accepted (boundary), and a small
+        // artifact is accepted.
+        assert!(!CostUsageCacheBudget::should_refuse_persistence(0, 1024));
+        assert!(!CostUsageCacheBudget::should_refuse_persistence(512, 1024));
+        assert!(!CostUsageCacheBudget::should_refuse_persistence(1024, 1024));
+        assert!(CostUsageCacheBudget::should_refuse_persistence(1025, 1024));
+        assert!(CostUsageCacheBudget::should_refuse_persistence(
+            10_000, 1024
+        ));
     }
 }

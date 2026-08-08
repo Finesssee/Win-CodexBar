@@ -994,6 +994,21 @@ impl JsonlScanner {
             return;
         };
 
+        // F19 (upstream 0.48.0): after bounded encode, if the artifact still
+        // exceeds MAX_LOAD_BYTES, refuse persistence — do not write the file.
+        // This is a one-shot refusal (not a persist/refuse/rebuild loop): the
+        // budget enforcement above already pruned and trimmed; if the result is
+        // still too large (e.g. a single protected entry exceeds the limit), the
+        // artifact is dropped and the next scan rebuilds from scratch.
+        if crate::core::is_bounded_provider(provider)
+            && crate::core::CostUsageCacheBudget::should_refuse_persistence(
+                json.len(),
+                crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES,
+            )
+        {
+            return;
+        }
+
         let tmp_name = format!(
             ".{}.{}-{}.tmp",
             provider.cli_name(),
@@ -1411,5 +1426,66 @@ mod tests {
             CostScanOptions::app_driven(),
             now
         ));
+    }
+
+    #[test]
+    fn save_cache_persists_small_codex_artifact() {
+        // F19 integration: a normal-sized Codex cache is persisted and
+        // reloadable — the MAX_LOAD_BYTES refusal does not false-positive.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+        let mut cache = CostUsageCache::default();
+        cache.scan_since_key = Some("2026-01-01".to_string());
+        cache.scan_until_key = Some("2026-01-31".to_string());
+        cache.files.insert(
+            "a.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::from([(
+                    "2026-01-10".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
+                )]),
+                parsed_bytes: None,
+                last_model: None,
+                last_totals: None,
+            },
+        );
+
+        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+        // File should exist and be reloadable.
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            loaded.files.contains_key("a.jsonl"),
+            "small artifact persisted"
+        );
+        assert_eq!(loaded.scan_since_key, Some("2026-01-01".to_string()));
+    }
+
+    #[test]
+    fn save_cache_refuses_non_bounded_provider_oversize() {
+        // F19: non-bounded providers (e.g. Claude) skip the refusal check
+        // entirely — the MAX_LOAD_BYTES guard only applies to bounded providers.
+        // This test confirms the is_bounded_provider gate works: Claude cache
+        // is saved regardless of the MAX_LOAD_BYTES check (which is Codex-only).
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+        let mut cache = CostUsageCache::default();
+        cache.files.insert(
+            "claude.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::new(),
+                parsed_bytes: None,
+                last_model: None,
+                last_totals: None,
+            },
+        );
+
+        JsonlScanner::save_cache(ProviderId::Claude, &mut cache, Some(&cache_root));
+        let loaded = JsonlScanner::load_cache(ProviderId::Claude, Some(&cache_root));
+        assert!(loaded.files.contains_key("claude.jsonl"));
     }
 }

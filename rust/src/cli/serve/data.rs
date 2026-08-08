@@ -30,6 +30,9 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        // Serve `/usage` is a foreground completeness read like `codexbar usage`
+        // (upstream #2583).
+        requires_optional_usage_completeness: true,
     };
 
     let mut results = Vec::new();

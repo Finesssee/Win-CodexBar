@@ -293,6 +293,8 @@ async fn hooks_watch_observation(
         api_region: (!region.is_empty()).then(|| region.to_string()),
         gateway_url: (!gateway.is_empty()).then(|| gateway.to_string()),
         auto_prefer_web: false,
+        // Hook watches keep the short optional-join grace.
+        requires_optional_usage_completeness: false,
     };
 
     if ctx.api_key.is_none() {

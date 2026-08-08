@@ -593,6 +593,13 @@ pub struct FetchContext {
     /// When true, Auto mode prefers web before local (token-account scope,
     /// manual cookie source, etc.). Workspace overrides are checked separately.
     pub auto_prefer_web: bool,
+
+    /// Foreground usage reads (`codexbar usage`, `codexbar serve`) set this so
+    /// providers join slow optional enrichment with the full optional-item
+    /// timeout budget measured from task start; background/UI polls keep the
+    /// short join grace instead (upstream 0.48.0
+    /// `requiresOptionalUsageCompleteness`, #2583).
+    pub requires_optional_usage_completeness: bool,
 }
 
 impl Default for FetchContext {
@@ -608,6 +615,7 @@ impl Default for FetchContext {
             api_region: None,
             gateway_url: None,
             auto_prefer_web: false,
+            requires_optional_usage_completeness: false,
         }
     }
 }

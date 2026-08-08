@@ -1496,7 +1496,7 @@ mod tests {
             r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5}}}}}}}}
 "#
         );
-        std::fs::write(&day_dir.join("a.jsonl"), body).unwrap();
+        std::fs::write(day_dir.join("a.jsonl"), body).unwrap();
 
         let (s2, st2) = scanner.scan_codex_detailed(None);
         // The scanner must full-parse (not resume) because the cached offset

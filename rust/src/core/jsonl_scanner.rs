@@ -1492,23 +1492,25 @@ line2
         // reloadable — the MAX_LOAD_BYTES refusal does not false-positive.
         let root = tempfile::tempdir().unwrap();
         let cache_root = root.path().to_path_buf();
-        let mut cache = CostUsageCache::default();
-        cache.scan_since_key = Some("2026-01-01".to_string());
-        cache.scan_until_key = Some("2026-01-31".to_string());
-        cache.files.insert(
-            "a.jsonl".to_string(),
-            CostUsageFileUsage {
-                mtime_unix_ms: 0,
-                size: 100,
-                days: HashMap::from([(
-                    "2026-01-10".to_string(),
-                    HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
-                )]),
-                parsed_bytes: None,
-                last_model: None,
-                last_totals: None,
-            },
-        );
+        let mut cache = CostUsageCache {
+            scan_since_key: Some("2026-01-01".to_string()),
+            scan_until_key: Some("2026-01-31".to_string()),
+            files: HashMap::from([(
+                "a.jsonl".to_string(),
+                CostUsageFileUsage {
+                    mtime_unix_ms: 0,
+                    size: 100,
+                    days: HashMap::from([(
+                        "2026-01-10".to_string(),
+                        HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
+                    )]),
+                    parsed_bytes: None,
+                    last_model: None,
+                    last_totals: None,
+                },
+            )]),
+            ..Default::default()
+        };
 
         JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
 

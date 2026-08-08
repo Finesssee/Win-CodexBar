@@ -191,13 +191,12 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             // F18 (upstream 0.48.0): label partial pricing completeness.
             if let crate::cost_scanner::ModelPricingCompleteness::Partial { unpriced_models } =
                 &result.summary.model_pricing_completeness
+                && !unpriced_models.is_empty()
             {
-                if !unpriced_models.is_empty() {
-                    println!(
-                        "  Pricing:  partial (unpriced: {})",
-                        unpriced_models.join(", ")
-                    );
-                }
+                println!(
+                    "  Pricing:  partial (unpriced: {})",
+                    unpriced_models.join(", ")
+                );
             }
 
             // A16 (upstream 0.48.0): coverage status for Codex.
@@ -314,13 +313,14 @@ mod tests {
 
     #[test]
     fn json_output_emits_a16_and_f18_fields() {
-        let mut summary = CostSummary::default();
-        summary.sessions_count = 1;
-        summary.history_coverage_established = true;
-        summary.model_pricing_completeness =
-            crate::cost_scanner::ModelPricingCompleteness::Partial {
+        let summary = CostSummary {
+            sessions_count: 1,
+            history_coverage_established: true,
+            model_pricing_completeness: crate::cost_scanner::ModelPricingCompleteness::Partial {
                 unpriced_models: vec!["codex-auto-review".to_string()],
-            };
+            },
+            ..Default::default()
+        };
 
         let result = CostResult {
             provider: "codex".to_string(),

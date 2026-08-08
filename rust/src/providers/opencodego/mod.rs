@@ -5,7 +5,7 @@
 //! unless a workspace override scopes the fetch to web first; Web is cookie
 //! scrape only; Cli is local-only.
 
-mod local;
+pub(crate) mod local;
 
 use async_trait::async_trait;
 use chrono::Utc;

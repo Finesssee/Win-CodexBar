@@ -28,6 +28,7 @@ use crate::core::{
     CostScanOptions, CostUsageCache, CostUsageDayRange, CostUsageFileUsage, CostUsagePricing,
     JsonlScanner, ProviderId,
 };
+use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
 
 /// Cost summary from scanning local logs
@@ -447,6 +448,30 @@ impl CostScanner {
         );
 
         summary
+    }
+
+    /// Scan OpenCode Go local SQLite usage (upstream #2649 per-model cost breakdown).
+    ///
+    /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
+    /// (`total_cost_usd`, `by_model`, `sessions_count`, period) so the chart's
+    /// local-usage summary treats OpenCode Go like Codex/Claude. No token counts
+    /// are available from the SQLite reader, so token fields stay zero.
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        if is_cancelled(cancel) {
+            return CostSummary::default();
+        }
+        let now = Utc::now();
+        let Some(local) = opencodego_local::model_cost_summary_scan(now, self.days) else {
+            return CostSummary::default();
+        };
+        CostSummary {
+            total_cost_usd: local.total_cost_usd,
+            by_model: local.by_model,
+            sessions_count: local.request_count,
+            period_start: local.period_start,
+            period_end: local.period_end,
+            ..CostSummary::default()
+        }
     }
 
     fn get_codex_sessions_dirs(&self) -> Vec<PathBuf> {
@@ -915,6 +940,15 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                     });
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+            }
+        }
+        "opencodego" => {
+            // Per-day cost from the local OpenCode SQLite reader (upstream #2649).
+            // Rows are grouped by local calendar day to match Codex/Claude keying.
+            for (day_key, cost) in opencodego_local::daily_cost_series(Utc::now(), days) {
+                if let Some(slot) = daily_costs.get_mut(&day_key) {
+                    *slot += cost;
+                }
             }
         }
         _ => {}

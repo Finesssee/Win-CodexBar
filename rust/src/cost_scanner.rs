@@ -31,6 +31,30 @@ use crate::core::{
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
 
+/// Completeness of the pricing coverage in a [`CostSummary`] (upstream 0.48.0 F18).
+///
+/// `Complete` means every billed model resolved a canonical or fast-rate price.
+/// `Partial` means at least one model was deliberately unpriced (routing rows like
+/// `codex-auto-review`) or fell back to a legacy default; the breakdown is still
+/// shown but the total is labeled partial.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ModelPricingCompleteness {
+    /// Every model resolved a canonical price.
+    #[default]
+    Complete,
+    /// At least one model was unpriced or used a fallback rate.
+    Partial {
+        /// Model IDs that were deliberately unpriced (routing rows).
+        unpriced_models: Vec<String>,
+    },
+}
+
+impl ModelPricingCompleteness {
+    pub fn is_partial(&self) -> bool {
+        matches!(self, Self::Partial { .. })
+    }
+}
+
 /// Cost summary from scanning local logs
 #[derive(Debug, Clone, Default)]
 pub struct CostSummary {
@@ -54,6 +78,9 @@ pub struct CostSummary {
     pub by_speed_tokens: HashMap<String, ModelTokenCounts>,
     /// Model IDs that were priced with fallback rates because no canonical rate is available.
     pub unknown_models: HashSet<String>,
+    /// Completeness of pricing coverage (Complete vs Partial). Surfaced in the CLI
+    /// cost JSON so callers can label a partial breakdown (upstream 0.48.0 F18).
+    pub model_pricing_completeness: ModelPricingCompleteness,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
@@ -386,7 +413,7 @@ impl CostScanner {
             cache.last_scan_unix_ms = now_ms;
             cache.scan_since_key = Some(range.since_key.clone());
             cache.scan_until_key = Some(range.until_key.clone());
-            JsonlScanner::save_cache(ProviderId::Codex, &cache, cache_root);
+            JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
@@ -593,6 +620,7 @@ impl CostScanner {
                 && start_offset > 0
                 && start_offset <= size
                 && entry.last_totals.is_some()
+                && JsonlScanner::is_line_boundary_offset(path, start_offset)
             {
                 let parse_result = match JsonlScanner::parse_codex_file(
                     path,

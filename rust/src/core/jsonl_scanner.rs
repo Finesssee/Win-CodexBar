@@ -72,6 +72,12 @@ pub struct CostUsageCache {
     pub scan_since_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_until_key: Option<String>,
+    /// Last validated cost report, kept so spend surfaces can keep showing
+    /// totals while a (re)scan catches up after the cache was trimmed or the
+    /// debounce window expired (upstream 0.48.0 #2628). `None` once a scan
+    /// completes for the current window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_report: Option<CachedCostReport>,
 }
 
 /// Per-file usage tracking
@@ -97,6 +103,29 @@ pub struct CodexTotals {
     pub input: i32,
     pub cached: i32,
     pub output: i32,
+}
+
+/// Snapshot of the last validated cost report, persisted so spend surfaces keep
+/// showing totals while a rescan catches up after the cache is trimmed or the
+/// debounce window expires (upstream 0.48.0 #2628). See the cache-budget module
+/// for the save/load overshoot contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedCostReport {
+    /// Total cost in USD for the reported window.
+    pub total_cost_usd: f64,
+    /// Total input tokens.
+    pub input_tokens: i32,
+    /// Total cached tokens.
+    pub cached_tokens: i32,
+    /// Total output tokens.
+    pub output_tokens: i32,
+    /// Number of sessions contributing.
+    pub sessions_count: i32,
+    /// ISO 8601 timestamp when this report was generated.
+    pub updated_at: Option<String>,
+    /// Whether the report was marked partial (unpriced routing rows retained).
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// Result of parsing a Codex file
@@ -826,6 +855,33 @@ impl JsonlScanner {
         })
     }
 
+    /// F2 (upstream 0.48.0 #2648): whether a cached resume offset sits on a real
+    /// line boundary. A partial trailing-line write leaves the cached offset
+    /// mid-line; resuming there re-parses from mid-line and corrupts the first
+    /// resumed record. Returns  when the byte just before  is
+    /// not a newline (or the probe fails), signalling the caller to fall back
+    /// to a full re-parse from zero.
+    pub fn is_line_boundary_offset(file_path: &Path, offset: i64) -> bool {
+        use std::io::{Read, Seek};
+        if offset <= 0 {
+            return true;
+        }
+        let Ok(file_size) = fs::metadata(file_path).map(|m| m.len() as i64) else {
+            return false;
+        };
+        if offset >= file_size {
+            return true;
+        }
+        let Ok(mut probe) = File::open(file_path) else {
+            return false;
+        };
+        if probe.seek(SeekFrom::Start((offset - 1) as u64)).is_err() {
+            return false;
+        }
+        let mut prev_byte = [0u8; 1];
+        probe.read_exact(&mut prev_byte).is_ok() && prev_byte[0] == b'\n'
+    }
+
     /// Whether a cached scan should be reused under `options` (issue #2089).
     pub fn should_skip_cached_scan(
         cache: &CostUsageCache,
@@ -835,9 +891,22 @@ impl JsonlScanner {
         options.should_skip_scan(cache.last_scan_unix_ms, now_unix_ms)
     }
 
-    /// Load cache from disk
+    /// Load cache from disk.
+    ///
+    /// Refuses to decode artifacts larger than the load cap
+    /// (`crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES`); an oversized artifact is
+    /// cheaper to rebuild bounded than to decode in one shot, so the caller
+    /// gets a fresh empty cache instead (upstream 0.48.0 overshoot contract).
+    /// Only Codex persistence is bounded; other providers load unbounded.
     pub fn load_cache(provider: ProviderId, cache_root: Option<&Path>) -> CostUsageCache {
         let cache_path = Self::cache_path(provider, cache_root);
+
+        if crate::core::is_bounded_provider(provider) {
+            let file_bytes = crate::core::artifact_file_size(&cache_path) as usize;
+            if file_bytes > crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES {
+                return CostUsageCache::default();
+            }
+        }
 
         if let Ok(contents) = fs::read_to_string(&cache_path)
             && let Ok(cache) = serde_json::from_str(&contents)
@@ -849,13 +918,39 @@ impl JsonlScanner {
     }
 
     /// Save cache to disk (temp sibling + copy into place).
-    pub fn save_cache(provider: ProviderId, cache: &CostUsageCache, cache_root: Option<&Path>) {
+    ///
+    /// Before encoding, prunes the cache to the persistence budget so the
+    /// artifact stays small enough to decode in one shot (upstream 0.48.0
+    /// #2637). Only Codex persistence is bounded; the overshoot contract lets
+    /// the encoded size exceed `MAX_FILE_BYTES` up to `MAX_LOAD_BYTES`
+    /// when protected (partially parsed) entries cannot be trimmed further.
+    pub fn save_cache(provider: ProviderId, cache: &mut CostUsageCache, cache_root: Option<&Path>) {
         let cache_path = Self::cache_path(provider, cache_root);
 
         let Some(parent) = cache_path.parent() else {
             return;
         };
         let _ = fs::create_dir_all(parent);
+
+        if crate::core::is_bounded_provider(provider) {
+            crate::core::prune_out_of_window_for_budget(
+                &mut cache.files,
+                &mut cache.days,
+                cache.scan_since_key.as_deref(),
+                cache.scan_until_key.as_deref(),
+                false,
+            );
+            let estimate = crate::core::estimated_cache_bytes(&cache.files, &cache.days);
+            if estimate > crate::core::CostUsageCacheBudget::MAX_FILE_BYTES {
+                crate::core::trim_in_window_for_budget(
+                    &mut cache.files,
+                    &mut cache.days,
+                    cache.scan_since_key.as_deref(),
+                    cache.scan_until_key.as_deref(),
+                    crate::core::CostUsageCacheBudget::MAX_FILE_BYTES,
+                );
+            }
+        }
 
         let Ok(json) = serde_json::to_string(cache) else {
             return;

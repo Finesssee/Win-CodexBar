@@ -2,6 +2,7 @@
 
 mod adaptive_refresh;
 mod aws_signing;
+mod cost_cache_budget;
 mod cost_pricing;
 pub mod curl_capture;
 mod hook_transition;
@@ -26,6 +27,7 @@ mod widget_snapshot;
 
 pub use adaptive_refresh::*;
 pub use aws_signing::*;
+pub use cost_cache_budget::*;
 pub use cost_pricing::*;
 pub use curl_capture::*;
 pub use hook_transition::*;

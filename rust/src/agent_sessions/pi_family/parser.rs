@@ -131,7 +131,7 @@ fn latest_pi_session_name(path: &Path, prefix_lines: &[&[u8]]) -> Option<String>
         return latest;
     }
     // A mid-read offset may cut a record: drop the first partial line.
-    let cut = offset > 0 && !tail.starts_with(&[b'\n'][..]);
+    let cut = offset > 0 && !tail.starts_with(b"\n");
     let mut tail_lines: Vec<&[u8]> = tail
         .split(|b| *b == b'\n')
         .filter(|l| !l.is_empty())

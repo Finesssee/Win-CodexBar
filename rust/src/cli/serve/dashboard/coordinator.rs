@@ -6,11 +6,13 @@
 //! There is no 504-style "build took too long" path at all: the only failure
 //! surfaced is a build that genuinely errored, and errors are never cached.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
+use tokio::sync::futures::OwnedNotified;
 
 use super::snapshot::SnapshotPayload;
 use super::source::BoxSnapshotFuture;
@@ -59,9 +61,21 @@ impl SnapshotCoordinator {
     pub async fn get(&self) -> Result<Arc<SnapshotPayload>, String> {
         loop {
             // Decide under the lock; the guard is always dropped before awaits.
+            //
+            // Waiter lost-wakeup contract: the waiter creates AND enables its
+            // `OwnedNotified` while holding this same decision guard — the
+            // guard that observes `Slot::Building`. The builder may update the
+            // slot (success, error, or guard-driven reset) only while holding
+            // this same mutex and only calls `notify_waiters` after that
+            // update, so by the time the decision guard drops the waiter's
+            // future is already on the notify wait list and no `notify_waiters`
+            // for this build can have fired in between. The registered future
+            // is then carried out past the guard drop and awaited unlocked
+            // (`OwnedNotified` owns the `Arc<Notify>`, so no borrow of the
+            // guard or slot contents escapes the critical section).
             enum Decision {
                 Serve(Arc<SnapshotPayload>),
-                Wait(Arc<Notify>),
+                Wait(Pin<Box<OwnedNotified>>),
                 Build(Arc<Notify>),
             }
             let decision = {
@@ -71,10 +85,14 @@ impl SnapshotCoordinator {
                         Decision::Serve(payload.clone())
                     }
                     Slot::Building(notify) => {
-                        // Wait on this build. The Notified is registered under
-                        // the lock in `await_build` (closing the lost-wakeup
-                        // window) and only awaited after the guard is released.
-                        Decision::Wait(notify.clone())
+                        // Register AND enable the waiter on this build's Notify
+                        // before releasing the guard that observed Building —
+                        // closes the `notify_waiters` lost-wakeup window: a build
+                        // completing in the instant after our decision cannot
+                        // fire before this future is on the wait list.
+                        let mut notified = Box::pin(notify.clone().notified_owned());
+                        notified.as_mut().enable();
+                        Decision::Wait(notified)
                     }
                     Slot::Empty | Slot::Ready(_, _) => {
                         let notify = Arc::new(Notify::new());
@@ -85,12 +103,13 @@ impl SnapshotCoordinator {
             };
             match decision {
                 Decision::Serve(payload) => return Ok(payload),
-                Decision::Wait(notify) => {
-                    // Registered under the lock, awaited after unlock. On wake
-                    // we re-scan, so a completed build surfaces its cached result
-                    // and a cancelled/panicked build surfaces `Empty` to retry
-                    // instead of hanging on a dead `Notify`.
-                    Self::await_build(&self.slot, &notify).await;
+                Decision::Wait(notified) => {
+                    // Already registered+enabled under the guard that observed
+                    // `Slot::Building`; await after unlock. On wake we re-scan,
+                    // so a completed build surfaces its cached result and a
+                    // cancelled/panicked build surfaces `Empty` to retry instead
+                    // of hanging on a dead `Notify`.
+                    notified.await;
                     continue;
                 }
                 Decision::Build(notify) => {
@@ -122,23 +141,6 @@ impl SnapshotCoordinator {
                 }
             }
         }
-    }
-
-    /// Register interest in `notify` while holding the lock (closing the
-    /// `notify_waiters` lost-wakeup window), then drop the guard and await the
-    /// notification. The `Notified` borrows the owned `notify` argument (not the
-    /// guard), so it cleanly outlives the critical section.
-    async fn await_build(slot: &Arc<StdMutex<Slot>>, notify: &Arc<Notify>) {
-        // Register the waiter under the lock (closing the lost-wakeup window),
-        // then drop the guard and await. The pinned `Notified` borrows the
-        // `notify` argument (not the guard), so it outlives the critical section.
-        let notified = notify.notified();
-        tokio::pin!(notified);
-        {
-            let _guard = slot.lock().expect("coordinator poisoned");
-            notified.as_mut().enable();
-        }
-        notified.await;
     }
 }
 
@@ -347,6 +349,53 @@ mod tests {
     }
 
     // ── F1 lost-wakeup / cancellation / panic regressions ───────────────────
+
+    /// Deterministic lost-wakeup regression: completion is forced into the
+    /// exact window between the waiter's decision poll and its await poll,
+    /// with zero scheduler races — the test holds the slot lock and the
+    /// wakers directly. The waiter's registration MUST be bound to the same
+    /// decision guard that observed `Slot::Building` (not deferred past an
+    /// unlock): `notify_waiters` only reaches already-registered waiters, so
+    /// any registration that happens after the decision guard dropped would
+    /// miss this completion and hang forever (the timeout catches it).
+    #[tokio::test]
+    async fn completion_in_decision_window_sets_waiter_notified() {
+        let coordinator = SnapshotCoordinator::new(
+            Duration::from_secs(3600),
+            counting_source(Arc::new(AtomicUsize::new(0)), Duration::ZERO),
+        );
+        // Place the slot in Building exactly as a real in-flight build would.
+        let build_notify = Arc::new(Notify::new());
+        *coordinator.slot.lock().expect("coordinator poisoned") =
+            Slot::Building(build_notify.clone());
+
+        // First poll: decision observes Building and must register+enable the
+        // waiter UNDER the decision guard, before the guard is released.
+        let mut waiter = Box::pin(coordinator.get());
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(
+            waiter.as_mut().poll(&mut cx).is_pending(),
+            "waiter must park on the in-flight build"
+        );
+
+        // The build completes in the window after the waiter's decision:
+        // swap the slot to Ready and fire notify_waiters while the waiter is
+        // NOT being polled. A waiter whose registration depends on a later
+        // lock acquisition would sleep through this wakeup forever.
+        let payload = Arc::new(build_snapshot(&stub_input()));
+        *coordinator.slot.lock().expect("coordinator poisoned") =
+            Slot::Ready(payload.clone(), Instant::now());
+        build_notify.notify_waiters();
+
+        // The waiter wakes from the enabled registration and re-scans into the
+        // cached payload; the window-resident completion is not lost.
+        let served = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("lost wakeup: waiter hung on a completed build")
+            .unwrap();
+        assert!(Arc::ptr_eq(&payload, &served));
+    }
 
     /// A waiter that observes `Slot::Building` must register its `Notified`
     /// before the lock drops, so a builder completing the instant the waiter

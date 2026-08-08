@@ -437,7 +437,8 @@ impl CostScanner {
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
-        if self.sessions_dirs_override.is_none() {
+        // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
+        if self.sessions_dirs_override.is_none() && self.options.include_pi_sessions {
             let mut seen_pi = HashSet::new();
             crate::pi_session_cost::scan_pi_compatible_into(
                 &mut summary,

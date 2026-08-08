@@ -31,12 +31,17 @@ pub struct CostScanOptions {
     /// Minimum seconds between disk-cache-backed full inspections.
     /// Set to 0 to force a fresh scan (app-driven / forceRefresh).
     pub refresh_min_interval_secs: u64,
+    /// A16 (upstream 0.48.0 --provider-native-only): when false, exclude
+    /// pi/OMP-compatible agent session mirrors from Codex/Claude cost history.
+    /// Defaults to true (include mirrors) for backward compatibility.
+    pub include_pi_sessions: bool,
 }
 
 impl Default for CostScanOptions {
     fn default() -> Self {
         Self {
             refresh_min_interval_secs: DEFAULT_COST_SCAN_REFRESH_MIN_INTERVAL_SECS,
+            include_pi_sessions: true,
         }
     }
 }
@@ -46,6 +51,7 @@ impl CostScanOptions {
     pub fn app_driven() -> Self {
         Self {
             refresh_min_interval_secs: 0,
+            include_pi_sessions: true,
         }
     }
 

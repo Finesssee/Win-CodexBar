@@ -312,12 +312,12 @@ mod tests {
         }
     }
 
-    fn cache(
-        files: &[(&str, CostUsageFileUsage)],
-    ) -> (
+    type TestCache = (
         HashMap<String, CostUsageFileUsage>,
         HashMap<String, HashMap<String, Vec<i32>>>,
-    ) {
+    );
+
+    fn cache(files: &[(&str, CostUsageFileUsage)]) -> TestCache {
         let mut file_map = HashMap::new();
         let mut days: HashMap<String, HashMap<String, Vec<i32>>> = HashMap::new();
         for (key, entry) in files {
@@ -423,13 +423,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn budget_constants_match_upstream() {
-        assert_eq!(CostUsageCacheBudget::MAX_FILE_BYTES, 256 * 1024 * 1024);
-        assert_eq!(CostUsageCacheBudget::MAX_FILE_ENTRIES, 25_000);
-        assert_eq!(CostUsageCacheBudget::MAX_LOAD_BYTES, 320 * 1024 * 1024);
+    // budget_constants_match_upstream builds at compile-time, not per test run.
+    const _: () = {
+        assert!(CostUsageCacheBudget::MAX_FILE_BYTES == 256 * 1024 * 1024);
+        assert!(CostUsageCacheBudget::MAX_FILE_ENTRIES == 25_000);
+        assert!(CostUsageCacheBudget::MAX_LOAD_BYTES == 320 * 1024 * 1024);
         assert!(CostUsageCacheBudget::MAX_FILE_BYTES < CostUsageCacheBudget::MAX_LOAD_BYTES);
-    }
+    };
 
     #[test]
     fn is_unpriced_codex_routing_model_flags_auto_review_and_unattributed() {

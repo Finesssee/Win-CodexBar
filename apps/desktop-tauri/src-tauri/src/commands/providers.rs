@@ -430,16 +430,12 @@ pub(super) fn codex_reset_backfill(
 
     // Backfill each slot from the corresponding cached slot.
     backfill_slot_window(&mut snapshot.primary, &cached.primary);
-    if let (Some(fresh), Some(cached_sec)) =
-        (&mut snapshot.secondary, &cached.secondary)
-    {
+    if let (Some(fresh), Some(cached_sec)) = (&mut snapshot.secondary, &cached.secondary) {
         backfill_slot_window(fresh, cached_sec);
     }
     // Tertiary (monthly/other): the Codex bridge doesn't normally populate this,
     // but the slot exists for forward-compat. Backfill when available.
-    if let (Some(fresh), Some(cached_ter)) =
-        (&mut snapshot.tertiary, &cached.tertiary)
-    {
+    if let (Some(fresh), Some(cached_ter)) = (&mut snapshot.tertiary, &cached.tertiary) {
         backfill_slot_window(fresh, cached_ter);
     }
 }
@@ -454,7 +450,9 @@ fn backfill_slot_window(
     if fresh.resets_at.is_some() {
         return;
     }
-    let Some(cached_reset) = &cached.resets_at else { return };
+    let Some(cached_reset) = &cached.resets_at else {
+        return;
+    };
     // Only backfill when the cached reset is still future — a stale reset is
     // worse than a missing one.
     if let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) {

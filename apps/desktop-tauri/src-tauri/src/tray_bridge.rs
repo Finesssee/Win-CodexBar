@@ -587,15 +587,15 @@ pub(crate) fn codex_lane_headline_window(
     if !snapshot.primary.is_informational {
         return &snapshot.primary;
     }
-    if let Some(ref secondary) = snapshot.secondary {
-        if !secondary.is_informational {
-            return secondary;
-        }
+    if let Some(ref secondary) = snapshot.secondary
+        && !secondary.is_informational
+    {
+        return secondary;
     }
-    if let Some(ref tertiary) = snapshot.tertiary {
-        if !tertiary.is_informational {
-            return tertiary;
-        }
+    if let Some(ref tertiary) = snapshot.tertiary
+        && !tertiary.is_informational
+    {
+        return tertiary;
     }
     &snapshot.primary
 }

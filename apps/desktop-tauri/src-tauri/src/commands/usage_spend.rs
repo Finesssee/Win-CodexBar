@@ -53,16 +53,14 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot]) -> UsageSpendSumm
     // F8 (upstream 0.48.0): check codex cache staleness before scanning. When the
     // debounce has expired, the scan below will rebuild the cache — mark the row
     // as refreshing and include the stale timestamp so the UI shows the indicator.
-    let codex_cache = codexbar::core::JsonlScanner::load_cache(
-        codexbar::core::ProviderId::Codex,
-        None,
-    );
-    let codex_stale = !codex_cache.days.is_empty()
-        && codex_cache.previous_report.is_some();
+    let codex_cache =
+        codexbar::core::JsonlScanner::load_cache(codexbar::core::ProviderId::Codex, None);
+    let codex_stale = !codex_cache.days.is_empty() && codex_cache.previous_report.is_some();
     let codex_stale_updated_at = if codex_stale {
-        codex_cache.previous_report.as_ref().and_then(|r| {
-            r.updated_at.clone()
-        })
+        codex_cache
+            .previous_report
+            .as_ref()
+            .and_then(|r| r.updated_at.clone())
     } else {
         None
     };

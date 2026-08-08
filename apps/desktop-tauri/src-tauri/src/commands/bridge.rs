@@ -219,10 +219,8 @@ impl ProviderUsageSnapshot {
             // so surfaces (MenuCard, CLI, tray) can show "Monthly" instead of the
             // generic "DetailWindowTertiary" slot key.
             tertiary_label: usage.tertiary.as_ref().map(|w| {
-                match codexbar::core::RateWindowCadence::from_minutes(
-                    w.window_minutes.unwrap_or(0),
-                )
-                .label_key()
+                match codexbar::core::RateWindowCadence::from_minutes(w.window_minutes.unwrap_or(0))
+                    .label_key()
                 {
                     "monthly" => "monthly".to_string(),
                     other => other.to_string(),

@@ -291,6 +291,19 @@ fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
         return cost;
     }
 
+    // C4 (upstream 0.48.0): Fast-tier models are priced as Standard × multiplier.
+    // Try Fast pricing before the legacy gpt-4o fallback so Fast-bucket model
+    // IDs get real rates instead of fake gpt-4o defaults. Fast detection is
+    // name-based locally (upstream uses a priority-trace SQLite DB scan that
+    // is absent locally — documented divergence).
+    let normalized = CostUsagePricing::normalize_codex_model(model);
+    if (normalized.contains("fast") || normalized.contains("priority"))
+        && let Some(fast_cost) =
+            CostUsagePricing::codex_fast_cost_usd(model, input as i32, cached as i32, output as i32)
+    {
+        return fast_cost;
+    }
+
     let (input_price, cached_price, output_price) = match model.to_lowercase().as_str() {
         m if m.contains("gpt-4o-mini") => (0.15, 0.075, 0.60),
         m if m.contains("gpt-4o") => (2.50, 1.25, 10.00),

@@ -3,8 +3,7 @@
 //! Uses OAuth tokens stored by the Codex CLI in ~/.codex/auth.json
 
 use crate::core::{
-    CostSnapshot, NamedRateWindow, ProviderError, RateWindow, SESSION_WINDOW_MINUTES,
-    UsageSnapshot, WEEKLY_WINDOW_MINUTES,
+    CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -571,14 +570,20 @@ impl CodexApi {
 enum CodexWindowRole {
     Session,
     Weekly,
+    Monthly,
     Unknown,
 }
 
 fn codex_window_role(window: &RateWindow) -> CodexWindowRole {
-    match window.window_minutes {
-        Some(minutes) if minutes == SESSION_WINDOW_MINUTES => CodexWindowRole::Session,
-        Some(minutes) if minutes >= WEEKLY_WINDOW_MINUTES => CodexWindowRole::Weekly,
-        _ => CodexWindowRole::Unknown,
+    match window
+        .window_minutes
+        .map(RateWindowCadence::from_minutes)
+        .unwrap_or(RateWindowCadence::Unknown)
+    {
+        RateWindowCadence::Session => CodexWindowRole::Session,
+        RateWindowCadence::Monthly => CodexWindowRole::Monthly,
+        RateWindowCadence::Weekly => CodexWindowRole::Weekly,
+        RateWindowCadence::Unknown => CodexWindowRole::Unknown,
     }
 }
 

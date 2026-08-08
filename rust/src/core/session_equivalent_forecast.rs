@@ -12,6 +12,9 @@ use std::sync::{LazyLock, Mutex};
 pub const SESSION_WINDOW_MINUTES: u32 = 300;
 /// Canonical weekly window length (7 days).
 pub const WEEKLY_WINDOW_MINUTES: u32 = 10_080;
+/// Canonical monthly window length (30 days). Upstream 0.48.0 F5 adds a
+/// 30-day ("monthly") rate lane alongside session (5h) and weekly (7d).
+pub const MONTHLY_WINDOW_MINUTES: u32 = 43_200;
 /// Reset-boundary grouping tolerance.
 pub const RESET_TOLERANCE_SECS: i64 = 120;
 

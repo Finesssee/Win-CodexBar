@@ -1,8 +1,67 @@
 //! Rate window model - represents a usage limit window (e.g., 5-hour session, 7-day weekly)
 
-use super::session_equivalent_forecast::SESSION_WINDOW_MINUTES;
+use super::session_equivalent_forecast::{
+    MONTHLY_WINDOW_MINUTES, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES,
+};
 use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Duration cadence of a rate-limit window (upstream 0.48.0 F5).
+///
+/// Codex exposes three lanes: a 5-hour session, a 7-day weekly, and a 30-day
+/// monthly window. Centralizing the cadence here keeps duration-first labels
+/// and bucketing consistent across the ambient provider, the managed multi-
+/// account stack, and the CLI/tray surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RateWindowCadence {
+    /// 5-hour session window (300 minutes).
+    Session,
+    /// 7-day weekly window (10 080 minutes).
+    Weekly,
+    /// 30-day monthly window (43 200 minutes).
+    Monthly,
+    /// Any other window length the upstream buckets don't recognize.
+    Unknown,
+}
+
+impl RateWindowCadence {
+    /// Classify a window length given in minutes into a cadence.
+    ///
+    /// Bucketing (upstream `RateLane` + `classifyRateWindow`):
+    /// - exactly 300 → Session
+    /// - 43 200+    → Monthly
+    /// - 10 080..<43 200 → Weekly
+    /// - anything else → Unknown
+    pub fn from_minutes(minutes: u32) -> Self {
+        if minutes == SESSION_WINDOW_MINUTES {
+            Self::Session
+        } else if minutes >= MONTHLY_WINDOW_MINUTES {
+            Self::Monthly
+        } else if minutes >= WEEKLY_WINDOW_MINUTES {
+            Self::Weekly
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// Classify from seconds (the API and `UsageWindowSnapshot` report seconds).
+    pub fn from_seconds(seconds: i64) -> Self {
+        if seconds <= 0 {
+            return Self::Unknown;
+        }
+        Self::from_minutes(((seconds + 59) / 60) as u32)
+    }
+
+    /// Human-readable label key for this cadence (matches upstream lane names).
+    pub fn label_key(&self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 /// Represents a rate limit window with usage percentage and reset time
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -315,28 +315,28 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
     m.insert(
         "gpt-5.6-terra",
         CodexPricing {
-            input_cost_per_token: 2.5e-6,
-            output_cost_per_token: 1.5e-5,
-            cache_read_input_cost_per_token: 2.5e-7,
+            input_cost_per_token: 2e-6,
+            output_cost_per_token: 1.2e-5,
+            cache_read_input_cost_per_token: 2e-7,
             display_label: None,
             long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 5e-6,
-                output_cost_per_token: 2.25e-5,
-                cache_read_input_cost_per_token: 5e-7,
+                input_cost_per_token: 4e-6,
+                output_cost_per_token: 1.8e-5,
+                cache_read_input_cost_per_token: 4e-7,
             }),
         },
     );
     m.insert(
         "gpt-5.6-luna",
         CodexPricing {
-            input_cost_per_token: 1e-6,
-            output_cost_per_token: 6e-6,
-            cache_read_input_cost_per_token: 1e-7,
+            input_cost_per_token: 2e-7,
+            output_cost_per_token: 1.2e-6,
+            cache_read_input_cost_per_token: 2e-8,
             display_label: None,
             long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 2e-6,
-                output_cost_per_token: 9e-6,
-                cache_read_input_cost_per_token: 2e-7,
+                input_cost_per_token: 4e-7,
+                output_cost_per_token: 1.8e-6,
+                cache_read_input_cost_per_token: 4e-8,
             }),
         },
     );
@@ -692,6 +692,49 @@ impl CostUsagePricing {
         }
 
         trimmed
+    }
+
+    /// Fast-tier multiplier per model (upstream 0.48.0 C4). Fast USD = Standard
+    /// cost × multiplier. Returns `None` for models without a Fast lane.
+    ///
+    /// Multipliers: gpt-5.4, gpt-5.4-mini, gpt-5.6-sol, gpt-5.6-terra,
+    /// gpt-5.6-luna → 2.0; gpt-5.5 → 2.5; else nil.
+    pub fn codex_api_fast_multiplier(model: &str) -> Option<f64> {
+        // Strip fast/priority suffix to find the base model, then match.
+        let key = Self::normalize_codex_model(model);
+        let base = key
+            .strip_suffix("-fast")
+            .or_else(|| key.strip_suffix("-priority"))
+            .map(Self::normalize_codex_model)
+            .unwrap_or(key);
+        match base.as_str() {
+            "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => {
+                Some(2.0)
+            }
+            "gpt-5.5" => Some(2.5),
+            _ => None,
+        }
+    }
+
+    /// Fast-tier cost in USD for a model (upstream 0.48.0 C4).
+    ///
+    /// Computes the standard cost for the base model (stripping fast/priority
+    /// suffixes), then applies the Fast multiplier. Returns `None` when the
+    /// model has no Fast lane or when long-context input exceeds the 272 000
+    /// threshold guard (Fast is not offered above that).
+    pub fn codex_fast_cost_usd(model: &str, input: i32, cached: i32, output: i32) -> Option<f64> {
+        let multiplier = Self::codex_api_fast_multiplier(model)?;
+        // Long-context guard: Fast is not offered above the threshold.
+        if (input as u64) > CODEX_LONG_CONTEXT_THRESHOLD {
+            return None;
+        }
+        let base = Self::codex_cost_usd(
+            model,
+            input.max(0) as u64,
+            cached.max(0) as u64,
+            output.max(0) as u64,
+        )?;
+        Some(base * multiplier)
     }
 
     /// Calculate cost for Codex usage in USD

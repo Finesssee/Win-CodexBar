@@ -13,16 +13,17 @@ use chrono::{DateTime, TimeZone, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::browser::cookies::Cookie;
 use crate::core::curl_capture;
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
     RateWindow, SourceMode, UsageSnapshot,
 };
-use crate::providers::browser_cookie_header;
+use crate::providers::browser_cookies_for_domain;
 
 const API_HOSTS: &[&str] = &["ai.zoom.us", "zoommate.zoom.us"];
 const COOKIE_DOMAINS: &[&str] = &["ai.zoom.us", "zoommate.zoom.us", "zoom.us"];
@@ -242,16 +243,10 @@ impl ZoomMateProvider {
             }
         }
 
-        // 2) Browser cookies → mint bearer.
-        let cookie_header = browser_cookie_header(COOKIE_DOMAINS)?;
-        let trimmed = cookie_header.trim();
-        if trimmed.is_empty() {
-            return Err(ProviderError::NoCookies);
-        }
-        let mut cookie_by_host = HashMap::new();
-        for host in API_HOSTS {
-            cookie_by_host.insert((*host).to_string(), trimmed.to_string());
-        }
+        // 2) Browser cookies → mint bearer. Upstream 0.48.0 #2627: keep each
+        // browser record's scope — a broad zoom.us read narrows per destination
+        // host instead of one merged header fanned out to both API hosts.
+        let cookie_by_host = browser_cookie_headers_by_host()?;
         self.request_context_from_cookies(cookie_by_host, ctx.web_timeout)
             .await
     }
@@ -315,10 +310,9 @@ impl ZoomMateProvider {
             .header("Sec-Fetch-Dest", "empty")
             .header("Sec-Fetch-Mode", "cors")
             .header("Sec-Fetch-Site", "same-site");
-        if let Some(cookie) = cookie_by_host
-            .get(host)
-            .or_else(|| cookie_by_host.values().next())
-        {
+        // Upstream #2627: only the header scoped to THIS destination host is
+        // sent — a leaf-host cookie never leaks onto its sibling on failover.
+        if let Some(cookie) = cookie_by_host.get(host) {
             req = req.header("Cookie", cookie);
         }
         let resp = req.send().await?;
@@ -421,10 +415,8 @@ impl ZoomMateProvider {
             }
             req = req.header(name.as_str(), value.as_str());
         }
-        if let Some(cookie) = cookie_by_host
-            .get(host)
-            .or_else(|| cookie_by_host.values().next())
-        {
+        // Upstream #2627: only the header scoped to THIS destination host is sent.
+        if let Some(cookie) = cookie_by_host.get(host) {
             req = req.header("Cookie", cookie);
         }
         // Fixed Origin/Referer so captured values never widen the first-party boundary.
@@ -588,6 +580,85 @@ where
         }
     }
     Err(last_err.unwrap_or_else(|| ProviderError::Other("No ZoomMate API host succeeded.".into())))
+}
+
+// ── Host-scoped browser cookies (upstream 0.48.0 #2627) ─────────────────────
+
+/// Whether a browser would attach `cookie_domain` to `host` per RFC 6265
+/// domain matching. Chromium/Firefox raw host keys carry the scope upstream
+/// tracks explicitly in `BrowserCookieScope`: a leading `.` marks a
+/// parent-domain cookie (sendable to the domain and any subdomain), anything
+/// else is host-only (sendable to its own host only).
+fn cookie_is_sendable_to_host(cookie_domain: &str, host: &str) -> bool {
+    let cookie_domain = cookie_domain.trim();
+    let normalized = cookie_domain
+        .strip_prefix('.')
+        .unwrap_or(cookie_domain)
+        .to_ascii_lowercase();
+    let host = host.trim().to_ascii_lowercase();
+    if !API_HOSTS.contains(&host.as_str()) || normalized.is_empty() {
+        return false;
+    }
+    if cookie_domain.starts_with('.') {
+        host == normalized || host.ends_with(&format!(".{normalized}"))
+    } else {
+        host == normalized
+    }
+}
+
+/// Build the `Cookie:` header for one destination host, preserving record
+/// order (mirrors upstream `ZoomMateCookieImporter.cookieHeaders`).
+fn cookie_header_for_host(records: &[Cookie], host: &str) -> Option<String> {
+    if !API_HOSTS.contains(&host) {
+        return None;
+    }
+    let pairs: Vec<String> = records
+        .iter()
+        .filter(|cookie| cookie_is_sendable_to_host(&cookie.domain, host))
+        .map(Cookie::to_header_value)
+        .collect();
+    (!pairs.is_empty()).then(|| pairs.join("; "))
+}
+
+/// Partition browser-cookie records into the per-destination-host headers used
+/// by every ZoomMate request. Keeping the destination in the map keys makes it
+/// impossible for host failover to reuse a leaf-host cookie on its sibling.
+fn cookie_headers_by_host(records: &[Cookie]) -> HashMap<String, String> {
+    API_HOSTS
+        .iter()
+        .filter_map(|host| cookie_header_for_host(records, host).map(|h| ((*host).to_string(), h)))
+        .collect()
+}
+
+/// Gather browser cookie records across all ZoomMate domains (parent included)
+/// and partition them per API host with scope preserved.
+fn browser_cookie_headers_by_host() -> Result<HashMap<String, String>, ProviderError> {
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut records: Vec<Cookie> = Vec::new();
+    for domain in COOKIE_DOMAINS {
+        match browser_cookies_for_domain(domain) {
+            Ok(cookies) => {
+                for cookie in cookies {
+                    if seen.insert((
+                        cookie.name.clone(),
+                        cookie.domain.clone(),
+                        cookie.path.clone(),
+                    )) {
+                        records.push(cookie);
+                    }
+                }
+            }
+            // A domain simply holding no cookies is fine when another provides
+            // them; real import errors still surface.
+            Err(ProviderError::NoCookies) => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    let headers = cookie_headers_by_host(&records);
+    if headers.is_empty() {
+        return Err(ProviderError::NoCookies);
+    }
+    Ok(headers)
 }
 
 /// cURL validation: https, host ∈ {ai.zoom.us, zoommate.zoom.us}, path exactly
@@ -882,5 +953,99 @@ mod tests {
         b.insert("ai.zoom.us".into(), "c=1".into());
         assert_eq!(cookie_fingerprint(&a), cookie_fingerprint(&b));
         assert_eq!(cookie_fingerprint(&a).len(), 64);
+    }
+
+    // ── F16: browser cookie scope preservation (upstream #2627) ───
+
+    #[derive(Deserialize)]
+    struct CookieScopeFixture {
+        records: Vec<FixtureRecord>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureRecord {
+        source_domain: String,
+        domain: String,
+        scope: String,
+        name: String,
+        value: String,
+    }
+
+    /// Upstream fixture `issue-2507-cookie-scope.json`, copied verbatim: the raw
+    /// browser host key lives in `sourceDomain`; our `Cookie.domain` carries the
+    /// same raw form, and the leading dot encodes the fixture's explicit scope.
+    fn issue_2507_records() -> Vec<Cookie> {
+        let fixture: CookieScopeFixture = serde_json::from_str(include_str!(
+            "../fixtures/zoommate/issue-2507-cookie-scope.json"
+        ))
+        .unwrap();
+        fixture
+            .records
+            .into_iter()
+            .map(|record| {
+                // Guard the dot↔scope derivation against fixture drift.
+                let derived = if record.source_domain.starts_with('.') {
+                    "domain"
+                } else {
+                    "hostOnly"
+                };
+                assert_eq!(derived, record.scope, "{}", record.name);
+                assert_eq!(
+                    record.source_domain.trim_start_matches('.'),
+                    record.domain,
+                    "{}",
+                    record.name
+                );
+                Cookie {
+                    name: record.name,
+                    value: record.value,
+                    domain: record.source_domain,
+                    path: "/".into(),
+                    expires: None,
+                    is_secure: true,
+                    is_http_only: true,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn issue_2507_fixture_routes_parent_cookie_to_both_hosts_without_leaks() {
+        let records = issue_2507_records();
+        assert_eq!(
+            cookie_header_for_host(&records, "ai.zoom.us").as_deref(),
+            Some("parent=fake; ai-only=fake")
+        );
+        assert_eq!(
+            cookie_header_for_host(&records, "zoommate.zoom.us").as_deref(),
+            Some("parent=fake; mate-only=fake")
+        );
+    }
+
+    #[test]
+    fn cookie_scope_filter_follows_rfc_6265_scope() {
+        assert!(cookie_is_sendable_to_host("ai.zoom.us", "ai.zoom.us"));
+        assert!(!cookie_is_sendable_to_host(
+            "ai.zoom.us",
+            "zoommate.zoom.us"
+        ));
+        assert!(cookie_is_sendable_to_host(".zoom.us", "ai.zoom.us"));
+        assert!(cookie_is_sendable_to_host(".zoom.us", "zoommate.zoom.us"));
+        // Plain zoom.us is host-only: never sent to leaf API hosts.
+        assert!(!cookie_is_sendable_to_host("zoom.us", "ai.zoom.us"));
+        // Sibling subdomains are not destinations, and the host-only
+        // marketing cookie doesn't roam either.
+        assert!(!cookie_is_sendable_to_host(
+            "marketing.zoom.us",
+            "ai.zoom.us"
+        ));
+        assert!(cookie_header_for_host(&issue_2507_records(), "marketing.zoom.us").is_none());
+        // Suffix-lookalike attackers and empty domains never match.
+        assert!(!cookie_is_sendable_to_host(
+            "zoom.us.attacker.com",
+            "ai.zoom.us"
+        ));
+        assert!(!cookie_is_sendable_to_host("", "ai.zoom.us"));
     }
 }

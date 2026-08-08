@@ -277,6 +277,11 @@ struct QuotaSnapshot {
     quota_id: Option<String>,
     #[serde(default)]
     placeholder: bool,
+    /// Absolute AI-credit consumption counter reported for token-billed seats
+    /// (upstream 0.48.0 #2613: `credits_used`). Kept off the rate-window path
+    /// on purpose — a counter has no quota denominator to render.
+    #[serde(default, deserialize_with = "deserialize_optional_f64")]
+    credits_used: Option<f64>,
 }
 
 // --- Snapshot building ---
@@ -287,6 +292,7 @@ fn snapshot_from_response(response: CopilotUsageResponse) -> Result<UsageSnapsho
         .as_deref()
         .and_then(parse_iso_date);
     let quotas = response.usable_quotas(reset);
+    let credits_used = response.credits_used_counter();
 
     let primary_quota = quotas.premium.clone().or_else(|| quotas.first.clone());
     if primary_quota.is_none()
@@ -294,6 +300,16 @@ fn snapshot_from_response(response: CopilotUsageResponse) -> Result<UsageSnapsho
         && quotas.completions.is_none()
         && response.token_based_billing
     {
+        // Token-billed seats reporting zero-entitlement quota snapshots still
+        // carry their true consumption in the absolute credits counter —
+        // surface it instead of blanking the seat (upstream #2613 regression).
+        if let Some(credits) = credits_used {
+            let mut primary = RateWindow::informational(format_credits_used(credits));
+            primary.resets_at = reset;
+            return Ok(
+                UsageSnapshot::new(primary).with_login_method(plan_label(&response.copilot_plan))
+            );
+        }
         return Err(ProviderError::Other(
             "Copilot Business token-based billing usage is unavailable from GitHub's current endpoint.".to_string(),
         ));
@@ -329,7 +345,30 @@ fn snapshot_from_response(response: CopilotUsageResponse) -> Result<UsageSnapsho
 
     usage.extra_rate_windows.extend(quotas.extra);
 
+    // Absolute AI-credit consumption for token-billed seats, alongside the
+    // windowed quotas when both exist (upstream attaches CopilotCreditsSnapshot
+    // at snapshot level; locally an informational extra window keeps it on the
+    // snapshot and exports — including diagnostics — without inventing a fake
+    // quota denominator).
+    if let Some(credits) = credits_used {
+        usage = usage.with_extra_rate_window(
+            "ai-credits",
+            "AI credits",
+            RateWindow::informational(format_credits_used(credits)),
+        );
+    }
+
     Ok(usage)
+}
+
+/// Render the absolute credits counter (whole numbers without decimals).
+fn format_credits_used(credits: f64) -> String {
+    let amount = if credits.fract() == 0.0 {
+        format!("{credits:.0}")
+    } else {
+        format!("{credits:.2}")
+    };
+    format!("{amount} AI credits used")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +377,22 @@ enum CopilotQuotaKind {
     Chat,
     Completions,
     Other,
+}
+
+/// Classify a quota entry by map key + quota_id (shared by window selection
+/// and the credits-counter lookup).
+fn classify_quota_kind(key: &str, quota_id: &str) -> CopilotQuotaKind {
+    let key = key.to_ascii_lowercase();
+    let id = quota_id.to_ascii_lowercase();
+    if key.contains("chat") || id.contains("chat") {
+        CopilotQuotaKind::Chat
+    } else if key.contains("completion") || id.contains("completion") {
+        CopilotQuotaKind::Completions
+    } else if key.contains("premium") || id.contains("premium") || id.contains("interaction") {
+        CopilotQuotaKind::Premium
+    } else {
+        CopilotQuotaKind::Other
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -366,16 +421,7 @@ impl UsableQuota {
 
         let quota_id = snapshot.quota_id.as_deref().unwrap_or_default();
         let key = key.to_ascii_lowercase();
-        let id = quota_id.to_ascii_lowercase();
-        let kind = if key.contains("chat") || id.contains("chat") {
-            CopilotQuotaKind::Chat
-        } else if key.contains("completion") || id.contains("completion") {
-            CopilotQuotaKind::Completions
-        } else if key.contains("premium") || id.contains("premium") || id.contains("interaction") {
-            CopilotQuotaKind::Premium
-        } else {
-            CopilotQuotaKind::Other
-        };
+        let kind = classify_quota_kind(&key, quota_id);
 
         Some(Self {
             kind,
@@ -429,6 +475,42 @@ struct UsableQuotas {
 }
 
 impl CopilotUsageResponse {
+    /// Absolute AI-credit counter for token-billed seats (upstream 0.48.0
+    /// #2593/#2613): the first snapshot carrying `credits_used`, preferring
+    /// premium- then chat-classified entries — the order upstream reads them
+    /// in. Zero-entitlement *placeholder* snapshots still count: the absolute
+    /// counter is real consumption data even when no percentage window can
+    /// render (`carriesCreditsCounter`).
+    fn credits_used_counter(&self) -> Option<f64> {
+        let mut chat: Option<f64> = None;
+        let mut first: Option<f64> = None;
+        for (key, value) in &self.quota_snapshots.entries {
+            let Ok(snapshot) = serde_json::from_value::<QuotaSnapshot>(value.clone()) else {
+                continue;
+            };
+            let Some(credits) = snapshot.credits_used else {
+                continue;
+            };
+            if !credits.is_finite() {
+                continue;
+            }
+            match classify_quota_kind(key, snapshot.quota_id.as_deref().unwrap_or_default()) {
+                CopilotQuotaKind::Premium => return Some(credits),
+                CopilotQuotaKind::Chat => {
+                    if chat.is_none() {
+                        chat = Some(credits);
+                    }
+                }
+                _ => {
+                    if first.is_none() {
+                        first = Some(credits);
+                    }
+                }
+            }
+        }
+        chat.or(first)
+    }
+
     fn usable_quotas(&self, reset: Option<DateTime<Utc>>) -> UsableQuotas {
         let mut quotas = UsableQuotas::default();
 
@@ -949,5 +1031,135 @@ mod tests {
             normalized_api_host(Some("api.github.example.com")),
             "api.github.example.com".to_string()
         );
+    }
+
+    // ── A15: credits_used counter for token-billed seats (upstream #2613) ───
+
+    #[test]
+    fn decodes_credits_used_as_number_or_string() {
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "business",
+                "quota_reset_date": "2026-06-01",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "entitlement": 300,
+                        "remaining": 240,
+                        "percent_remaining": 80,
+                        "quota_id": "premium_interactions",
+                        "credits_used": "1234.56"
+                    }
+                }
+            }"#,
+        );
+        let extra = &usage.extra_rate_windows;
+        assert!(
+            extra.iter().any(|w| w.id == "ai-credits"
+                && w.window.reset_description.as_deref() == Some("1234.56 AI credits used")),
+            "{extra:?}"
+        );
+    }
+
+    #[test]
+    fn zero_entitlement_business_seat_surfaces_credits_counter() {
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "business",
+                "token_based_billing": true,
+                "quota_reset_date": "2026-06-01",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "entitlement": 0,
+                        "remaining": 0,
+                        "percent_remaining": 100,
+                        "quota_id": "premium_interactions",
+                        "credits_used": 1234
+                    }
+                }
+            }"#,
+        );
+        // Not an error anymore: informational counter row without a fake bar.
+        assert!(usage.primary.is_informational);
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("1234 AI credits used")
+        );
+        assert!(usage.primary.resets_at.is_some());
+        assert_eq!(usage.login_method.as_deref(), Some("Copilot Business"));
+    }
+
+    #[test]
+    fn placeholder_snapshot_still_carries_its_credits_counter() {
+        // Upstream carriesCreditsCounter: a placeholder cannot become a window,
+        // but its absolute counter is real consumption and must survive.
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "business",
+                "token_based_billing": true,
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "entitlement": 0,
+                        "remaining": 0,
+                        "percent_remaining": 0,
+                        "quota_id": "",
+                        "placeholder": true,
+                        "credits_used": 42.5
+                    }
+                }
+            }"#,
+        );
+        assert!(usage.primary.is_informational);
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("42.50 AI credits used")
+        );
+    }
+
+    #[test]
+    fn premium_credits_counter_wins_over_chat() {
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "pro",
+                "quota_snapshots": {
+                    "chat": {
+                        "entitlement": 100,
+                        "remaining": 75,
+                        "percent_remaining": 75,
+                        "quota_id": "chat",
+                        "credits_used": 1
+                    },
+                    "premium_interactions": {
+                        "entitlement": 300,
+                        "remaining": 240,
+                        "percent_remaining": 80,
+                        "quota_id": "premium_interactions",
+                        "credits_used": 7
+                    }
+                }
+            }"#,
+        );
+        let credits_row = usage
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "ai-credits")
+            .expect("ai-credits row");
+        assert_eq!(
+            credits_row.window.reset_description.as_deref(),
+            Some("7 AI credits used")
+        );
+        // Windows still render normally next to the counter.
+        assert!(credits_row.window.is_informational);
+        assert!((usage.primary.used_percent - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn business_seat_without_credits_keeps_existing_error() {
+        let err = parse_snapshot_result(
+            r#"{
+                "copilot_plan": "business",
+                "token_based_billing": true
+            }"#,
+        );
+        assert!(err.is_err());
     }
 }

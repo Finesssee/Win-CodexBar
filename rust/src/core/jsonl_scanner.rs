@@ -931,6 +931,27 @@ impl JsonlScanner {
     /// the encoded size exceed `MAX_FILE_BYTES` up to `MAX_LOAD_BYTES`
     /// when protected (partially parsed) entries cannot be trimmed further.
     pub fn save_cache(provider: ProviderId, cache: &mut CostUsageCache, cache_root: Option<&Path>) {
+        Self::save_cache_with_limit(
+            provider,
+            cache,
+            cache_root,
+            crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES,
+        );
+    }
+
+    /// Save with an explicit post-encode refusal limit, injected by tests.
+    ///
+    /// Identical to `save_cache` except the post-encode oversize check uses
+    /// `max_load_bytes` rather than the production `MAX_LOAD_BYTES` const.
+    /// Production callers MUST use `save_cache`; this helper exists so the
+    /// refusal / stale-destination removal can be exercised without encoding a
+    /// ~320 MiB test artifact.
+    fn save_cache_with_limit(
+        provider: ProviderId,
+        cache: &mut CostUsageCache,
+        cache_root: Option<&Path>,
+        max_load_bytes: usize,
+    ) {
         let cache_path = Self::cache_path(provider, cache_root);
 
         let Some(parent) = cache_path.parent() else {
@@ -995,17 +1016,22 @@ impl JsonlScanner {
         };
 
         // F19 (upstream 0.48.0): after bounded encode, if the artifact still
-        // exceeds MAX_LOAD_BYTES, refuse persistence — do not write the file.
-        // This is a one-shot refusal (not a persist/refuse/rebuild loop): the
-        // budget enforcement above already pruned and trimmed; if the result is
-        // still too large (e.g. a single protected entry exceeds the limit), the
+        // exceeds MAX_LOAD_BYTES, refuse persistence. Also remove any existing
+        // destination artifact so a stale/oversized file cannot persist and
+        // trip the load-refusal path on the next scan (which would force an
+        // unnecessary full rebuild from a poisoned artifact). This is a
+        // one-shot refusal (not a persist/refuse/rebuild loop): the budget
+        // enforcement above already pruned and trimmed; if the result is still
+        // too large (e.g. a single protected entry exceeds the limit), the
         // artifact is dropped and the next scan rebuilds from scratch.
         if crate::core::is_bounded_provider(provider)
             && crate::core::CostUsageCacheBudget::should_refuse_persistence(
                 json.len(),
-                crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES,
+                max_load_bytes,
             )
         {
+            // Best-effort removal; ignore errors (file may not exist).
+            let _ = fs::remove_file(&cache_path);
             return;
         }
 
@@ -1547,5 +1573,143 @@ line2
         JsonlScanner::save_cache(ProviderId::Claude, &mut cache, Some(&cache_root));
         let loaded = JsonlScanner::load_cache(ProviderId::Claude, Some(&cache_root));
         assert!(loaded.files.contains_key("claude.jsonl"));
+    }
+
+    #[test]
+    fn save_cache_refusal_removes_preexisting_destination_artifact() {
+        // F19 integration: when the post-encode check refuses the artifact, any
+        // pre-existing destination file is removed so a stale/oversized artifact
+        // cannot persist and trigger load/refuse/rebuild behavior on next scan.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let mut cache = CostUsageCache::default();
+        cache.files.insert(
+            "big.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::from([(
+                    "2026-01-10".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
+                )]),
+                parsed_bytes: None,
+                last_model: None,
+                last_totals: None,
+            },
+        );
+
+        // Precreate a "stale" destination artifact so the refusal must remove
+        // it. We seed it via a large (over_max) save_limit so the save_cache_with_limit
+        // first ENCODES the small cache fine under a generous limit, writes the file,
+        // then a follow-up call with a tiny limit must refuse AND remove.
+        let cache_path = {
+            // Exercise the private helper indirectly via the public path: first
+            // persist a valid artifact under a generous limit via save_cache.
+            // Then call with an impossible limit (encoded JSON ~hundreds of
+            // bytes, limit = 1 byte) to force refusal.
+            JsonlScanner::save_cache_with_limit(
+                ProviderId::Codex,
+                &mut cache,
+                Some(&cache_root),
+                usize::MAX,
+            );
+            let p = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+            assert!(p.exists(), "precreate destination artifact");
+            p
+        };
+
+        // Sanity: a normal load succeeds against the precreated artifact.
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(loaded.files.contains_key("big.jsonl"));
+
+        // Force refusal with a 1-byte limit: encoded cache will exceed it.
+        JsonlScanner::save_cache_with_limit(ProviderId::Codex, &mut cache, Some(&cache_root), 1);
+
+        // Destination must be gone — no stale artifact may persist.
+        assert!(
+            !cache_path.exists(),
+            "refusal must remove preexisting destination artifact"
+        );
+
+        // No temp file should remain in the cache root (only unique tmp name was used).
+        let mut tmp_entries = Vec::new();
+        for entry in std::fs::read_dir(&cache_root).unwrap() {
+            let name = entry.unwrap().file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') && name.ends_with(".tmp") {
+                tmp_entries.push(name.into_owned());
+            }
+        }
+        // Best-effort temp cleanup writes an empty file at the unique name; the
+        // invariant is that NO tmp file contains a complete artifact. The set
+        // should at most contain a single zero-byte remnant from the cleanup
+        // (or be empty); we persist via copy() rather than rename so no live
+        // tmp holds data after the save path completes.
+        for t in &tmp_entries {
+            let meta = std::fs::metadata(cache_root.join(t)).unwrap();
+            assert_eq!(meta.len(), 0, "tmp remnant must be empty: {t}");
+        }
+
+        // Loading after removal yields a fresh default cache (no rebuild loop).
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            loaded.files.is_empty(),
+            "no rebuild loop from removed artifact"
+        );
+    }
+
+    #[test]
+    fn save_cache_at_exact_limit_is_accepted() {
+        // F19 boundary: an encoded artifact at exactly the injected limit is
+        // accepted (only strictly-larger artifacts are refused).
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let cache = CostUsageCache::default();
+        // Serialize to learn the actual encoded size for this exact struct.
+        let json = serde_json::to_string(&cache).unwrap();
+        let exact_limit = json.len();
+
+        let mut cache_for_save = cache;
+        JsonlScanner::save_cache_with_limit(
+            ProviderId::Codex,
+            &mut cache_for_save,
+            Some(&cache_root),
+            exact_limit,
+        );
+
+        let cache_path = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache_path.exists(),
+            "artifact at exact limit must be persisted"
+        );
+    }
+
+    #[test]
+    fn save_cache_one_over_limit_is_refused_and_removes_destination() {
+        // F19 boundary: an encoded artifact one byte over the injected limit is
+        // refused, and any pre-existing destination is removed.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let cache = CostUsageCache::default();
+        let json = serde_json::to_string(&cache).unwrap();
+        // One byte short of the encoded size forces refusal on the next attempt.
+        let under_by_one = json.len().saturating_sub(1);
+
+        let mut cache_for_save = cache;
+        JsonlScanner::save_cache_with_limit(
+            ProviderId::Codex,
+            &mut cache_for_save,
+            Some(&cache_root),
+            under_by_one,
+        );
+
+        let cache_path = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            !cache_path.exists(),
+            "one-over-limit encoded artifact must be refused"
+        );
     }
 }

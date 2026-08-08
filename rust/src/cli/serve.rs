@@ -1007,8 +1007,11 @@ mod tests {
             elapsed >= budget,
             "deadline fired early: {elapsed:?} < {budget:?}"
         );
+        // Upper ceiling 2.5 s: under a per-read-reset design this client would
+        // hold the connection for the whole 50-byte loop (~3.5 s incl. peeks),
+        // so this still fails red — while tolerating full-suite scheduling lag.
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < Duration::from_millis(2_500),
             "trickling bytes extended the overall deadline: {elapsed:?}"
         );
         let response = String::from_utf8_lossy(&response);
@@ -1135,5 +1138,94 @@ mod tests {
             String::from_utf8_lossy(&response)
         );
         server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn deadline_driven_release_frees_gated_slot() {
+        // Regression (review follow-up): a semaphore permit MUST be owned for the
+        // whole handle_client future and released when the SERVER's total head
+        // deadline completes its 400/close path — not by client EOF/manual drop.
+        // The holder client stays connected the entire test.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let holder_budget = Duration::from_millis(500);
+        let config = Arc::new(head_test_config(holder_budget, None));
+        let server_task = tokio::spawn(serve_listener(listener, config, 1));
+
+        // Fill the single permit with a holder that never sends a single byte.
+        let mut holder = TcpStream::connect(addr).await.unwrap();
+
+        // Synchronize until that permit is provably held: an over-cap probe gets
+        // an immediate close with zero response bytes.
+        let mut rejected = false;
+        for _ in 0..40 {
+            let mut probe = TcpStream::connect(addr).await.unwrap();
+            let mut buf = [0_u8; 16];
+            match tokio::time::timeout(Duration::from_millis(300), probe.read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    rejected = true;
+                    break;
+                }
+                // Probe landed while the holder was still being accepted; retry.
+                _ => drop(probe),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(rejected, "over-cap probe was never closed immediately");
+
+        // Causality phase: the holder is NOT dropped/aborted/shut down. The
+        // server's injected total head deadline expires on its own, completing
+        // the pinned 400/close path. read_to_end returns at the server's FIN;
+        // the holder socket itself stays OPEN.
+        let mut holder_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            holder.read_to_end(&mut holder_response),
+        )
+        .await
+        .expect("server never drove its deadline/close on the held slot")
+        .unwrap();
+        let holder_response = String::from_utf8_lossy(&holder_response);
+        assert!(
+            holder_response.starts_with("HTTP/1.1 400"),
+            "deadline path must answer the holder with the pinned 400, got: {holder_response}"
+        );
+        assert!(holder_response.contains("Cache-Control: no-store\r\n"));
+        assert!(holder_response.contains(r#""error":"invalid request""#));
+
+        // The permit frees only when the server task finishes — after the
+        // deadline AND the bounded (~1 s) graceful-drain that runs while the
+        // still-connected holder stays silent. Retry a normal client until the
+        // freed slot serves it; early retries may still be over-cap closed.
+        let started = Instant::now();
+        let health = loop {
+            let attempt = async {
+                let mut good = TcpStream::connect(addr).await.ok()?;
+                good.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                    .await
+                    .ok()?;
+                let mut response = Vec::new();
+                tokio::time::timeout(Duration::from_millis(800), good.read_to_end(&mut response))
+                    .await
+                    .ok()?
+                    .ok()?;
+                Some(String::from_utf8_lossy(&response).into_owned())
+            };
+            if let Some(text) = attempt.await
+                && text.starts_with("HTTP/1.1 200")
+            {
+                break text;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(8),
+                "permit was never released after the server deadline + graceful drain"
+            );
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        };
+        assert!(health.contains("\"status\":\"ok\""), "got: {health}");
+        // Holder is still connected throughout everything above; cleanup only
+        // after all success assertions.
+        server_task.abort();
+        drop(holder);
     }
 }

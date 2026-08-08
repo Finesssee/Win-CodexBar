@@ -1571,4 +1571,43 @@ mod tests {
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
         assert_eq!(primary, 90.0);
     }
+
+    #[test]
+    fn f5_headline_prefers_non_informational_primary() {
+        let snapshot = fake_snapshot_with("codex", "Codex", 50.0, Some(20.0), Some(30.0), None);
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_falls_back_to_secondary_when_primary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(25.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_falls_back_to_tertiary_when_primary_and_secondary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(35.0), None);
+        snapshot.primary.is_informational = true;
+        snapshot.secondary.as_mut().unwrap().is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 35.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_returns_primary_when_all_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(0.0), None);
+        snapshot.primary.is_informational = true;
+        if let Some(sec) = &mut snapshot.secondary {
+            sec.is_informational = true;
+        }
+        if let Some(ter) = &mut snapshot.tertiary {
+            ter.is_informational = true;
+        }
+        let headline = codex_lane_headline_window(&snapshot);
+        // Falls back to primary (the placeholder) when all are informational.
+        assert!(headline.is_informational);
+    }
 }

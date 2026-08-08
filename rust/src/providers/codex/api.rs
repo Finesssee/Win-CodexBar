@@ -1476,4 +1476,51 @@ mod tests {
         assert_eq!(cost.used, 40.0);
         assert_eq!(cost.limit, Some(100.0));
     }
+
+    fn win(minutes: u32, used: f64) -> RateWindow {
+        RateWindow::with_details(used, Some(minutes), None, None)
+    }
+
+    #[test]
+    fn f5_normalize_array_routes_session_weekly_monthly_to_lanes() {
+        // 5h session + weekly + monthly → (session, weekly, monthly, None)
+        let windows = vec![win(300, 10.0), win(10_080, 20.0), win(43_200, 30.0)];
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(secondary.unwrap().window_minutes, Some(10_080));
+        assert_eq!(tertiary.unwrap().window_minutes, Some(43_200));
+        assert!(code_review.is_none());
+    }
+
+    #[test]
+    fn f5_normalize_array_monthly_routes_to_tertiary_not_secondary() {
+        // Monthly must go to tertiary, NOT secondary — so #268's weekly math
+        // and "Weekly" label stay untouched.
+        let windows = vec![win(43_200, 50.0), win(10_080, 20.0)];
+        let (primary, secondary, tertiary, _) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300)); // no session → placeholder
+        assert_eq!(secondary.unwrap().window_minutes, Some(10_080));
+        assert_eq!(tertiary.unwrap().window_minutes, Some(43_200));
+    }
+
+    #[test]
+    fn f5_normalize_array_empty_returns_placeholder_primary() {
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(vec![]);
+        assert!(primary.is_informational);
+        assert!(secondary.is_none());
+        assert!(tertiary.is_none());
+        assert!(code_review.is_none());
+    }
+
+    #[test]
+    fn f5_normalize_array_unknown_windows_fall_to_code_review() {
+        // Windows with unrecognized durations (not 300/10080/43200) go to the
+        // remaining/code_review bucket.
+        let windows = vec![win(300, 10.0), win(999, 5.0)];
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert!(secondary.is_none());
+        assert!(tertiary.is_none());
+        assert_eq!(code_review.unwrap().window_minutes, Some(999));
+    }
 }

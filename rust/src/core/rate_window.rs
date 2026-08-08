@@ -308,4 +308,78 @@ mod tests {
         );
         assert_eq!(RateWindow::monthly_window_minutes(None), None);
     }
+
+    #[test]
+    fn cadence_boundary_session_exactly_300() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(300),
+            RateWindowCadence::Session
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_weekly_10080() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(10_080),
+            RateWindowCadence::Weekly
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_below_monthly_43199_is_weekly() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(43_199),
+            RateWindowCadence::Weekly
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_monthly_43200() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(43_200),
+            RateWindowCadence::Monthly
+        );
+    }
+
+    #[test]
+    fn cadence_from_seconds_rounding() {
+        // from_seconds rounds up: (seconds + 59) / 60
+        // 300 min = 18000s exactly → Session
+        assert_eq!(
+            RateWindowCadence::from_seconds(18_000),
+            RateWindowCadence::Session
+        );
+        // 18001s → (18001+59)/60 = 301 min → Unknown (not exactly 300)
+        assert_eq!(
+            RateWindowCadence::from_seconds(18_001),
+            RateWindowCadence::Unknown
+        );
+        // 10080 min = 604800s → Weekly
+        assert_eq!(
+            RateWindowCadence::from_seconds(604_800),
+            RateWindowCadence::Weekly
+        );
+        // 43200 min = 2592000s → Monthly
+        assert_eq!(
+            RateWindowCadence::from_seconds(2_592_000),
+            RateWindowCadence::Monthly
+        );
+        // 0 or negative → Unknown
+        assert_eq!(
+            RateWindowCadence::from_seconds(0),
+            RateWindowCadence::Unknown
+        );
+        assert_eq!(
+            RateWindowCadence::from_seconds(-1),
+            RateWindowCadence::Unknown
+        );
+    }
+
+    #[test]
+    fn cadence_label_keys() {
+        assert_eq!(RateWindowCadence::Session.label_key(), "session");
+        assert_eq!(RateWindowCadence::Weekly.label_key(), "weekly");
+        assert_eq!(RateWindowCadence::Monthly.label_key(), "monthly");
+        assert_eq!(RateWindowCadence::Unknown.label_key(), "unknown");
+    }
 }

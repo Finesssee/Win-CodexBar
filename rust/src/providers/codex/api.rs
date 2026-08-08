@@ -582,36 +582,23 @@ fn codex_window_role(window: &RateWindow) -> CodexWindowRole {
     }
 }
 
-/// Keep the shared `UsageSnapshot` shape while making an absent session explicit.
-/// Informational primaries are omitted from quota math and rendered as unavailable.
-fn no_session_primary() -> RateWindow {
-    let mut window = RateWindow::with_details(
-        0.0,
-        Some(SESSION_WINDOW_MINUTES),
-        None,
-        Some("No active 5h session".to_string()),
-    );
-    window.is_informational = true;
-    window
-}
-
 /// Normalize the named `primary_window`/`secondary_window` fields by duration.
 fn normalize_named_windows(
     primary: Option<RateWindow>,
     secondary: Option<RateWindow>,
 ) -> (RateWindow, Option<RateWindow>) {
     match (primary, secondary) {
-        (None, None) => (no_session_primary(), None),
+        (None, None) => (RateWindow::no_active_session(), None),
         (Some(window), None) => {
             if codex_window_role(&window) == CodexWindowRole::Weekly {
-                (no_session_primary(), Some(window))
+                (RateWindow::no_active_session(), Some(window))
             } else {
                 (window, None)
             }
         }
         (None, Some(window)) => {
             if codex_window_role(&window) == CodexWindowRole::Weekly {
-                (no_session_primary(), Some(window))
+                (RateWindow::no_active_session(), Some(window))
             } else {
                 (window, None)
             }
@@ -620,7 +607,7 @@ fn normalize_named_windows(
             match (codex_window_role(&primary), codex_window_role(&secondary)) {
                 (CodexWindowRole::Weekly, CodexWindowRole::Session) => (secondary, Some(primary)),
                 (CodexWindowRole::Weekly, CodexWindowRole::Unknown) => {
-                    (no_session_primary(), Some(primary))
+                    (RateWindow::no_active_session(), Some(primary))
                 }
                 (CodexWindowRole::Unknown, CodexWindowRole::Session) => (secondary, Some(primary)),
                 (CodexWindowRole::Session, CodexWindowRole::Weekly)
@@ -636,7 +623,7 @@ fn normalize_array_windows(
     windows: Vec<RateWindow>,
 ) -> (RateWindow, Option<RateWindow>, Option<RateWindow>) {
     if windows.is_empty() {
-        return (no_session_primary(), None, None);
+        return (RateWindow::no_active_session(), None, None);
     }
 
     // Preserve the old positional fallback when the API provides no role
@@ -647,7 +634,7 @@ fn normalize_array_windows(
     {
         let mut windows = windows.into_iter();
         return (
-            windows.next().unwrap_or_else(no_session_primary),
+            windows.next().unwrap_or_else(RateWindow::no_active_session),
             windows.next(),
             windows.next(),
         );
@@ -666,7 +653,7 @@ fn normalize_array_windows(
     }
 
     (
-        session.unwrap_or_else(no_session_primary),
+        session.unwrap_or_else(RateWindow::no_active_session),
         weekly,
         remaining.into_iter().next(),
     )

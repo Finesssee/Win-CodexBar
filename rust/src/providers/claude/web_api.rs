@@ -317,7 +317,7 @@ impl ClaudeWebApiFetcher {
             .five_hour
             .as_ref()
             .map(|w| self.to_rate_window(w, Some(300))) // 5 hours = 300 minutes
-            .unwrap_or_else(synthetic_no_session_primary);
+            .unwrap_or_else(RateWindow::no_active_session);
 
         // Prefer limits[] weekly_all over legacy seven_day (same as OAuth path).
         let secondary = super::scoped_weekly::weekly_all_window(&usage.limits).or_else(|| {
@@ -646,20 +646,6 @@ impl ClaudeWebApiFetcher {
     }
 }
 
-/// Synthetic 5h session placeholder for Claude web when `five_hour` is null.
-///
-/// A genuine idle session (object present, 0% used) is NOT marked informational.
-fn synthetic_no_session_primary() -> RateWindow {
-    let mut window = RateWindow::with_details(
-        0.0,
-        Some(300),
-        None,
-        Some("No active 5h session".to_string()),
-    );
-    window.is_informational = true;
-    window
-}
-
 impl Default for ClaudeWebApiFetcher {
     fn default() -> Self {
         Self::new()
@@ -783,7 +769,7 @@ mod tests {
 
     #[test]
     fn null_five_hour_session_is_informational_placeholder() {
-        let placeholder = super::synthetic_no_session_primary();
+        let placeholder = crate::core::RateWindow::no_active_session();
         assert!(placeholder.is_informational);
         assert_eq!(placeholder.window_minutes, Some(300));
         assert!((placeholder.used_percent - 0.0).abs() < f64::EPSILON);

@@ -1,5 +1,6 @@
 //! Rate window model - represents a usage limit window (e.g., 5-hour session, 7-day weekly)
 
+use super::session_equivalent_forecast::SESSION_WINDOW_MINUTES;
 use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,19 @@ impl RateWindow {
             reset_description: Some(description.into()),
             is_informational: true,
             ..Self::new(0.0)
+        }
+    }
+
+    /// Informational placeholder for an absent 5-hour session lane.
+    ///
+    /// Weekly-only plans (Codex, Claude web) occasionally report no active
+    /// session window. Informational primaries are omitted from quota math
+    /// and rendered as unavailable, so one canonical shape keeps providers
+    /// and downstream surfaces from diverging.
+    pub fn no_active_session() -> Self {
+        Self {
+            window_minutes: Some(SESSION_WINDOW_MINUTES),
+            ..Self::informational("No active 5h session")
         }
     }
 
@@ -171,6 +185,20 @@ impl Default for RateWindow {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn no_active_session_is_informational_five_hour_placeholder() {
+        let window = RateWindow::no_active_session();
+
+        assert!(window.is_informational);
+        assert_eq!(window.window_minutes, Some(SESSION_WINDOW_MINUTES));
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+        assert_eq!(window.used_percent, 0.0);
+        assert_eq!(window.resets_at, None);
+    }
 
     #[test]
     fn test_remaining_percent() {

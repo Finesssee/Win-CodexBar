@@ -423,6 +423,11 @@ impl CostScanner {
             cache.last_scan_unix_ms = now_ms;
             cache.scan_since_key = Some(range.since_key.clone());
             cache.scan_until_key = Some(range.until_key.clone());
+            // F8 (upstream 0.48.0): a completed full scan rebuilds the cache for
+            // the current window, so any prior catch-up state is no longer
+            // pending. Clear previous_report before save so the persisted
+            // artifact no longer signals stale/refreshing (audit: must clear).
+            cache.previous_report = None;
             JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
 
@@ -1453,5 +1458,62 @@ mod tests {
         assert_eq!(st2.files_resumed, 1, "grown file resumes from offset");
         assert_eq!(st2.files_parsed, 0);
         assert_eq!(s2.input_tokens, 100);
+    }
+
+    #[test]
+    fn previous_report_clears_after_successful_full_scan() {
+        // F8 (upstream 0.48.0): a completed full scan clears previous_report so
+        // the refreshing indicator does not stay permanently on.
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        write_codex_session_fixture(&sessions, "a.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        // First scan: builds cache fresh; no previous_report expected.
+        let (summary1, _) = scanner.scan_codex_detailed(None);
+        assert!(summary1.history_coverage_established);
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_none(),
+            "first scan clears previous_report"
+        );
+
+        // Inject a previous_report to simulate trim-set catch-up.
+        let mut cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        cache.previous_report = Some(crate::core::CachedCostReport {
+            total_cost_usd: 0.0,
+            input_tokens: 0,
+            cached_tokens: 0,
+            output_tokens: 0,
+            sessions_count: 0,
+            updated_at: None,
+            partial: false,
+        });
+        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+        // Verify the cache now has previous_report set.
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_some(),
+            "injected previous_report persists"
+        );
+
+        // Full scan with app_driven clears previous_report on success.
+        let (summary2, _) = scanner.scan_codex_detailed(None);
+        assert!(
+            summary2.history_coverage_established,
+            "after full scan coverage is established"
+        );
+
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_none(),
+            "full scan clears previous_report"
+        );
     }
 }

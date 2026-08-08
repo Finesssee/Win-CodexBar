@@ -128,10 +128,8 @@ pub(super) fn parse_claude_reset_date(
     now: DateTime<Utc>,
     expected_window_minutes: Option<u32>,
 ) -> Option<DateTime<Utc>> {
-    let system_timezone = iana_time_zone::get_timezone()
-        .ok()
-        .and_then(|name| Tz::from_str(&name).ok())
-        .unwrap_or(chrono_tz::UTC);
+    let system_timezone =
+        Tz::from_str(&crate::core::local_timezone_name()).unwrap_or(chrono_tz::UTC);
     parse_claude_reset_date_in_system_zone(text, now, expected_window_minutes, system_timezone)
 }
 

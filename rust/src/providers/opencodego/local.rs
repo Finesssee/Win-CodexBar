@@ -5,7 +5,7 @@
 //! onto session ($12 / 5h), weekly ($30), and monthly ($60) windows.
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 use crate::core::{ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
@@ -249,70 +249,8 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
 /// Open a read-only connection without creating `-wal`/`-shm` sidecars for idle
 /// WAL-mode databases (upstream #2544).
 fn open_readonly_connection(db_path: &Path) -> Result<Connection, ProviderError> {
-    let map_err = |e: rusqlite::Error| {
-        ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
-    };
-
-    // Prefer immutable URI when sidecars are absent so a clean WAL shutdown
-    // (header still WAL, no -wal/-shm) does not recreate them on open.
-    if wal_sidecars_missing(db_path)
-        && let Ok(conn) = open_immutable(db_path)
-    {
-        return Ok(conn);
-    }
-
-    match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(conn) => Ok(conn),
-        Err(err) if is_cant_open(&err) && wal_sidecars_missing(db_path) => {
-            open_immutable(db_path).map_err(map_err)
-        }
-        Err(err) => Err(map_err(err)),
-    }
-}
-
-fn open_immutable(db_path: &Path) -> Result<Connection, rusqlite::Error> {
-    let uri = sqlite_immutable_uri(db_path);
-    Connection::open_with_flags(
-        uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-}
-
-fn sqlite_immutable_uri(db_path: &Path) -> String {
-    let abs = db_path
-        .canonicalize()
-        .unwrap_or_else(|_| db_path.to_path_buf());
-    let raw = abs.to_string_lossy();
-    // Windows canonicalize() yields `\\?\C:\...`; strip that for SQLite URIs.
-    let stripped = raw
-        .strip_prefix(r"\\?\")
-        .or_else(|| raw.strip_prefix("//?/"))
-        .unwrap_or(raw.as_ref());
-    let path = stripped.replace('\\', "/");
-    // Prefer `file:` (no authority) so drive letters stay valid on Windows.
-    format!("file:{path}?immutable=1")
-}
-
-fn wal_sidecars_missing(db_path: &Path) -> bool {
-    let wal = sidecar_path(db_path, "-wal");
-    let shm = sidecar_path(db_path, "-shm");
-    !wal.exists() && !shm.exists()
-}
-
-fn sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
-    let mut s = db_path.as_os_str().to_os_string();
-    s.push(suffix);
-    PathBuf::from(s)
-}
-
-fn is_cant_open(err: &rusqlite::Error) -> bool {
-    matches!(
-        err.sqlite_error_code(),
-        Some(rusqlite::ErrorCode::CannotOpen)
-    ) || err
-        .to_string()
-        .to_ascii_lowercase()
-        .contains("unable to open")
+    crate::core::open_readonly_sqlite_connection(db_path, std::time::Duration::from_millis(250))
+        .map_err(|e| ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}")))
 }
 
 fn has_table(conn: &Connection, name: &str) -> bool {
@@ -919,8 +857,8 @@ mod tests {
         }
 
         // Ensure idle-WAL case: header says WAL, no live sidecars.
-        let wal = sidecar_path(&db, "-wal");
-        let shm = sidecar_path(&db, "-shm");
+        let wal = crate::core::sqlite_sidecar_path(&db, "-wal");
+        let shm = crate::core::sqlite_sidecar_path(&db, "-shm");
         // Prefer rename-away over delete if OS still holds handles.
         for side in [&wal, &shm] {
             if side.exists() {

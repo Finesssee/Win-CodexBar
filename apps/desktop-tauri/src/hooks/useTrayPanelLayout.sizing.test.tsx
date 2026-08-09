@@ -10,6 +10,10 @@ import type { TrayPanelLayoutOptions } from "./useTrayPanelLayout";
 //    target (never the freshly measured, smaller candidate → no clipping);
 //  - genuine growth/shrink outside the pair clears and commits;
 //  - anchors fire exactly on real commits (bottom-anchored flow intact).
+//
+// Sequencing instead of sleeps: every completed pass marks the surface's
+// max-height (it is set on EVERY pass from the decision, suppressed or not),
+// so each nudge waits for its own marker value.
 const SCALE = 1.25;
 
 const tauriMocks = vi.hoisted(() => ({
@@ -71,6 +75,10 @@ function lastResize(): { width: number; height: number } {
   return calls[calls.length - 1][0];
 }
 
+function hookResult(result: unknown): { current: { requestLayout: () => void } } {
+  return result as { current: { requestLayout: () => void } };
+}
+
 describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -101,23 +109,29 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
     document.body.innerHTML = "";
   });
 
-  /** Nudge a pass and wait for its reveal — the deterministic per-pass
-   *  completion signal (no sleeps). */
+  /** Nudge a pass and wait until IT marks the surface with `expectedMarker`
+   *  (maxHeight is assigned on every pass → deterministic per-pass signal,
+   *  immune to nudge-vs-pass alignment races). Returns nothing; callers assert
+   *  setSize/anchor deltas against counts they snapshotted before the nudge. */
   async function nudgePass(
-    result: { current: { requestLayout: () => void } },
+    result: unknown,
     sh: number,
-    revealCount: number,
-  ): Promise<number> {
+    expectedMarker: string,
+  ): Promise<void> {
+    const r = hookResult(result);
+    const alreadyMarked = surface.style.maxHeight === expectedMarker;
+    const revealsAtNudge = tauriMocks.revealTrayPanelWindow.mock.calls.length;
     setScrollHeight(sh);
-    result.current.requestLayout();
+    r.current.requestLayout();
     await waitFor(
       () =>
-        expect(tauriMocks.revealTrayPanelWindow.mock.calls.length).toBeGreaterThan(
-          revealCount,
-        ),
-      { timeout: 1000 },
+        alreadyMarked
+          ? expect(
+              tauriMocks.revealTrayPanelWindow.mock.calls.length,
+            ).toBeGreaterThan(revealsAtNudge)
+          : expect(surface.style.maxHeight).toBe(expectedMarker),
+      { timeout: 3000 },
     );
-    return tauriMocks.revealTrayPanelWindow.mock.calls.length;
   }
 
   it("commits stable small changes, locks the reporter pair on the larger member, tracks retained height in the DOM", async () => {
@@ -131,16 +145,15 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
         (call) => (call[0] as { height: number }).height === 539,
       ),
     ).toBe(true);
-    let revealCount = tauriMocks.revealTrayPanelWindow.mock.calls.length;
 
     // (1) Stable one-way +5-physical change COMMITS (no blanket deadband).
-    revealCount = await nudgePass(result, 539, revealCount); // → 543 → 679 phys
+    await nudgePass(result, 539, "543px"); // → 543 → 679 phys
     expect(lastResize()).toEqual({ width: 328, height: 543 });
     expect(surface.style.maxHeight).toBe("543px");
 
     // (2) Reporter-class alternation: one commit to 549 (686 phys), then the
     // 543↔549 pair (679↔686 phys, span 7) is detected on the flip-down.
-    revealCount = await nudgePass(result, 545, revealCount); // → 549 → 686 phys
+    await nudgePass(result, 545, "549px"); // → 549 → 686 phys
     expect(lastResize()).toEqual({ width: 328, height: 549 });
     expect(surface.style.maxHeight).toBe("549px");
     const lockedResizes = windowMocks.setSize.mock.calls.length;
@@ -148,14 +161,14 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
 
     // Flip-down evidence (measure 539→543): detected, suppressed, and the DOM
     // constraint stays the RETAINED height — never the smaller candidate.
-    revealCount = await nudgePass(result, 539, revealCount);
+    await nudgePass(result, 539, "549px");
     expect(windowMocks.setSize.mock.calls.length).toBe(lockedResizes);
     expect(tauriMocks.reanchorTrayPanel.mock.calls.length).toBe(lockedAnchors);
     expect(surface.style.maxHeight).toBe("549px");
 
     // (3) Repeated flips stay suppressed; surface stays at the retained 549.
-    revealCount = await nudgePass(result, 545, revealCount);
-    revealCount = await nudgePass(result, 539, revealCount);
+    await nudgePass(result, 545, "549px");
+    await nudgePass(result, 539, "549px");
     expect(windowMocks.setSize.mock.calls.length).toBe(lockedResizes);
     expect(tauriMocks.reanchorTrayPanel.mock.calls.length).toBe(lockedAnchors);
     expect(surface.style.maxHeight).toBe("549px");
@@ -164,17 +177,17 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
     expect(lastResize()).toEqual({ width: 328, height: 549 });
 
     // (4) Real growth outside the pair clears the lock and commits once.
-    revealCount = await nudgePass(result, 700, revealCount); // → 704 → 880 phys
+    await nudgePass(result, 700, "704px"); // → 704 → 880 phys
     expect(lastResize()).toEqual({ width: 328, height: 704 });
     expect(surface.style.maxHeight).toBe("704px");
 
     // Real shrink commits once.
-    revealCount = await nudgePass(result, 410, revealCount); // → clamp 420 → 525 phys
+    await nudgePass(result, 410, "420px"); // → clamp 420 → 525 phys
     expect(lastResize()).toEqual({ width: 328, height: 420 });
     expect(surface.style.maxHeight).toBe("420px");
 
     // (5) No blanket absorption: a stable 1-physical-px change still commits.
-    revealCount = await nudgePass(result, 417, revealCount); // → 421 → 526 phys
+    await nudgePass(result, 417, "421px"); // → 421 → 526 phys
     expect(lastResize()).toEqual({ width: 328, height: 421 });
     expect(surface.style.maxHeight).toBe("421px");
   });
@@ -203,25 +216,24 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
     ).toBe(true);
     const snappedResizes = windowMocks.setSize.mock.calls.length;
     const snappedAnchors = tauriMocks.reanchorTrayPanel.mock.calls.length;
-    let revealCount = tauriMocks.revealTrayPanelWindow.mock.calls.length;
 
     // Candidate 535 (→669 phys) equals the APPLIED frame while the recorded
     // target says 674: suppress (no setSize/reanchor), adopt the candidate.
     // The prior frame is 420 (525 phys), 144 px away from 669 — the A↔B
     // detector cannot fire here.
-    revealCount = await nudgePass(result, 531, revealCount); // → 535 → 669 phys
+    await nudgePass(result, 531, "535px"); // → 535 → 669 phys
     expect(windowMocks.setSize.mock.calls.length).toBe(snappedResizes);
     expect(tauriMocks.reanchorTrayPanel.mock.calls.length).toBe(snappedAnchors);
     expect(surface.style.maxHeight).toBe("535px");
 
     // Identical next pass: now exact same-frame stable — still zero churn.
-    revealCount = await nudgePass(result, 531, revealCount);
+    await nudgePass(result, 531, "535px");
     expect(windowMocks.setSize.mock.calls.length).toBe(snappedResizes);
     expect(tauriMocks.reanchorTrayPanel.mock.calls.length).toBe(snappedAnchors);
     expect(surface.style.maxHeight).toBe("535px");
 
     // Recovery: a real +5-physical change from the reconciled frame commits.
-    revealCount = await nudgePass(result, 535, revealCount); // → 539 → 674 phys
+    await nudgePass(result, 535, "539px"); // → 539 → 674 phys
     expect(lastResize()).toEqual({ width: 328, height: 539 });
     expect(surface.style.maxHeight).toBe("539px");
   });

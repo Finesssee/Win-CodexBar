@@ -61,6 +61,7 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["zed", "Zed"],
   ["crossmodel", "CrossModel (removed)"],
   ["qoder", "Qoder"],
+  ["codebuddy", "CodeBuddy"],
   ["sakana", "Sakana AI"],
   ["sub2api", "sub2api"],
   ["qwencloud", "Qwen Cloud"],

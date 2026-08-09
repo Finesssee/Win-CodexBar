@@ -83,6 +83,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "ollama" => ProviderId::Ollama,
         "mistral" => ProviderId::Mistral,
         "qoder" => ProviderId::Qoder,
+        "codebuddy" => ProviderId::CodeBuddy,
         "sakana" => ProviderId::Sakana,
         "notion" => ProviderId::Notion,
         _ => return None,

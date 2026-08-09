@@ -9,6 +9,12 @@ import {
   reanchorTrayPanel,
   revealTrayPanelWindow,
 } from "../lib/tauri";
+import {
+  decideTrayHeight,
+  EMPTY_AUTOFIT_STATE,
+  recordAutoFitCommit,
+  type TrayAutoFitState,
+} from "../lib/traySizing";
 
 const TRAY_WIDTH = 328;
 const TRAY_MAX_MEASURE_HEIGHT = 920;
@@ -77,11 +83,10 @@ export function useTrayPanelLayout({
   // compounded a per-open size growth.
   const lastSizeRef = useRef<{ width: number; height: number } | null>(null);
   const programmaticInFlightRef = useRef(0);
-  // Auto-fit tracks its last LOGICAL target separately (lastSizeRef is physical)
-  // so its "did the content size change?" check stays in content pixels.
-  const autoFitLogicalRef = useRef<{ width: number; height: number } | null>(
-    null,
-  );
+  // Auto-fit sizing decision state (committed frame + one-frame history +
+  // learned oscillation pair) — all frame logic lives in lib/traySizing so
+  // the #261 cycle detection stays pure and directly testable.
+  const sizingStateRef = useRef<TrayAutoFitState>(EMPTY_AUTOFIT_STATE);
   const fixedSizeRef = useRef(fixedSize);
   useEffect(() => {
     fixedSizeRef.current = fixedSize;
@@ -268,7 +273,12 @@ export function useTrayPanelLayout({
       programmaticInFlightRef.current += 1;
       try {
         if (!layoutReadyRef.current) {
-          autoFitLogicalRef.current = { width: TRAY_WIDTH, height: minHeight };
+          sizingStateRef.current = recordAutoFitCommit(
+            sizingStateRef.current,
+            TRAY_WIDTH,
+            minHeight,
+            window.devicePixelRatio,
+          );
           await applySize(new LogicalSize(TRAY_WIDTH, minHeight));
         }
 
@@ -308,17 +318,33 @@ export function useTrayPanelLayout({
         contentHeight = Math.ceil(maxBottom - surfaceRect.top) + 4;
 
         const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
-        surface.style.maxHeight = `${height}px`;
+
+        // #261: two-state cycle detection on physical targets. Normal rule
+        // commits ANY real change (even +5 physical px); only exact same-
+        // frame equality is a no-op, and a bounded A→B→A pair (span ≤8
+        // physical, the reporter's 7) locks onto its larger member. The DOM
+        // constraint is set AFTER the decision from the RETAINED height, so
+        // surface and window never diverge.
+        const decision = decideTrayHeight(
+          {
+            measuredHeight: height,
+            expectedWidth: TRAY_WIDTH,
+            minHeight,
+            maxHeight,
+            // WebView layout px ↔ Win32 physical px ratio; CSS zoom does not
+            // affect it (zoom is already in `height` via scaledContentHeight).
+            scaleFactor: window.devicePixelRatio,
+            zoom,
+            lastAppliedPhysicalHeight: lastSizeRef.current?.height ?? null,
+          },
+          sizingStateRef.current,
+        );
+        sizingStateRef.current = decision.state;
+        surface.style.maxHeight = `${decision.height}px`;
         committedHeight = true;
 
-        const previousSize = autoFitLogicalRef.current;
-        const shouldResize =
-          previousSize === null ||
-          previousSize.width !== TRAY_WIDTH ||
-          Math.abs(previousSize.height - height) > 2;
-        if (shouldResize) {
-          autoFitLogicalRef.current = { width: TRAY_WIDTH, height };
-          await applySize(new LogicalSize(TRAY_WIDTH, height));
+        if (decision.commit) {
+          await applySize(new LogicalSize(TRAY_WIDTH, decision.height));
           await Promise.resolve(reanchorTrayPanel()).catch(() => {});
         }
 

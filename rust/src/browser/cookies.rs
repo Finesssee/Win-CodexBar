@@ -293,7 +293,12 @@ impl CookieExtractor {
     }
 
     /// Get the Chromium encryption key from Local State
-    fn get_chromium_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, CookieError> {
+    ///
+    /// `pub(crate)` for provider-local Chromium-desktop session readers
+    /// (e.g. Kimi Desktop) — never logs key material.
+    pub(crate) fn get_chromium_encryption_key(
+        local_state_path: &Path,
+    ) -> Result<Vec<u8>, CookieError> {
         let content = Self::read_file_shared(local_state_path)?;
         let json: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| CookieError::Decryption(e.to_string()))?;
@@ -381,7 +386,12 @@ impl CookieExtractor {
     }
 
     /// Decrypt a Chromium cookie value
-    fn decrypt_chromium_cookie(encrypted_value: &[u8], key: &[u8]) -> Result<String, CookieError> {
+    ///
+    /// `pub(crate)` for provider-local Chromium-desktop session readers.
+    pub(crate) fn decrypt_chromium_cookie(
+        encrypted_value: &[u8],
+        key: &[u8],
+    ) -> Result<String, CookieError> {
         if encrypted_value.is_empty() {
             return Ok(String::new());
         }

@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use reqwest::header::{HeaderValue, RETRY_AFTER};
 use serde::Deserialize;
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
@@ -109,6 +110,115 @@ pub struct ClaudeOAuthFetcher {
 
 static RATE_LIMIT_BACKOFF_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
+// ── Refresh-token backoff (upstream 0.48.0 #2650) ────────────────────────────
+//
+// On Windows the Claude Code credential file is readable, so the macOS
+// "touch completes but the refreshed credential is unreadable" state has no
+// equivalent; the matching *provably-unrecoverable-by-retry* state here is the
+// refresh endpoint itself rejecting the stored refresh token with
+// `invalid_grant`. Retrying the identical grant can never succeed → the
+// terminal gate stays blocked *indefinitely* and only clears when the
+// credential file changes (the CLI re-auth rotates the refresh token) or a
+// refresh succeeds. Transient failures (network, 5xx, 403, non-grant 4xx)
+// use a flat 5-minute cooldown: a retry can still heal those.
+const TRANSIENT_REFRESH_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
+struct RefreshBackoffEntry {
+    /// When transient cooldown expires. Terminal entries never expire on a
+    /// timer; this is `None` for terminal gates.
+    until: Option<Instant>,
+    kind: refresh::RefreshFailureKind,
+    /// The refresh token observed at failure time. A subsequent poll that
+    /// sees a different refresh token (CLI re-auth) clears a terminal gate.
+    fingerprint: Option<String>,
+}
+
+static REFRESH_BACKOFF: LazyLock<
+    Mutex<HashMap<credentials_store::CredentialSource, RefreshBackoffEntry>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Returns the active backoff kind for `source`, or `None` if it has expired
+/// or been cleared by a credential change. `current_refresh_token` is the
+/// token the caller is about to retry with; a terminal gate whose stored
+/// fingerprint differs from it is cleared (the grant changed → retry allowed).
+fn active_refresh_backoff(
+    source: &credentials_store::CredentialSource,
+    now: Instant,
+    current_refresh_token: Option<&str>,
+) -> Option<refresh::RefreshFailureKind> {
+    let mut guard = REFRESH_BACKOFF.lock().ok()?;
+    let entry = guard.get(source)?;
+    match entry.kind {
+        refresh::RefreshFailureKind::Terminal => {
+            // Indefinite gate: only a credential change (different refresh
+            // token) or an explicit success clears it.
+            if let Some(fp) = &entry.fingerprint
+                && current_refresh_token != Some(fp.as_str())
+            {
+                guard.remove(source);
+                return None;
+            }
+            Some(entry.kind)
+        }
+        refresh::RefreshFailureKind::Transient => {
+            if entry.until.is_some_and(|until| until <= now) {
+                guard.remove(source);
+                return None;
+            }
+            Some(entry.kind)
+        }
+    }
+}
+
+fn record_refresh_backoff(
+    source: &credentials_store::CredentialSource,
+    kind: refresh::RefreshFailureKind,
+    now: Instant,
+    current_refresh_token: Option<&str>,
+) {
+    let (until, fingerprint) = match kind {
+        refresh::RefreshFailureKind::Terminal => (
+            // Terminal gates do not expire on a timer.
+            None,
+            current_refresh_token.map(str::to_string),
+        ),
+        refresh::RefreshFailureKind::Transient => (Some(now + TRANSIENT_REFRESH_BACKOFF), None),
+    };
+    if let Ok(mut guard) = REFRESH_BACKOFF.lock() {
+        guard.insert(
+            source.clone(),
+            RefreshBackoffEntry {
+                until,
+                kind,
+                fingerprint,
+            },
+        );
+    }
+}
+
+fn clear_refresh_backoff(source: &credentials_store::CredentialSource) {
+    if let Ok(mut guard) = REFRESH_BACKOFF.lock() {
+        guard.remove(source);
+    }
+}
+
+/// User-facing message when refresh outcome is *terminal*: the stored refresh
+/// token was rejected, so no amount of retrying refreshes the session. No
+/// "then retry" tail — upstream dropped the same advice because refreshing
+/// Claude Code's own credential store cannot heal this state.
+fn terminal_refresh_message() -> String {
+    "Claude OAuth session expired and its stored refresh token was rejected by the \
+     server. Run `claude login` to re-authenticate."
+        .to_string()
+}
+
+/// User-facing message while a transient refresh failure is cooling down.
+fn refresh_cooldown_message() -> String {
+    "Claude OAuth token expired and token refresh is cooling down after a failed \
+     attempt. Please retry shortly, or run `claude login`."
+        .to_string()
+}
+
 impl ClaudeOAuthFetcher {
     const USAGE_URL: &'static str = "https://api.anthropic.com/api/oauth/usage";
     const DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -124,7 +234,16 @@ impl ClaudeOAuthFetcher {
     /// without the user having to re-run `claude`.
     pub async fn fetch(&self) -> Result<ProviderFetchResult, ProviderError> {
         let (credentials, source) = credentials_store::load_credentials()?;
-        let credentials = self.ensure_fresh_credentials(credentials, source).await;
+        let (credentials, refresh_outcome) =
+            self.ensure_fresh_credentials(credentials, source).await;
+        // Still-expired credentials with a terminal/gated refresh state get the
+        // honest message instead of a generic "expired" error (or another
+        // doomed API call).
+        if credentials.is_expired()
+            && let Some(message) = refresh_outcome
+        {
+            return Err(ProviderError::OAuth(message));
+        }
         self.fetch_with_credentials(credentials).await
     }
 
@@ -163,12 +282,14 @@ impl ClaudeOAuthFetcher {
     /// If the token is expired (or about to expire), refresh it using the
     /// refresh token and persist the new token back to `.credentials.json`.
     /// Best-effort: on any failure the original credentials are returned so the
-    /// caller falls back to the existing "expired" handling.
+    /// caller falls back to the existing "expired" handling. The second return
+    /// value carries a user-facing message when the refresh outcome is gated
+    /// (cooldown) or terminal (#2650) and the credentials remain expired.
     async fn ensure_fresh_credentials(
         &self,
         mut credentials: ClaudeOAuthCredentials,
         source: credentials_store::CredentialSource,
-    ) -> ClaudeOAuthCredentials {
+    ) -> (ClaudeOAuthCredentials, Option<String>) {
         // Prefer an in-memory refreshed token if it is fresher than what we just
         // read from disk (covers a prior persist that failed to write). Scoped
         // to this credential's own source so a refresh cached for one source
@@ -180,7 +301,7 @@ impl ClaudeOAuthFetcher {
         }
 
         if !credentials.is_expired() {
-            return credentials;
+            return (credentials, None);
         }
 
         // The credentials file is shared with the Claude Code CLI, which also
@@ -190,28 +311,46 @@ impl ClaudeOAuthFetcher {
         if let Ok((disk, disk_source)) = credentials_store::load_credentials() {
             if !disk.is_expired() {
                 credentials_store::store_refreshed(&disk_source, &disk);
-                return disk;
+                return (disk, None);
             }
             credentials = disk;
         }
 
         let Some(refresh_token) = credentials.refresh_token.clone() else {
             // Environment-provided tokens have no refresh token; nothing to do.
-            return credentials;
+            return (credentials, None);
         };
+
+        // Skip a poll-cadence retry that is still cooling down (#2650): a
+        // terminal rejection would replay the identical rejected grant, and a
+        // transient failure should not hammer the endpoint every poll.
+        let now = Instant::now();
+        if let Some(kind) = active_refresh_backoff(&source, now, Some(refresh_token.as_str())) {
+            let message = match kind {
+                refresh::RefreshFailureKind::Terminal => terminal_refresh_message(),
+                refresh::RefreshFailureKind::Transient => refresh_cooldown_message(),
+            };
+            return (credentials, Some(message));
+        }
 
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
             Ok(refreshed) => {
+                clear_refresh_backoff(&source);
                 credentials_store::store_refreshed(&source, &refreshed);
                 if let Err(err) = credentials_store::persist_refreshed_credentials(&refreshed) {
                     tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
                 }
                 tracing::debug!("Refreshed expired Claude OAuth token");
-                refreshed
+                (refreshed, None)
             }
-            Err(err) => {
-                tracing::debug!("Claude OAuth token refresh failed: {err}");
-                credentials
+            Err(failure) => {
+                tracing::debug!("Claude OAuth token refresh failed: {}", failure.message);
+                let message = match failure.kind {
+                    refresh::RefreshFailureKind::Terminal => Some(terminal_refresh_message()),
+                    refresh::RefreshFailureKind::Transient => Some(refresh_cooldown_message()),
+                };
+                record_refresh_backoff(&source, failure.kind, now, Some(refresh_token.as_str()));
+                (credentials, message)
             }
         }
     }
@@ -771,5 +910,90 @@ mod tests {
         );
         assert_eq!(usage.extra_rate_windows.len(), 1);
         assert_eq!(usage.extra_rate_windows[0].id, "claude-weekly-scoped-fable");
+    }
+
+    // ── Refresh-token backoff (upstream 0.48.0 #2650 mapping) ───
+
+    fn unique_source(tag: &str) -> super::credentials_store::CredentialSource {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        super::credentials_store::CredentialSource::File(std::path::PathBuf::from(format!(
+            "f3-refresh-backoff-{tag}-{nanos}.json"
+        )))
+    }
+
+    #[test]
+    fn terminal_refresh_rejection_stays_blocked_until_credential_changes() {
+        let source = unique_source("terminal");
+        let now = std::time::Instant::now();
+        super::record_refresh_backoff(
+            &source,
+            super::refresh::RefreshFailureKind::Terminal,
+            now,
+            Some("dead-refresh-token"),
+        );
+        // Terminal gate is indefinite: still blocked far in the future as
+        // long as the same refresh token is presented.
+        assert_eq!(
+            super::active_refresh_backoff(
+                &source,
+                now + Duration::from_secs(3600),
+                Some("dead-refresh-token")
+            ),
+            Some(super::refresh::RefreshFailureKind::Terminal)
+        );
+        // A different refresh token (CLI re-auth rotated it) clears the gate.
+        assert_eq!(
+            super::active_refresh_backoff(&source, now, Some("new-refresh-token")),
+            None,
+            "credential change clears the terminal gate"
+        );
+        // Re-record with the new token; explicit clear re-allows attempts.
+        super::record_refresh_backoff(
+            &source,
+            super::refresh::RefreshFailureKind::Terminal,
+            now,
+            Some("new-refresh-token"),
+        );
+        super::clear_refresh_backoff(&source);
+        assert_eq!(
+            super::active_refresh_backoff(&source, now, Some("new-refresh-token")),
+            None,
+            "explicit clear re-allows attempts (e.g. after re-login)"
+        );
+    }
+
+    #[test]
+    fn transient_refresh_failure_gets_5min_backoff() {
+        let source = unique_source("transient");
+        let now = std::time::Instant::now();
+        super::record_refresh_backoff(
+            &source,
+            super::refresh::RefreshFailureKind::Transient,
+            now,
+            None,
+        );
+        assert_eq!(
+            super::active_refresh_backoff(&source, now + Duration::from_secs(299), None),
+            Some(super::refresh::RefreshFailureKind::Transient)
+        );
+        assert_eq!(
+            super::active_refresh_backoff(&source, now + Duration::from_secs(301), None),
+            None
+        );
+    }
+
+    #[test]
+    fn backoff_kinds_have_distinct_user_messages() {
+        let terminal = super::terminal_refresh_message();
+        assert!(terminal.contains("claude login"), "{terminal}");
+        // Upstream drops the "then retry" tail for the provably-dead state.
+        assert!(!terminal.contains("retry"), "{terminal}");
+
+        let cooldown = super::refresh_cooldown_message();
+        assert!(cooldown.contains("retry shortly"), "{cooldown}");
+        assert!(cooldown.contains("claude login"), "{cooldown}");
     }
 }

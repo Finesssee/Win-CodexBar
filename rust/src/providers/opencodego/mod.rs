@@ -5,11 +5,12 @@
 //! unless a workspace override scopes the fetch to web first; Web is cookie
 //! scrape only; Cli is local-only.
 
-mod local;
+pub(crate) mod local;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::Client;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::core::{
@@ -21,7 +22,16 @@ const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
+const BILLING_SERVER_ID: &str = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+// Upstream 0.48.0 #2583 (F15) optional-Zen-balance bounds.
+/// `optionalZenBalanceTimeout`: outer bound of the billing lookup.
+const ZEN_BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
+/// `optionalZenBalanceStartDelay`: the usage page gets a head start.
+const ZEN_BALANCE_START_DELAY: Duration = Duration::from_millis(25);
+/// `optionalZenBalanceJoinGrace`: join bound for background/UI reads.
+const ZEN_BALANCE_JOIN_GRACE: Duration = Duration::from_millis(250);
 
 pub struct OpenCodeGoProvider {
     metadata: ProviderMetadata,
@@ -54,10 +64,12 @@ impl OpenCodeGoProvider {
         workspace_id.filter(|id| !id.is_empty())
     }
 
-    async fn fetch_workspace_id(&self, cookie_header: &str) -> Result<String, ProviderError> {
+    async fn fetch_workspace_id(
+        client: &Client,
+        cookie_header: &str,
+    ) -> Result<String, ProviderError> {
         let url = format!("{}?id={}", SERVER_URL, WORKSPACES_SERVER_ID);
-        let response = self
-            .client
+        let response = client
             .get(&url)
             .header("Cookie", cookie_header)
             .header("X-Server-Id", WORKSPACES_SERVER_ID)
@@ -95,23 +107,36 @@ impl OpenCodeGoProvider {
     }
 
     async fn fetch_usage_page(
-        &self,
+        client: &Client,
         workspace_id: &str,
         cookie_header: &str,
     ) -> Result<String, ProviderError> {
         let url = format!("{}/workspace/{}/go", BASE_URL, workspace_id);
-        let response = self
-            .client
-            .get(&url)
+        Self::fetch_page_text(client, &url, cookie_header, None, "usage page").await
+    }
+
+    /// GET a page with the standard browser-ish headers; `timeout` overrides
+    /// the client default when the caller is inside a smaller budget.
+    async fn fetch_page_text(
+        client: &Client,
+        url: &str,
+        cookie_header: &str,
+        timeout: Option<Duration>,
+        what: &str,
+    ) -> Result<String, ProviderError> {
+        let mut request = client
+            .get(url)
             .header("Cookie", cookie_header)
             .header("User-Agent", USER_AGENT)
             .header("Referer", BASE_URL)
             .header(
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            )
-            .send()
-            .await?;
+            );
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -119,8 +144,7 @@ impl OpenCodeGoProvider {
                 return Err(ProviderError::AuthRequired);
             }
             return Err(ProviderError::Other(format!(
-                "OpenCode Go usage page returned {}",
-                status
+                "OpenCode Go {what} returned {status}"
             )));
         }
 
@@ -302,30 +326,212 @@ impl OpenCodeGoProvider {
         }
     }
 
-    async fn fetch_with_cookies(
+    // ── Zen balance (upstream 0.48.0 #2583) ─────────────────────────────────
+
+    /// Zen dashboard page URL (upstream `zenDashboardURL`).
+    fn zen_dashboard_url(workspace_id: &str) -> String {
+        format!("{BASE_URL}/workspace/{workspace_id}")
+    }
+
+    /// Fetch a server-fn endpoint (same call shape as `fetch_workspace_id`:
+    /// `GET {SERVER_URL}?id=…&args=…` with the server-fn headers).
+    async fn fetch_server_text(
+        client: &Client,
+        server_id: &str,
+        args: Option<&str>,
+        referer: &str,
+        cookie_header: &str,
+        timeout: Option<Duration>,
+    ) -> Result<String, ProviderError> {
+        let mut url = reqwest::Url::parse(SERVER_URL)
+            .map_err(|e| ProviderError::Parse(format!("Invalid OpenCode server URL: {e}")))?;
+        url.query_pairs_mut().append_pair("id", server_id);
+        if let Some(args) = args {
+            url.query_pairs_mut().append_pair("args", args);
+        }
+        let mut request = client
+            .get(url)
+            .header("Cookie", cookie_header)
+            .header("X-Server-Id", server_id)
+            .header("X-Server-Instance", format!("server-fn:{}", Uuid::new_v4()))
+            .header("User-Agent", USER_AGENT)
+            .header("Origin", BASE_URL)
+            .header("Referer", referer)
+            .header(
+                "Accept",
+                "text/javascript, application/json;q=0.9, */*;q=0.8",
+            );
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                return Err(ProviderError::AuthRequired);
+            }
+            return Err(ProviderError::Other(format!(
+                "OpenCode Go server returned {status}"
+            )));
+        }
+        let text = response.text().await?;
+        if Self::looks_signed_out(&text) {
+            return Err(ProviderError::AuthRequired);
+        }
+        Ok(text)
+    }
+
+    /// Upstream `fetchZenBalance`: the dashboard HTML embeds the balance for
+    /// some page states; the dedicated billing server-fn report (raw 1e-8 USD
+    /// units behind a customerID marker) is the fallback. Optional enrichment
+    /// — every failure degrades to `None`, never to a fetch error.
+    async fn fetch_zen_balance(
+        client: &Client,
+        workspace_id: &str,
+        cookie_header: &str,
+        timeout: Duration,
+    ) -> Option<f64> {
+        let request_timeout = timeout.min(ZEN_BALANCE_TIMEOUT);
+        let referer = Self::zen_dashboard_url(workspace_id);
+
+        let page = Self::fetch_page_text(
+            client,
+            &referer,
+            cookie_header,
+            Some(request_timeout),
+            "Zen dashboard page",
+        )
+        .await
+        .ok()?;
+        if let Some(balance) = Self::parse_zen_balance(&page) {
+            return Some(balance);
+        }
+
+        let args = serde_json::json!([workspace_id]).to_string();
+        let billing = Self::fetch_server_text(
+            client,
+            BILLING_SERVER_ID,
+            Some(&args),
+            &referer,
+            cookie_header,
+            Some(request_timeout),
+        )
+        .await
+        .ok()?;
+        parse_billing_server_balance(&billing)
+    }
+
+    /// Spawn the optional Zen balance task (25 ms start delay so the usage
+    /// fetch gets the head start, per upstream). Resolves the workspace id
+    /// inside the task when no override is pinned.
+    fn spawn_zen_balance_task(
         &self,
         cookie_header: &str,
         workspace_id_override: Option<&str>,
+        web_timeout: u64,
+    ) -> (tokio::task::JoinHandle<Option<f64>>, std::time::Instant) {
+        let client = self.client.clone();
+        let cookie_header = cookie_header.to_string();
+        let workspace_id_override = workspace_id_override.map(str::to_string);
+        let timeout = Duration::from_secs(web_timeout.max(1));
+        let started_at = std::time::Instant::now();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(ZEN_BALANCE_START_DELAY).await;
+            let workspace_id = match workspace_id_override {
+                Some(id) => id,
+                None => Self::fetch_workspace_id(&client, &cookie_header)
+                    .await
+                    .ok()?,
+            };
+            Self::fetch_zen_balance(&client, &workspace_id, &cookie_header, timeout).await
+        });
+        (task, started_at)
+    }
+
+    /// Join the optional Zen balance task within the policy budget. A budget
+    /// expiry cancels the in-flight HTTP work instead of leaking it.
+    async fn join_zen_balance(
+        mut task: tokio::task::JoinHandle<Option<f64>>,
+        started_at: std::time::Instant,
+        requires_optional_usage_completeness: bool,
+    ) -> Option<f64> {
+        let budget = zen_balance_join_budget(started_at, requires_optional_usage_completeness);
+        match tokio::time::timeout(budget, &mut task).await {
+            Ok(Ok(balance)) => balance,
+            Ok(Err(_)) | Err(_) => {
+                task.abort();
+                None
+            }
+        }
+    }
+
+    async fn fetch_with_cookies(
+        &self,
+        ctx: &FetchContext,
+        cookie_header: &str,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let workspace_id = match Self::workspace_id_from_context(workspace_id_override) {
+        let workspace_id = match Self::workspace_id_from_context(ctx.workspace_id.as_deref()) {
             Some(workspace_id) => workspace_id.to_string(),
-            None => self.fetch_workspace_id(cookie_header).await?,
+            None => Self::fetch_workspace_id(&self.client, cookie_header).await?,
         };
-        let page = self.fetch_usage_page(&workspace_id, cookie_header).await?;
-        let mut usage = Self::parse_usage_text(&page)?;
-        let balance = Self::parse_zen_balance(&page);
-        if let Some(balance) = balance {
-            usage = usage.with_extra_rate_window(
-                "zen-balance",
-                "Zen balance",
-                RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2}"))),
-            );
-        }
-        let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(balance) = balance {
-            result = result.with_cost(CostSnapshot::new(balance, "USD", "Zen balance"));
-        }
-        Ok(result)
+        // F15 (#2583): start the optional Zen balance fetch in parallel with the
+        // usage page and bound the join from task creation, so a slow balance
+        // still lands in CLI/serve usage reads without stacking a second wait.
+        let (zen_task, zen_started) =
+            self.spawn_zen_balance_task(cookie_header, Some(&workspace_id), ctx.web_timeout);
+        let page = match Self::fetch_usage_page(&self.client, &workspace_id, cookie_header).await {
+            Ok(page) => page,
+            Err(err) => {
+                zen_task.abort();
+                return Err(err);
+            }
+        };
+        let usage = match Self::parse_usage_text(&page) {
+            Ok(usage) => usage,
+            Err(err) => {
+                zen_task.abort();
+                return Err(err);
+            }
+        };
+        // The /go page states embed the balance for some deployments — the
+        // zero-cost parse wins over the dedicated fetch when it works.
+        let balance = match Self::parse_zen_balance(&page) {
+            Some(balance) => {
+                zen_task.abort();
+                Some(balance)
+            }
+            None => {
+                Self::join_zen_balance(
+                    zen_task,
+                    zen_started,
+                    ctx.requires_optional_usage_completeness,
+                )
+                .await
+            }
+        };
+        Ok(Self::with_zen_balance(usage, "web", balance))
+    }
+
+    /// Attach an optional Zen balance to the snapshot: informational extra
+    /// window plus the cost row (existing bridge shape).
+    fn with_zen_balance(
+        mut usage: UsageSnapshot,
+        source: &str,
+        balance: Option<f64>,
+    ) -> ProviderFetchResult {
+        let Some(balance) = balance else {
+            return ProviderFetchResult::new(usage, source);
+        };
+        usage = usage.with_extra_rate_window(
+            "zen-balance",
+            "Zen balance",
+            RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2}"))),
+        );
+        ProviderFetchResult::new(usage, source).with_cost(CostSnapshot::new(
+            balance,
+            "USD",
+            "Zen balance",
+        ))
     }
 }
 
@@ -362,10 +568,10 @@ impl Provider for OpenCodeGoProvider {
                         }
                         Err(e) => return Err(e),
                     }
-                    return self.fetch_local();
+                    return self.fetch_local_with_balance(ctx).await;
                 }
 
-                match self.fetch_local() {
+                match self.fetch_local_with_balance(ctx).await {
                     Ok(result) => return Ok(result),
                     Err(e) => {
                         tracing::debug!("OpenCode Go local failed in Auto; trying web: {e}");
@@ -374,7 +580,7 @@ impl Provider for OpenCodeGoProvider {
                 self.fetch_web(ctx).await
             }
             SourceMode::Web => self.fetch_web(ctx).await,
-            SourceMode::Cli => self.fetch_local(),
+            SourceMode::Cli => self.fetch_local_with_balance(ctx).await,
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
         }
     }
@@ -419,25 +625,126 @@ impl OpenCodeGoProvider {
         )
     }
 
-    fn fetch_local(&self) -> Result<ProviderFetchResult, ProviderError> {
-        local::fetch_local_usage(Utc::now()).map(|snap| snap.to_fetch_result())
+    /// Local SQLite snapshot plus the optional bounded Zen balance enrichment
+    /// (upstream #2583 waits for the balance in usage-snapshot reads too, not
+    /// just web reads; cookie absence or a slow/broken billing lookup degrades
+    /// to no balance, never to an error).
+    async fn fetch_local_with_balance(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let snap = local::fetch_local_usage(Utc::now())?;
+        let mut result = snap.to_fetch_result();
+        if !ctx.include_credits {
+            return Ok(result);
+        }
+        let cookie_header = match ctx.manual_cookie_header.clone() {
+            Some(header) => Some(header),
+            None => crate::providers::browser_cookie_header(&["opencode.ai"]).ok(),
+        };
+        let Some(cookie_header) = cookie_header else {
+            return Ok(result);
+        };
+        let (task, started) = self.spawn_zen_balance_task(
+            &cookie_header,
+            ctx.workspace_id.as_deref(),
+            ctx.web_timeout,
+        );
+        if let Some(balance) =
+            Self::join_zen_balance(task, started, ctx.requires_optional_usage_completeness).await
+        {
+            result = Self::with_zen_balance(result.usage, "local", Some(balance));
+        }
+        Ok(result)
     }
 
     async fn fetch_web(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
-        if let Some(ref cookie_header) = ctx.manual_cookie_header {
-            return self
-                .fetch_with_cookies(cookie_header, ctx.workspace_id.as_deref())
-                .await;
+        if let Some(cookie_header) = &ctx.manual_cookie_header {
+            return self.fetch_with_cookies(ctx, cookie_header).await;
         }
 
         match crate::providers::browser_cookie_header(&["opencode.ai"]) {
-            Ok(cookie_header) => {
-                self.fetch_with_cookies(&cookie_header, ctx.workspace_id.as_deref())
-                    .await
-            }
+            Ok(cookie_header) => self.fetch_with_cookies(ctx, &cookie_header).await,
             Err(ProviderError::NoCookies) => Err(ProviderError::AuthRequired),
             Err(e) => Err(e),
         }
+    }
+}
+
+// ── F15 helpers ─────────────────────────────────────────────────────────────
+
+/// The optional-balance join bound, measured from task creation (upstream
+/// `optionalZenBalanceJoinTimeout`): usage-completeness reads get the remainder
+/// of the 5 s optional-balance budget so a slow usage fetch cannot stack a
+/// second full wait; background reads keep the short join grace.
+fn zen_balance_join_budget(
+    started_at: std::time::Instant,
+    requires_optional_usage_completeness: bool,
+) -> Duration {
+    if !requires_optional_usage_completeness {
+        return ZEN_BALANCE_JOIN_GRACE;
+    }
+    ZEN_BALANCE_TIMEOUT.saturating_sub(started_at.elapsed())
+}
+
+/// Upstream `parseBillingServerResponse`: the billing server-fn reports the
+/// balance in raw 1e-8 USD units behind a customerID marker; JSON tree first,
+/// RSC-streamed text fragment second.
+fn parse_billing_server_balance(text: &str) -> Option<f64> {
+    const BILLING_SCALE: f64 = 100_000_000.0;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(text)
+        && let Some(raw) = find_raw_billing_balance(&json)
+    {
+        return Some(raw / BILLING_SCALE);
+    }
+    let customer_re = regex_lite::Regex::new(
+        r#"(?:"customerID"|customerID)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?"[^"]+""#,
+    )
+    .ok()?;
+    customer_re.find(text)?;
+    let balance_re = regex_lite::Regex::new(
+        r#"(?:"balance"|balance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)"#,
+    )
+    .ok()?;
+    let raw: f64 = balance_re
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .replace(',', "")
+        .parse()
+        .ok()?;
+    Some(raw / BILLING_SCALE)
+}
+
+/// Find a `balance` value guarded by a non-empty `customerID` sibling
+/// (upstream `findRawBillingBalance`). An object holding a `balance` key
+/// decides terminally — no deeper search below it once the guard fails the
+/// value. Booleans are excluded like upstream's `doubleValue`.
+fn find_raw_billing_balance(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(balance) = map.get("balance") {
+                let customer_ok = map
+                    .get("customerID")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| !id.is_empty());
+                if !customer_ok {
+                    return None;
+                }
+                return billing_numeric_value(balance);
+            }
+            map.values().find_map(find_raw_billing_balance)
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(find_raw_billing_balance),
+        _ => None,
+    }
+}
+
+fn billing_numeric_value(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().replace(',', "").parse().ok(),
+        _ => None,
     }
 }
 
@@ -523,5 +830,92 @@ mod tests {
             renewal.window.resets_at.unwrap().to_rfc3339(),
             "2026-06-01T12:00:00+00:00"
         );
+    }
+
+    // ── F15: bounded optional Zen balance wait (upstream #2583) ───
+
+    #[test]
+    fn zen_join_budget_grace_vs_completeness() {
+        let started = std::time::Instant::now();
+        // Background/UI reads keep the short join grace.
+        assert_eq!(
+            zen_balance_join_budget(started, false),
+            Duration::from_millis(250)
+        );
+        // Completeness reads get the remainder of the 5 s optional-balance
+        // budget measured from task creation.
+        let budget = zen_balance_join_budget(started, true);
+        assert!(budget <= ZEN_BALANCE_TIMEOUT, "{budget:?}");
+        assert!(budget > Duration::from_secs(4), "{budget:?}");
+        // An already-exhausted budget joins immediately.
+        let stale = std::time::Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(zen_balance_join_budget(stale, true), Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn slow_zen_task_is_abandoned_within_grace() {
+        let started = std::time::Instant::now();
+        let task = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Some(42.5)
+        });
+        // UI grace (250 ms) never waits out a 30 s balance fetch.
+        let balance = OpenCodeGoProvider::join_zen_balance(task, started, false).await;
+        assert_eq!(balance, None);
+    }
+
+    #[tokio::test]
+    async fn fast_zen_task_lands_in_completeness_budget() {
+        let started = std::time::Instant::now();
+        let task = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Some(42.5)
+        });
+        let balance = OpenCodeGoProvider::join_zen_balance(task, started, true).await;
+        assert_eq!(balance, Some(42.5));
+    }
+
+    #[test]
+    fn billing_server_balance_needs_customer_marker() {
+        // Raw 1e-8-scaled balance behind a customerID → USD.
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance": 1500000000, "customerID": "cus_123"}"#),
+            Some(15.0)
+        );
+        // Same shape without the marker is not a billing payload.
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance": 1500000000}"#),
+            None
+        );
+        // Non-numeric balance with marker → no result (upstream terminal guard).
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance": true, "customerID": "cus_123"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn billing_server_balance_handles_strings_nesting_and_rsc_fragments() {
+        // Numeric strings coerce.
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance": "1,000,000,000", "customerID": "cus_1"}"#),
+            Some(10.0)
+        );
+        // Nested containers search through.
+        assert_eq!(
+            parse_billing_server_balance(
+                r#"{"data": {"rows": [{"balance": 250000000, "customerID": "cus_2"}]}}"#
+            ),
+            Some(2.5)
+        );
+        // RSC-streamed fragment: marker plus plain balance pair.
+        assert_eq!(
+            parse_billing_server_balance(r#"customerID:$R[1] = "cus_9"; "balance": -500000000"#),
+            Some(-5.0)
+        );
+        // Marker alone is not enough.
+        assert_eq!(parse_billing_server_balance(r#"customerID: "cus_9""#), None);
     }
 }

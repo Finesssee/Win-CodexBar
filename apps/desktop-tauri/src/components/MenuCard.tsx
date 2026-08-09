@@ -64,8 +64,13 @@ function localizeWindowLabel(
   raw: string | undefined,
   t: (key: LocaleKey) => string,
 ): string {
-  if (raw?.trim().toLowerCase() === "weekly") {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized === "weekly") {
     return t("ProviderWeeklyLabel");
+  }
+  // F5 (upstream 0.48.0): monthly (30-day) window label.
+  if (normalized === "monthly") {
+    return t("ProviderMonthly");
   }
   return raw ?? "";
 }
@@ -173,7 +178,9 @@ export default function MenuCard({
   if (provider.tertiary)
     metrics.push({
       id: "tertiary",
-      label: t("DetailWindowTertiary"),
+      // F5 (upstream 0.48.0): use the cadence-based label (e.g. "Monthly") instead
+      // of the generic "DetailWindowTertiary" slot key when tertiaryLabel is set.
+      label: localizeWindowLabel(provider.tertiaryLabel, t) || t("DetailWindowTertiary"),
       snap: provider.tertiary,
     });
   for (const extra of provider.extraRateWindows ?? []) {

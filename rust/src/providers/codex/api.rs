@@ -2,7 +2,9 @@
 //!
 //! Uses OAuth tokens stored by the Codex CLI in ~/.codex/auth.json
 
-use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow, UsageSnapshot};
+use crate::core::{
+    CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -280,7 +282,7 @@ impl CodexApi {
             .map(|s| s.to_string());
 
         // Extract rate limit info - handle multiple possible structures
-        let (primary, secondary, code_review) = self.extract_rate_limits(json);
+        let (primary, secondary, monthly, code_review) = self.extract_rate_limits(json);
 
         // Build login method string
         let login_method = plan_type.as_ref().map(|pt| match pt.as_str() {
@@ -309,6 +311,11 @@ impl CodexApi {
         if let Some(sec) = secondary {
             usage = usage.with_secondary(sec);
         }
+        // F5 (upstream 0.48.0): monthly (30-day) windows go to tertiary so the
+        // bridge and frontend can show a monthly reset instead of swallowing it.
+        if let Some(mo) = monthly {
+            usage = usage.with_tertiary(mo);
+        }
         if let Some(cr) = code_review {
             usage = usage.with_model_specific(cr);
         }
@@ -328,39 +335,57 @@ impl CodexApi {
     fn extract_rate_limits(
         &self,
         json: &serde_json::Value,
-    ) -> (RateWindow, Option<RateWindow>, Option<RateWindow>) {
+    ) -> (
+        RateWindow,
+        Option<RateWindow>,
+        Option<RateWindow>,
+        Option<RateWindow>,
+    ) {
         // Try rate_limit object
         if let Some(rate_limit) = json.get("rate_limit") {
             let primary_opt = rate_limit
                 .get("primary_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
             let secondary_opt = rate_limit
                 .get("secondary_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
             let code_review = rate_limit
                 .get("code_review_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
-            // If primary is missing, promote secondary to primary (weekly-only plans)
-            let (primary, secondary) = match (primary_opt, secondary_opt) {
-                (Some(p), s) => (p, s),
-                (None, Some(s)) => (s, None),
-                (None, None) => (RateWindow::new(0.0), None),
-            };
+            let (primary, secondary) = normalize_named_windows(primary_opt, secondary_opt);
 
-            return (primary, secondary, code_review);
+            // F5 (upstream 0.48.0): named windows carry only session/weekly/code_review.
+            // Monthly is extracted separately (from array windows) — return None here.
+            return (primary, secondary, None, code_review);
         }
 
         // Try rate_limits array
-        if let Some(rate_limits) = json.get("rate_limits").and_then(|v| v.as_array())
-            && let Some(first) = rate_limits.first()
-        {
-            let primary = self.parse_window(first);
-            let secondary = rate_limits.get(1).map(|w| self.parse_window(w));
-            let code_review = rate_limits.get(2).map(|w| self.parse_window(w));
-            return (primary, secondary, code_review);
+        if let Some(rate_limits) = json.get("rate_limits").and_then(|v| v.as_array()) {
+            let windows = rate_limits
+                .iter()
+                .filter_map(|window| self.parse_window_if_present(window))
+                .collect::<Vec<_>>();
+            let (primary, secondary, monthly, code_review) = normalize_array_windows(windows);
+            // F5 (upstream 0.48.0): route monthly to its own tertiary lane.
+            let mut usage = UsageSnapshot::new(primary);
+            if let Some(sec) = secondary {
+                usage = usage.with_secondary(sec);
+            }
+            if let Some(mo) = monthly {
+                usage = usage.with_tertiary(mo);
+            }
+            if let Some(cr) = code_review {
+                usage = usage.with_model_specific(cr);
+            }
+            return (
+                usage.primary,
+                usage.secondary,
+                usage.tertiary,
+                usage.model_specific,
+            );
         }
 
         // Try direct fields
@@ -370,7 +395,7 @@ impl CodexApi {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 
-        (RateWindow::new(used_percent), None, None)
+        (RateWindow::new(used_percent), None, None, None)
     }
 
     fn parse_window(&self, window: &serde_json::Value) -> RateWindow {
@@ -382,12 +407,12 @@ impl CodexApi {
 
         let window_minutes = window
             .get("limit_window_seconds")
-            .and_then(|v| v.as_i64())
-            .map(|s| (s / 60) as u32);
+            .and_then(json_i64)
+            .and_then(|seconds| u32::try_from(seconds / 60).ok());
 
         let reset_at = window
             .get("reset_at")
-            .and_then(|v| v.as_i64())
+            .and_then(json_i64)
             .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
 
         RateWindow::with_details(
@@ -396,6 +421,10 @@ impl CodexApi {
             reset_at,
             format_reset_countdown(reset_at),
         )
+    }
+
+    fn parse_window_if_present(&self, window: &serde_json::Value) -> Option<RateWindow> {
+        (!window.is_null() && !is_placeholder_window(window)).then(|| self.parse_window(window))
     }
 
     fn extract_additional_rate_limits(&self, json: &serde_json::Value) -> Vec<NamedRateWindow> {
@@ -493,52 +522,25 @@ impl CodexApi {
         &self,
         response: UsageResponse,
     ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
-        // Extract primary rate window
-        let primary = if let Some(ref rate_limit) = response.rate_limit {
-            if let Some(ref primary_window) = rate_limit.primary_window {
-                let reset_at = timestamp_to_datetime(primary_window.reset_at);
-                RateWindow::with_details(
-                    primary_window.used_percent as f64,
-                    primary_window.limit_window_seconds.map(|s| (s / 60) as u32),
-                    reset_at,
-                    format_reset_countdown(reset_at),
-                )
-            } else {
-                RateWindow::new(0.0)
-            }
-        } else {
-            RateWindow::new(0.0)
-        };
-
-        // Extract secondary rate window
-        let secondary = response
-            .rate_limit
-            .as_ref()
-            .and_then(|rl| rl.secondary_window.as_ref())
-            .map(|window| {
-                let reset_at = timestamp_to_datetime(window.reset_at);
-                RateWindow::with_details(
-                    window.used_percent as f64,
-                    window.limit_window_seconds.map(|s| (s / 60) as u32),
-                    reset_at,
-                    format_reset_countdown(reset_at),
-                )
-            });
+        let (primary, secondary) = normalize_named_windows(
+            response
+                .rate_limit
+                .as_ref()
+                .and_then(|rate_limit| rate_limit.primary_window.as_ref())
+                .map(rate_window_from_snapshot),
+            response
+                .rate_limit
+                .as_ref()
+                .and_then(|rate_limit| rate_limit.secondary_window.as_ref())
+                .map(rate_window_from_snapshot),
+        );
 
         // Extract code review rate window
         let code_review = response
             .rate_limit
             .as_ref()
-            .and_then(|rl| rl.code_review_window.as_ref())
-            .map(|window| {
-                let reset_at = timestamp_to_datetime(window.reset_at);
-                RateWindow::with_details(
-                    window.used_percent as f64,
-                    window.limit_window_seconds.map(|s| (s / 60) as u32),
-                    reset_at,
-                    format_reset_countdown(reset_at),
-                )
-            });
+            .and_then(|rate_limit| rate_limit.code_review_window.as_ref())
+            .map(rate_window_from_snapshot);
 
         // Build usage snapshot
         let login_method = response.plan_type.as_ref().map(|pt| match pt.as_str() {
@@ -591,6 +593,130 @@ impl CodexApi {
 
         Ok((usage, cost))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexWindowRole {
+    Session,
+    Weekly,
+    Monthly,
+    Unknown,
+}
+
+fn codex_window_role(window: &RateWindow) -> CodexWindowRole {
+    match window
+        .window_minutes
+        .map(RateWindowCadence::from_minutes)
+        .unwrap_or(RateWindowCadence::Unknown)
+    {
+        RateWindowCadence::Session => CodexWindowRole::Session,
+        RateWindowCadence::Monthly => CodexWindowRole::Monthly,
+        RateWindowCadence::Weekly => CodexWindowRole::Weekly,
+        RateWindowCadence::Unknown => CodexWindowRole::Unknown,
+    }
+}
+
+/// Normalize the named `primary_window`/`secondary_window` fields by duration.
+fn normalize_named_windows(
+    primary: Option<RateWindow>,
+    secondary: Option<RateWindow>,
+) -> (RateWindow, Option<RateWindow>) {
+    match (primary, secondary) {
+        (None, None) => (RateWindow::no_active_session(), None),
+        (Some(window), None) => {
+            if codex_window_role(&window) == CodexWindowRole::Weekly {
+                (RateWindow::no_active_session(), Some(window))
+            } else {
+                (window, None)
+            }
+        }
+        (None, Some(window)) => {
+            if codex_window_role(&window) == CodexWindowRole::Weekly {
+                (RateWindow::no_active_session(), Some(window))
+            } else {
+                (window, None)
+            }
+        }
+        (Some(primary), Some(secondary)) => {
+            match (codex_window_role(&primary), codex_window_role(&secondary)) {
+                (CodexWindowRole::Weekly, CodexWindowRole::Session) => (secondary, Some(primary)),
+                (CodexWindowRole::Weekly, CodexWindowRole::Unknown) => {
+                    (RateWindow::no_active_session(), Some(primary))
+                }
+                (CodexWindowRole::Unknown, CodexWindowRole::Session) => (secondary, Some(primary)),
+                (CodexWindowRole::Session, CodexWindowRole::Weekly)
+                | (CodexWindowRole::Unknown, CodexWindowRole::Weekly) => (primary, Some(secondary)),
+                _ => (primary, Some(secondary)),
+            }
+        }
+    }
+}
+
+/// Normalize an array of Codex windows without relying on the API's ordering.
+/// Normalize an array of Codex windows without relying on the API's ordering.
+///
+/// Returns (session, weekly, monthly, code_review). F5 (upstream 0.48.0):
+/// monthly (30-day) windows are routed to their own lane so surfaces can
+/// display a monthly reset instead of swallowing it into the weekly label.
+fn normalize_array_windows(
+    windows: Vec<RateWindow>,
+) -> (
+    RateWindow,
+    Option<RateWindow>,
+    Option<RateWindow>,
+    Option<RateWindow>,
+) {
+    if windows.is_empty() {
+        return (RateWindow::no_active_session(), None, None, None);
+    }
+
+    // Preserve the old positional fallback when the API provides no role
+    // metadata at all. There is no safe way to infer session vs weekly then.
+    if !windows
+        .iter()
+        .any(|window| codex_window_role(window) != CodexWindowRole::Unknown)
+    {
+        let mut windows = windows.into_iter();
+        return (
+            windows.next().unwrap_or_else(RateWindow::no_active_session),
+            windows.next(),
+            windows.next(),
+            windows.next(),
+        );
+    }
+
+    let mut session = None;
+    let mut weekly = None;
+    let mut monthly = None;
+    let mut remaining = Vec::new();
+
+    for window in windows {
+        match codex_window_role(&window) {
+            CodexWindowRole::Session if session.is_none() => session = Some(window),
+            CodexWindowRole::Weekly if weekly.is_none() => weekly = Some(window),
+            CodexWindowRole::Monthly if monthly.is_none() => monthly = Some(window),
+            _ => remaining.push(window),
+        }
+    }
+
+    (
+        session.unwrap_or_else(RateWindow::no_active_session),
+        weekly,
+        monthly,
+        remaining.into_iter().next(),
+    )
+}
+
+fn rate_window_from_snapshot(window: &WindowSnapshot) -> RateWindow {
+    let reset_at = timestamp_to_datetime(window.reset_at);
+    RateWindow::with_details(
+        window.used_percent as f64,
+        window
+            .limit_window_seconds
+            .and_then(|seconds| u32::try_from(seconds / 60).ok()),
+        reset_at,
+        format_reset_countdown(reset_at),
+    )
 }
 
 impl Default for CodexApi {
@@ -760,6 +886,12 @@ fn json_f64(value: &serde_json::Value) -> Option<f64> {
         .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
 }
 
+fn json_i64(value: &serde_json::Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
+}
+
 fn is_placeholder_window(window: &serde_json::Value) -> bool {
     let has_usage = window
         .get("used_percent")
@@ -768,9 +900,9 @@ fn is_placeholder_window(window: &serde_json::Value) -> bool {
         .is_some();
     let has_duration = window
         .get("limit_window_seconds")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse::<i64>().ok()))
+        .and_then(json_i64)
         .is_some();
-    let has_reset = window.get("reset_at").is_some();
+    let has_reset = window.get("reset_at").and_then(json_i64).is_some();
 
     !has_usage && !has_duration && !has_reset
 }
@@ -1157,6 +1289,80 @@ mod tests {
     }
 
     #[test]
+    fn keeps_weekly_window_in_secondary_when_session_is_absent() {
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "secondary_window": {
+                        "used_percent": 25,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1783036800
+                    }
+                }
+            }))
+            .expect("codex usage");
+
+        assert!(usage.primary.is_informational);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+
+        let weekly = usage.secondary.expect("weekly window");
+        assert!(!weekly.is_informational);
+        assert_eq!(weekly.used_percent, 25.0);
+        assert_eq!(weekly.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn identifies_rate_limit_array_windows_by_duration() {
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limits": [
+                    {
+                        "used_percent": 25,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1783036800
+                    },
+                    {
+                        "used_percent": 10,
+                        "limit_window_seconds": 18000,
+                        "reset_at": 1783018800
+                    }
+                ]
+            }))
+            .expect("codex usage");
+
+        assert!(!usage.primary.is_informational);
+        assert_eq!(usage.primary.used_percent, 10.0);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+
+        let weekly = usage.secondary.expect("weekly window");
+        assert_eq!(weekly.used_percent, 25.0);
+        assert_eq!(weekly.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn identifies_weekly_only_rate_limit_array_without_a_session() {
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limits": [{
+                    "used_percent": 25,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1783036800
+                }]
+            }))
+            .expect("codex usage");
+
+        assert!(usage.primary.is_informational);
+        assert_eq!(usage.secondary.expect("weekly window").used_percent, 25.0);
+    }
+
+    #[test]
     fn maps_codex_spark_additional_rate_limits() {
         let api = CodexApi::new();
         let (usage, _) = api
@@ -1269,5 +1475,52 @@ mod tests {
         let cost = cost.expect("cost");
         assert_eq!(cost.used, 40.0);
         assert_eq!(cost.limit, Some(100.0));
+    }
+
+    fn win(minutes: u32, used: f64) -> RateWindow {
+        RateWindow::with_details(used, Some(minutes), None, None)
+    }
+
+    #[test]
+    fn f5_normalize_array_routes_session_weekly_monthly_to_lanes() {
+        // 5h session + weekly + monthly → (session, weekly, monthly, None)
+        let windows = vec![win(300, 10.0), win(10_080, 20.0), win(43_200, 30.0)];
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(secondary.unwrap().window_minutes, Some(10_080));
+        assert_eq!(tertiary.unwrap().window_minutes, Some(43_200));
+        assert!(code_review.is_none());
+    }
+
+    #[test]
+    fn f5_normalize_array_monthly_routes_to_tertiary_not_secondary() {
+        // Monthly must go to tertiary, NOT secondary — so #268's weekly math
+        // and "Weekly" label stay untouched.
+        let windows = vec![win(43_200, 50.0), win(10_080, 20.0)];
+        let (primary, secondary, tertiary, _) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300)); // no session → placeholder
+        assert_eq!(secondary.unwrap().window_minutes, Some(10_080));
+        assert_eq!(tertiary.unwrap().window_minutes, Some(43_200));
+    }
+
+    #[test]
+    fn f5_normalize_array_empty_returns_placeholder_primary() {
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(vec![]);
+        assert!(primary.is_informational);
+        assert!(secondary.is_none());
+        assert!(tertiary.is_none());
+        assert!(code_review.is_none());
+    }
+
+    #[test]
+    fn f5_normalize_array_unknown_windows_fall_to_code_review() {
+        // Windows with unrecognized durations (not 300/10080/43200) go to the
+        // remaining/code_review bucket.
+        let windows = vec![win(300, 10.0), win(999, 5.0)];
+        let (primary, secondary, tertiary, code_review) = normalize_array_windows(windows);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert!(secondary.is_none());
+        assert!(tertiary.is_none());
+        assert_eq!(code_review.unwrap().window_minutes, Some(999));
     }
 }

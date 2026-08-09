@@ -101,6 +101,7 @@ pub struct SessionEquivalentForecastSnapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUsageSnapshot {
+    pub tertiary_label: Option<String>,
     pub provider_id: String,
     pub display_name: String,
     pub primary: RateWindowSnapshot,
@@ -157,7 +158,16 @@ impl ProviderUsageSnapshot {
     ) -> Self {
         let usage = &result.usage;
 
-        let primary_pace = codexbar::core::UsagePace::weekly(&usage.primary, None, 10080);
+        // A missing session is represented by an informational primary so the
+        // weekly lane keeps its canonical role. Use that weekly lane for the
+        // provider-level pace summary instead of returning no pace at all.
+        let primary_pace_window = if usage.primary.is_informational {
+            usage.secondary.as_ref()
+        } else {
+            Some(&usage.primary)
+        };
+        let primary_pace = primary_pace_window
+            .and_then(|window| codexbar::core::UsagePace::weekly(window, None, 10080));
 
         let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace_stage_str(p.stage),
@@ -205,6 +215,17 @@ impl ProviderUsageSnapshot {
                 .tertiary
                 .as_ref()
                 .map(RateWindowSnapshot::from_rate_window),
+            // F5 (upstream 0.48.0): label the tertiary lane by its duration cadence
+            // so surfaces (MenuCard, CLI, tray) can show "Monthly" instead of the
+            // generic "DetailWindowTertiary" slot key.
+            tertiary_label: usage.tertiary.as_ref().map(|w| {
+                match codexbar::core::RateWindowCadence::from_minutes(w.window_minutes.unwrap_or(0))
+                    .label_key()
+                {
+                    "monthly" => "monthly".to_string(),
+                    other => other.to_string(),
+                }
+            }),
             extra_rate_windows: usage
                 .extra_rate_windows
                 .iter()
@@ -263,6 +284,7 @@ impl ProviderUsageSnapshot {
             secondary_label: None,
             model_specific: None,
             tertiary: None,
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             cost: None,
             plan_name: None,
@@ -311,6 +333,13 @@ pub(crate) fn compact_tray_status_label(
     window: &RateWindowSnapshot,
     lang: codexbar::settings::Language,
 ) -> String {
+    if window.is_informational {
+        return window
+            .reset_description
+            .clone()
+            .unwrap_or_else(|| "Unavailable".to_string());
+    }
+
     let pct = format!("{:.0}%", window.used_percent);
     if let Some(reset) = compact_reset_description(window, lang) {
         format!("{pct} • {reset}")

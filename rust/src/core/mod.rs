@@ -2,6 +2,7 @@
 
 mod adaptive_refresh;
 mod aws_signing;
+mod cost_cache_budget;
 mod cost_pricing;
 pub mod curl_capture;
 mod hook_transition;
@@ -18,6 +19,8 @@ mod rate_window;
 mod redactor;
 mod session_equivalent_forecast;
 mod session_quota;
+mod sqlite;
+mod timezone;
 mod token_accounts;
 mod usage_pace;
 mod usage_snapshot;
@@ -25,6 +28,7 @@ mod widget_snapshot;
 
 pub use adaptive_refresh::*;
 pub use aws_signing::*;
+pub use cost_cache_budget::*;
 pub use cost_pricing::*;
 pub use curl_capture::*;
 pub use hook_transition::*;
@@ -41,6 +45,8 @@ pub use rate_window::*;
 pub use redactor::*;
 pub use session_equivalent_forecast::*;
 pub use session_quota::*;
+pub use sqlite::*;
+pub(crate) use timezone::local_timezone_name;
 pub use token_accounts::*;
 pub use usage_pace::*;
 pub use usage_snapshot::*;

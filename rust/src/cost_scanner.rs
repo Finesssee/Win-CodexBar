@@ -28,7 +28,32 @@ use crate::core::{
     CostScanOptions, CostUsageCache, CostUsageDayRange, CostUsageFileUsage, CostUsagePricing,
     JsonlScanner, ProviderId,
 };
+use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
+
+/// Completeness of the pricing coverage in a [`CostSummary`] (upstream 0.48.0 F18).
+///
+/// `Complete` means every billed model resolved a canonical or fast-rate price.
+/// `Partial` means at least one model was deliberately unpriced (routing rows like
+/// `codex-auto-review`) or fell back to a legacy default; the breakdown is still
+/// shown but the total is labeled partial.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ModelPricingCompleteness {
+    /// Every model resolved a canonical price.
+    #[default]
+    Complete,
+    /// At least one model was unpriced or used a fallback rate.
+    Partial {
+        /// Model IDs that were deliberately unpriced (routing rows).
+        unpriced_models: Vec<String>,
+    },
+}
+
+impl ModelPricingCompleteness {
+    pub fn is_partial(&self) -> bool {
+        matches!(self, Self::Partial { .. })
+    }
+}
 
 /// Cost summary from scanning local logs
 #[derive(Debug, Clone, Default)]
@@ -53,6 +78,14 @@ pub struct CostSummary {
     pub by_speed_tokens: HashMap<String, ModelTokenCounts>,
     /// Model IDs that were priced with fallback rates because no canonical rate is available.
     pub unknown_models: HashSet<String>,
+    /// Completeness of pricing coverage (Complete vs Partial). Surfaced in the CLI
+    /// cost JSON so callers can label a partial breakdown (upstream 0.48.0 F18).
+    pub model_pricing_completeness: ModelPricingCompleteness,
+    /// Whether the scan's coverage of the requested history window is established
+    /// (not pending a catch-up re-scan). `true` when the cache is fresh (within the
+    /// debounce window) or the scan just completed; `false` when the cache is stale
+    /// or empty and a re-scan would be required (upstream 0.48.0 A16).
+    pub history_coverage_established: bool,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
@@ -337,6 +370,11 @@ impl CostScanner {
             && (!cache.days.is_empty() || !cache.files.is_empty())
         {
             stats.used_cache_debounce = true;
+            // A16 (upstream 0.48.0): cache hit within debounce = coverage established
+            // when the cache has data and no catch-up is pending (previous_report set
+            // means entries were trimmed for budget → re-scan may be needed).
+            summary.history_coverage_established =
+                !cache.days.is_empty() && cache.previous_report.is_none();
             let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
             summary.total_cost_usd += cost;
             summary.sessions_count = cache
@@ -385,12 +423,22 @@ impl CostScanner {
             cache.last_scan_unix_ms = now_ms;
             cache.scan_since_key = Some(range.since_key.clone());
             cache.scan_until_key = Some(range.until_key.clone());
-            JsonlScanner::save_cache(ProviderId::Codex, &cache, cache_root);
+            // F8 (upstream 0.48.0): a completed full scan rebuilds the cache for
+            // the current window, so any prior catch-up state is no longer
+            // pending. Clear previous_report before save so the persisted
+            // artifact no longer signals stale/refreshing (audit: must clear).
+            cache.previous_report = None;
+            JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
+
+        // A16 (upstream 0.48.0): after a completed scan, coverage IS established
+        // unless cache pruning during save marked a catch-up pending.
+        summary.history_coverage_established = cache.previous_report.is_none();
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
-        if self.sessions_dirs_override.is_none() {
+        // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
+        if self.sessions_dirs_override.is_none() && self.options.include_pi_sessions {
             let mut seen_pi = HashSet::new();
             crate::pi_session_cost::scan_pi_compatible_into(
                 &mut summary,
@@ -447,6 +495,30 @@ impl CostScanner {
         );
 
         summary
+    }
+
+    /// Scan OpenCode Go local SQLite usage (upstream #2649 per-model cost breakdown).
+    ///
+    /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
+    /// (`total_cost_usd`, `by_model`, `sessions_count`, period) so the chart's
+    /// local-usage summary treats OpenCode Go like Codex/Claude. No token counts
+    /// are available from the SQLite reader, so token fields stay zero.
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        if is_cancelled(cancel) {
+            return CostSummary::default();
+        }
+        let now = Utc::now();
+        let Some(local) = opencodego_local::model_cost_summary_scan(now, self.days) else {
+            return CostSummary::default();
+        };
+        CostSummary {
+            total_cost_usd: local.total_cost_usd,
+            by_model: local.by_model,
+            sessions_count: local.request_count,
+            period_start: local.period_start,
+            period_end: local.period_end,
+            ..CostSummary::default()
+        }
     }
 
     fn get_codex_sessions_dirs(&self) -> Vec<PathBuf> {
@@ -568,6 +640,7 @@ impl CostScanner {
                 && start_offset > 0
                 && start_offset <= size
                 && entry.last_totals.is_some()
+                && JsonlScanner::is_line_boundary_offset(path, start_offset)
             {
                 let parse_result = match JsonlScanner::parse_codex_file(
                     path,
@@ -915,6 +988,15 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                     });
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+            }
+        }
+        "opencodego" => {
+            // Per-day cost from the local OpenCode SQLite reader (upstream #2649).
+            // Rows are grouped by local calendar day to match Codex/Claude keying.
+            for (day_key, cost) in opencodego_local::daily_cost_series(Utc::now(), days) {
+                if let Some(slot) = daily_costs.get_mut(&day_key) {
+                    *slot += cost;
+                }
             }
         }
         _ => {}
@@ -1377,5 +1459,111 @@ mod tests {
         assert_eq!(st2.files_resumed, 1, "grown file resumes from offset");
         assert_eq!(st2.files_parsed, 0);
         assert_eq!(s2.input_tokens, 100);
+    }
+
+    #[test]
+    fn cost_scan_midline_rewrite_forces_full_parse_not_resume() {
+        // F2 (upstream 0.48.0 #2648): when a file is rewritten/truncated so the
+        // cached resume offset is now mid-line (byte before offset is not \n),
+        // the scanner must fall through to a full re-parse from offset 0 rather
+        // than resuming from the stale mid-line offset.
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let _path = write_codex_session_fixture(&sessions, "a.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (s1, st1) = scanner.scan_codex_detailed(None);
+        assert_eq!(st1.files_parsed, 1);
+        assert_eq!(s1.input_tokens, 100);
+
+        // Rewrite the file with a shorter body at the same path so the cached
+        // parsed_bytes offset now points mid-line in the new content.
+        let today = Local::now().date_naive();
+        let day_dir = sessions
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        let ts = (Utc::now() - Duration::minutes(30))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        // Shorter content with different token count — the cached offset will
+        // be past EOF or mid-line in this new content.
+        let body = format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5}}}}}}}}
+"#
+        );
+        std::fs::write(day_dir.join("a.jsonl"), body).unwrap();
+
+        let (s2, st2) = scanner.scan_codex_detailed(None);
+        // The scanner must full-parse (not resume) because the cached offset
+        // no longer sits on a line boundary in the rewritten content.
+        assert!(
+            st2.files_parsed >= 1 || st2.files_resumed == 0,
+            "midline rewrite forces full parse, not resume (parsed={}, resumed={})",
+            st2.files_parsed,
+            st2.files_resumed
+        );
+        assert_eq!(s2.input_tokens, 50, "full parse picks up new token count");
+    }
+
+    #[test]
+    fn previous_report_clears_after_successful_full_scan() {
+        // F8 (upstream 0.48.0): a completed full scan clears previous_report so
+        // the refreshing indicator does not stay permanently on.
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        write_codex_session_fixture(&sessions, "a.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        // First scan: builds cache fresh; no previous_report expected.
+        let (summary1, _) = scanner.scan_codex_detailed(None);
+        assert!(summary1.history_coverage_established);
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_none(),
+            "first scan clears previous_report"
+        );
+
+        // Inject a previous_report to simulate trim-set catch-up.
+        let mut cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        cache.previous_report = Some(crate::core::CachedCostReport {
+            total_cost_usd: 0.0,
+            input_tokens: 0,
+            cached_tokens: 0,
+            output_tokens: 0,
+            sessions_count: 0,
+            updated_at: None,
+            partial: false,
+        });
+        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+        // Verify the cache now has previous_report set.
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_some(),
+            "injected previous_report persists"
+        );
+
+        // Full scan with app_driven clears previous_report on success.
+        let (summary2, _) = scanner.scan_codex_detailed(None);
+        assert!(
+            summary2.history_coverage_established,
+            "after full scan coverage is established"
+        );
+
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache.previous_report.is_none(),
+            "full scan clears previous_report"
+        );
     }
 }

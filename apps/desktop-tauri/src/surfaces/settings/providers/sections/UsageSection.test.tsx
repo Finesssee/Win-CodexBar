@@ -80,4 +80,23 @@ describe("UsageSection", () => {
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
     expect(screen.getByText("42%")).toBeInTheDocument();
   });
+
+  it("marks an unavailable session without rendering a quota bar", async () => {
+    const detail = provider();
+    detail.session = {
+      ...rateWindow(0),
+      isInformational: true,
+      resetDescription: "No active 5h session",
+    };
+
+    render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    const label = await screen.findByText("ProviderSessionLabel");
+    expect(label.parentElement).toHaveTextContent("No active 5h session");
+    expect(label.parentElement?.querySelector(".provider-usage-bar__track")).toBeNull();
+  });
 });

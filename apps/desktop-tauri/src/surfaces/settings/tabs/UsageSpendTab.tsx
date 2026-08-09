@@ -209,7 +209,14 @@ export default function UsageSpendTab(_props: TabProps) {
                 <td>{formatUsd(row.sevenDay, row.currency)}</td>
                 <td>{formatUsd(row.thirtyDay, row.currency)}</td>
                 <td>{row.currency || "USD"}</td>
-                <td className="usage-spend-table__source">{row.source}</td>
+                <td className="usage-spend-table__source">
+                  {row.source}
+                  {row.refreshing && (
+                    <span className="usage-spend-table__refreshing" title={row.staleUpdatedAt ? `Stale as of ${row.staleUpdatedAt}` : undefined}>
+                      {" · "}{t("UsageSpendRefreshing")}
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
             {!loading && (summary?.rows?.length ?? 0) === 0 && (

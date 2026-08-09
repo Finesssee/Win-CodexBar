@@ -83,6 +83,7 @@ impl AgentPSOutputParser {
             source: classification.source,
             executable: classification.executable,
             kind: classification.kind,
+            command: Some(command),
         })
     }
 
@@ -146,6 +147,10 @@ impl WindowsProcessOutputParser {
                     source: classification.source,
                     executable: process.name.unwrap_or(classification.executable),
                     kind: classification.kind,
+                    // Windows deliberately does not harvest other processes'
+                    // command lines (privacy); ps-based remote scans carry
+                    // them, and tests inject them.
+                    command: None,
                 }
             })
             .collect()
@@ -191,6 +196,22 @@ fn classify_process_command(command: &str) -> ProcessClassification {
             source: AgentSessionSource::DesktopApp,
             executable,
             kind: AgentProcessKind::AppServer,
+        };
+    }
+
+    // Pi-family CLIs (upstream 0.48.0 #2626): `pi` and OMP share one session
+    // family; the dialect comes from the invocation, obvious helpers
+    // (`--help`, `--version`, `--smoke-test`, `__omp_worker_`) are filtered
+    // inside the family module instead of the generic helper block.
+    if crate::agent_sessions::pi_family::pi_family_dialect(command).is_some()
+        && !crate::agent_sessions::pi_family::is_pi_family_helper(command)
+    {
+        return ProcessClassification {
+            provider: Some(AgentSessionProvider::Pi),
+            source: AgentSessionSource::Cli,
+            executable: crate::agent_sessions::pi_family::pi_family_executable(command)
+                .unwrap_or(executable),
+            kind: AgentProcessKind::Agent,
         };
     }
 

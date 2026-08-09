@@ -392,7 +392,7 @@ fn usage_request_url(base_url: &Url) -> Result<Url, ProviderError> {
 }
 
 fn local_timezone_identifier() -> String {
-    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string())
+    crate::core::local_timezone_name()
 }
 
 fn parse_usage_body(body: &str) -> Result<ParsedUsage, ProviderError> {

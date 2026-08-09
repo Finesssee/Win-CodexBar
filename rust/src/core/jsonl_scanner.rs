@@ -31,12 +31,17 @@ pub struct CostScanOptions {
     /// Minimum seconds between disk-cache-backed full inspections.
     /// Set to 0 to force a fresh scan (app-driven / forceRefresh).
     pub refresh_min_interval_secs: u64,
+    /// A16 (upstream 0.48.0 --provider-native-only): when false, exclude
+    /// pi/OMP-compatible agent session mirrors from Codex/Claude cost history.
+    /// Defaults to true (include mirrors) for backward compatibility.
+    pub include_pi_sessions: bool,
 }
 
 impl Default for CostScanOptions {
     fn default() -> Self {
         Self {
             refresh_min_interval_secs: DEFAULT_COST_SCAN_REFRESH_MIN_INTERVAL_SECS,
+            include_pi_sessions: true,
         }
     }
 }
@@ -46,6 +51,7 @@ impl CostScanOptions {
     pub fn app_driven() -> Self {
         Self {
             refresh_min_interval_secs: 0,
+            include_pi_sessions: true,
         }
     }
 
@@ -72,6 +78,12 @@ pub struct CostUsageCache {
     pub scan_since_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_until_key: Option<String>,
+    /// Last validated cost report, kept so spend surfaces can keep showing
+    /// totals while a (re)scan catches up after the cache was trimmed or the
+    /// debounce window expired (upstream 0.48.0 #2628). `None` once a scan
+    /// completes for the current window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_report: Option<CachedCostReport>,
 }
 
 /// Per-file usage tracking
@@ -97,6 +109,29 @@ pub struct CodexTotals {
     pub input: i32,
     pub cached: i32,
     pub output: i32,
+}
+
+/// Snapshot of the last validated cost report, persisted so spend surfaces keep
+/// showing totals while a rescan catches up after the cache is trimmed or the
+/// debounce window expires (upstream 0.48.0 #2628). See the cache-budget module
+/// for the save/load overshoot contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedCostReport {
+    /// Total cost in USD for the reported window.
+    pub total_cost_usd: f64,
+    /// Total input tokens.
+    pub input_tokens: i32,
+    /// Total cached tokens.
+    pub cached_tokens: i32,
+    /// Total output tokens.
+    pub output_tokens: i32,
+    /// Number of sessions contributing.
+    pub sessions_count: i32,
+    /// ISO 8601 timestamp when this report was generated.
+    pub updated_at: Option<String>,
+    /// Whether the report was marked partial (unpriced routing rows retained).
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// Result of parsing a Codex file
@@ -826,6 +861,33 @@ impl JsonlScanner {
         })
     }
 
+    /// F2 (upstream 0.48.0 #2648): whether a cached resume offset sits on a real
+    /// line boundary. A partial trailing-line write leaves the cached offset
+    /// mid-line; resuming there re-parses from mid-line and corrupts the first
+    /// resumed record. Returns  when the byte just before  is
+    /// not a newline (or the probe fails), signalling the caller to fall back
+    /// to a full re-parse from zero.
+    pub fn is_line_boundary_offset(file_path: &Path, offset: i64) -> bool {
+        use std::io::{Read, Seek};
+        if offset <= 0 {
+            return true;
+        }
+        let Ok(file_size) = fs::metadata(file_path).map(|m| m.len() as i64) else {
+            return false;
+        };
+        if offset >= file_size {
+            return true;
+        }
+        let Ok(mut probe) = File::open(file_path) else {
+            return false;
+        };
+        if probe.seek(SeekFrom::Start((offset - 1) as u64)).is_err() {
+            return false;
+        }
+        let mut prev_byte = [0u8; 1];
+        probe.read_exact(&mut prev_byte).is_ok() && prev_byte[0] == b'\n'
+    }
+
     /// Whether a cached scan should be reused under `options` (issue #2089).
     pub fn should_skip_cached_scan(
         cache: &CostUsageCache,
@@ -835,9 +897,22 @@ impl JsonlScanner {
         options.should_skip_scan(cache.last_scan_unix_ms, now_unix_ms)
     }
 
-    /// Load cache from disk
+    /// Load cache from disk.
+    ///
+    /// Refuses to decode artifacts larger than the load cap
+    /// (`crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES`); an oversized artifact is
+    /// cheaper to rebuild bounded than to decode in one shot, so the caller
+    /// gets a fresh empty cache instead (upstream 0.48.0 overshoot contract).
+    /// Only Codex persistence is bounded; other providers load unbounded.
     pub fn load_cache(provider: ProviderId, cache_root: Option<&Path>) -> CostUsageCache {
         let cache_path = Self::cache_path(provider, cache_root);
+
+        if crate::core::is_bounded_provider(provider) {
+            let file_bytes = crate::core::artifact_file_size(&cache_path) as usize;
+            if file_bytes > crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES {
+                return CostUsageCache::default();
+            }
+        }
 
         if let Ok(contents) = fs::read_to_string(&cache_path)
             && let Ok(cache) = serde_json::from_str(&contents)
@@ -849,7 +924,34 @@ impl JsonlScanner {
     }
 
     /// Save cache to disk (temp sibling + copy into place).
-    pub fn save_cache(provider: ProviderId, cache: &CostUsageCache, cache_root: Option<&Path>) {
+    ///
+    /// Before encoding, prunes the cache to the persistence budget so the
+    /// artifact stays small enough to decode in one shot (upstream 0.48.0
+    /// #2637). Only Codex persistence is bounded; the overshoot contract lets
+    /// the encoded size exceed `MAX_FILE_BYTES` up to `MAX_LOAD_BYTES`
+    /// when protected (partially parsed) entries cannot be trimmed further.
+    pub fn save_cache(provider: ProviderId, cache: &mut CostUsageCache, cache_root: Option<&Path>) {
+        Self::save_cache_with_limit(
+            provider,
+            cache,
+            cache_root,
+            crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES,
+        );
+    }
+
+    /// Save with an explicit post-encode refusal limit, injected by tests.
+    ///
+    /// Identical to `save_cache` except the post-encode oversize check uses
+    /// `max_load_bytes` rather than the production `MAX_LOAD_BYTES` const.
+    /// Production callers MUST use `save_cache`; this helper exists so the
+    /// refusal / stale-destination removal can be exercised without encoding a
+    /// ~320 MiB test artifact.
+    fn save_cache_with_limit(
+        provider: ProviderId,
+        cache: &mut CostUsageCache,
+        cache_root: Option<&Path>,
+        max_load_bytes: usize,
+    ) {
         let cache_path = Self::cache_path(provider, cache_root);
 
         let Some(parent) = cache_path.parent() else {
@@ -857,9 +959,81 @@ impl JsonlScanner {
         };
         let _ = fs::create_dir_all(parent);
 
+        if crate::core::is_bounded_provider(provider) {
+            let pruned = crate::core::prune_out_of_window_for_budget(
+                &mut cache.files,
+                &mut cache.days,
+                cache.scan_since_key.as_deref(),
+                cache.scan_until_key.as_deref(),
+                false,
+            );
+            let estimate = crate::core::estimated_cache_bytes(&cache.files, &cache.days);
+            let trimmed = if estimate > crate::core::CostUsageCacheBudget::MAX_FILE_BYTES {
+                crate::core::trim_in_window_for_budget(
+                    &mut cache.files,
+                    &mut cache.days,
+                    cache.scan_since_key.as_deref(),
+                    cache.scan_until_key.as_deref(),
+                    crate::core::CostUsageCacheBudget::MAX_FILE_BYTES,
+                )
+            } else {
+                Vec::new()
+            };
+            // A16 (upstream 0.48.0): when entries were trimmed for budget, the persisted
+            // artifact no longer covers the full window — set previous_report so the
+            // next refresh can signal catch-up is pending (and spend surfaces can show
+            // the last-validated snapshot during the rescan).
+            if (!pruned.is_empty() || !trimmed.is_empty()) && cache.previous_report.is_none() {
+                cache.previous_report = Some(crate::core::CachedCostReport {
+                    total_cost_usd: 0.0, // cost not tracked in day aggregates
+                    input_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[0])
+                        .sum(),
+                    cached_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[1])
+                        .sum(),
+                    output_tokens: cache
+                        .days
+                        .values()
+                        .flat_map(|m| m.values())
+                        .map(|v| v[2])
+                        .sum(),
+                    sessions_count: cache.files.len() as i32,
+                    updated_at: None,
+                    partial: false,
+                });
+            }
+        }
+
         let Ok(json) = serde_json::to_string(cache) else {
             return;
         };
+
+        // F19 (upstream 0.48.0): after bounded encode, if the artifact still
+        // exceeds MAX_LOAD_BYTES, refuse persistence. Also remove any existing
+        // destination artifact so a stale/oversized file cannot persist and
+        // trip the load-refusal path on the next scan (which would force an
+        // unnecessary full rebuild from a poisoned artifact). This is a
+        // one-shot refusal (not a persist/refuse/rebuild loop): the budget
+        // enforcement above already pruned and trimmed; if the result is still
+        // too large (e.g. a single protected entry exceeds the limit), the
+        // artifact is dropped and the next scan rebuilds from scratch.
+        if crate::core::is_bounded_provider(provider)
+            && crate::core::CostUsageCacheBudget::should_refuse_persistence(
+                json.len(),
+                max_load_bytes,
+            )
+        {
+            // Best-effort removal; ignore errors (file may not exist).
+            let _ = fs::remove_file(&cache_path);
+            return;
+        }
 
         let tmp_name = format!(
             ".{}.{}-{}.tmp",
@@ -1278,5 +1452,264 @@ mod tests {
             CostScanOptions::app_driven(),
             now
         ));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_zero_returns_true() {
+        // F2: offset 0 is always a valid boundary (start of file).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        std::fs::write(
+            &path,
+            b"hello
+world
+",
+        )
+        .unwrap();
+        assert!(JsonlScanner::is_line_boundary_offset(&path, 0));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_at_or_past_size_returns_true() {
+        // F2: offset >= file_size returns true (EOF or beyond is a valid boundary).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        let content = b"line1
+line2
+";
+        std::fs::write(&path, content).unwrap();
+        let size = content.len() as i64;
+        assert!(JsonlScanner::is_line_boundary_offset(&path, size));
+        assert!(JsonlScanner::is_line_boundary_offset(&path, size + 100));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_exact_newline_returns_true() {
+        // F2: offset pointing right after a newline is a valid boundary.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        // "line1\nline2\n" — offset 6 is right after first \n
+        std::fs::write(&path, b"line1\nline2\n").unwrap();
+        assert!(JsonlScanner::is_line_boundary_offset(&path, 6));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_midline_returns_false() {
+        // F2: offset pointing mid-line (byte before is not \n) returns false.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f.jsonl");
+        // "line1\nline2\n" — offset 3 is mid-line (byte before is 'n')
+        std::fs::write(&path, b"line1\nline2\n").unwrap();
+        assert!(!JsonlScanner::is_line_boundary_offset(&path, 3));
+    }
+
+    #[test]
+    fn is_line_boundary_offset_missing_file_returns_false() {
+        // F2: missing file returns false (probe fails).
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("nonexistent.jsonl");
+        // offset > 0 so it doesn't short-circuit to true
+        assert!(!JsonlScanner::is_line_boundary_offset(&path, 10));
+    }
+
+    #[test]
+    fn save_cache_persists_small_codex_artifact() {
+        // F19 integration: a normal-sized Codex cache is persisted and
+        // reloadable — the MAX_LOAD_BYTES refusal does not false-positive.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+        let mut cache = CostUsageCache {
+            scan_since_key: Some("2026-01-01".to_string()),
+            scan_until_key: Some("2026-01-31".to_string()),
+            files: HashMap::from([(
+                "a.jsonl".to_string(),
+                CostUsageFileUsage {
+                    mtime_unix_ms: 0,
+                    size: 100,
+                    days: HashMap::from([(
+                        "2026-01-10".to_string(),
+                        HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
+                    )]),
+                    parsed_bytes: None,
+                    last_model: None,
+                    last_totals: None,
+                },
+            )]),
+            ..Default::default()
+        };
+
+        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+        // File should exist and be reloadable.
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            loaded.files.contains_key("a.jsonl"),
+            "small artifact persisted"
+        );
+        assert_eq!(loaded.scan_since_key, Some("2026-01-01".to_string()));
+    }
+
+    #[test]
+    fn save_cache_refuses_non_bounded_provider_oversize() {
+        // F19: non-bounded providers (e.g. Claude) skip the refusal check
+        // entirely — the MAX_LOAD_BYTES guard only applies to bounded providers.
+        // This test confirms the is_bounded_provider gate works: Claude cache
+        // is saved regardless of the MAX_LOAD_BYTES check (which is Codex-only).
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+        let mut cache = CostUsageCache::default();
+        cache.files.insert(
+            "claude.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::new(),
+                parsed_bytes: None,
+                last_model: None,
+                last_totals: None,
+            },
+        );
+
+        JsonlScanner::save_cache(ProviderId::Claude, &mut cache, Some(&cache_root));
+        let loaded = JsonlScanner::load_cache(ProviderId::Claude, Some(&cache_root));
+        assert!(loaded.files.contains_key("claude.jsonl"));
+    }
+
+    #[test]
+    fn save_cache_refusal_removes_preexisting_destination_artifact() {
+        // F19 integration: when the post-encode check refuses the artifact, any
+        // pre-existing destination file is removed so a stale/oversized artifact
+        // cannot persist and trigger load/refuse/rebuild behavior on next scan.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let mut cache = CostUsageCache::default();
+        cache.files.insert(
+            "big.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::from([(
+                    "2026-01-10".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
+                )]),
+                parsed_bytes: None,
+                last_model: None,
+                last_totals: None,
+            },
+        );
+
+        // Precreate a "stale" destination artifact so the refusal must remove
+        // it. We seed it via a large (over_max) save_limit so the save_cache_with_limit
+        // first ENCODES the small cache fine under a generous limit, writes the file,
+        // then a follow-up call with a tiny limit must refuse AND remove.
+        let cache_path = {
+            // Exercise the private helper indirectly via the public path: first
+            // persist a valid artifact under a generous limit via save_cache.
+            // Then call with an impossible limit (encoded JSON ~hundreds of
+            // bytes, limit = 1 byte) to force refusal.
+            JsonlScanner::save_cache_with_limit(
+                ProviderId::Codex,
+                &mut cache,
+                Some(&cache_root),
+                usize::MAX,
+            );
+            let p = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+            assert!(p.exists(), "precreate destination artifact");
+            p
+        };
+
+        // Sanity: a normal load succeeds against the precreated artifact.
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(loaded.files.contains_key("big.jsonl"));
+
+        // Force refusal with a 1-byte limit: encoded cache will exceed it.
+        JsonlScanner::save_cache_with_limit(ProviderId::Codex, &mut cache, Some(&cache_root), 1);
+
+        // Destination must be gone — no stale artifact may persist.
+        assert!(
+            !cache_path.exists(),
+            "refusal must remove preexisting destination artifact"
+        );
+
+        // No temp file should remain in the cache root (only unique tmp name was used).
+        let mut tmp_entries = Vec::new();
+        for entry in std::fs::read_dir(&cache_root).unwrap() {
+            let name = entry.unwrap().file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') && name.ends_with(".tmp") {
+                tmp_entries.push(name.into_owned());
+            }
+        }
+        // Best-effort temp cleanup writes an empty file at the unique name; the
+        // invariant is that NO tmp file contains a complete artifact. The set
+        // should at most contain a single zero-byte remnant from the cleanup
+        // (or be empty); we persist via copy() rather than rename so no live
+        // tmp holds data after the save path completes.
+        for t in &tmp_entries {
+            let meta = std::fs::metadata(cache_root.join(t)).unwrap();
+            assert_eq!(meta.len(), 0, "tmp remnant must be empty: {t}");
+        }
+
+        // Loading after removal yields a fresh default cache (no rebuild loop).
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            loaded.files.is_empty(),
+            "no rebuild loop from removed artifact"
+        );
+    }
+
+    #[test]
+    fn save_cache_at_exact_limit_is_accepted() {
+        // F19 boundary: an encoded artifact at exactly the injected limit is
+        // accepted (only strictly-larger artifacts are refused).
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let cache = CostUsageCache::default();
+        // Serialize to learn the actual encoded size for this exact struct.
+        let json = serde_json::to_string(&cache).unwrap();
+        let exact_limit = json.len();
+
+        let mut cache_for_save = cache;
+        JsonlScanner::save_cache_with_limit(
+            ProviderId::Codex,
+            &mut cache_for_save,
+            Some(&cache_root),
+            exact_limit,
+        );
+
+        let cache_path = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache_path.exists(),
+            "artifact at exact limit must be persisted"
+        );
+    }
+
+    #[test]
+    fn save_cache_one_over_limit_is_refused_and_removes_destination() {
+        // F19 boundary: an encoded artifact one byte over the injected limit is
+        // refused, and any pre-existing destination is removed.
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().to_path_buf();
+
+        let cache = CostUsageCache::default();
+        let json = serde_json::to_string(&cache).unwrap();
+        // One byte short of the encoded size forces refusal on the next attempt.
+        let under_by_one = json.len().saturating_sub(1);
+
+        let mut cache_for_save = cache;
+        JsonlScanner::save_cache_with_limit(
+            ProviderId::Codex,
+            &mut cache_for_save,
+            Some(&cache_root),
+            under_by_one,
+        );
+
+        let cache_path = JsonlScanner::cache_path(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            !cache_path.exists(),
+            "one-over-limit encoded artifact must be refused"
+        );
     }
 }

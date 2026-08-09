@@ -341,6 +341,7 @@ export const ALL_LOCALE_KEYS = [
   "UsageSpendCaption",
   "UsageSpendRefresh",
   "UsageSpendLoading",
+  "UsageSpendRefreshing",
   "UsageSpendEmpty",
   "UsageSpendColProvider",
   "UsageSpendCol7d",
@@ -735,6 +736,8 @@ export const ALL_LOCALE_KEYS = [
   "RefreshInterval1Hour",
   "ProviderNameCodex",
   "ProviderNameClaude",
+  "AgentSessionsProviderPi",
+  "AgentSessionsProviderOmp",
 
   // Tauri desktop shell — misc singletons
   "ProvidersAriaLabel",

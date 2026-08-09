@@ -559,6 +559,7 @@ locale_keys! {
     UsageSpendCaption,
     UsageSpendRefresh,
     UsageSpendLoading,
+    UsageSpendRefreshing,
     UsageSpendEmpty,
     UsageSpendColProvider,
     UsageSpendCol7d,
@@ -989,6 +990,8 @@ locale_keys! {
     RefreshInterval1Hour,
     ProviderNameCodex,
     ProviderNameClaude,
+    AgentSessionsProviderPi,
+    AgentSessionsProviderOmp,
 
     // Tauri desktop shell — misc singletons
     ProvidersAriaLabel,

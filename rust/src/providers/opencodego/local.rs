@@ -4,8 +4,8 @@
 //! message / step-finish costs from the local OpenCode database and maps them
 //! onto session ($12 / 5h), weekly ($30), and monthly ($60) windows.
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc};
-use rusqlite::{Connection, OpenFlags};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 use crate::core::{ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
@@ -20,7 +20,9 @@ const PROVIDER_ID: &str = "opencode-go";
 const MESSAGE_USAGE_SQL: &str = r#"
 SELECT
   CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
-  CAST(json_extract(data, '$.cost') AS REAL) AS cost
+  CAST(json_extract(data, '$.cost') AS REAL) AS cost,
+  1 AS requestCount,
+  COALESCE(json_extract(data, '$.modelID'), '') AS modelID
 FROM message
 WHERE json_valid(data)
   AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -34,7 +36,8 @@ WITH provider_messages AS (
     id AS messageID,
     CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
     CAST(json_extract(data, '$.cost') AS REAL) AS cost,
-    json_type(data, '$.cost') IN ('integer', 'real') AS hasCost
+    json_type(data, '$.cost') IN ('integer', 'real') AS hasCost,
+    COALESCE(json_extract(data, '$.modelID'), '') AS modelID
   FROM message
   WHERE json_valid(data)
     AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -43,14 +46,16 @@ WITH provider_messages AS (
 SELECT
   CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER)
     AS createdMs,
-  CAST(json_extract(p.data, '$.cost') AS REAL) AS cost
+  CAST(json_extract(p.data, '$.cost') AS REAL) AS cost,
+  1 AS requestCount,
+  m.modelID AS modelID
 FROM part p
 JOIN provider_messages m ON m.messageID = p.message_id
 WHERE json_valid(p.data)
   AND json_extract(p.data, '$.type') = 'step-finish'
   AND json_type(p.data, '$.cost') IN ('integer', 'real')
 UNION ALL
-SELECT createdMs, cost
+SELECT createdMs, cost, 1 AS requestCount, modelID
 FROM provider_messages m
 WHERE hasCost
   AND NOT EXISTS (
@@ -63,10 +68,14 @@ WHERE hasCost
   )
 "#;
 
-#[derive(Debug, Clone, Copy)]
-struct UsageRow {
+#[derive(Debug, Clone)]
+pub(crate) struct UsageRow {
     created_ms: i64,
     cost: f64,
+    /// One provider invocation per step-finish part; message-only databases fall back to one.
+    request_count: u32,
+    /// The underlying model behind the `opencode-go` Zen proxy; empty when unattributed.
+    model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +226,8 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
             Ok(UsageRow {
                 created_ms: row.get::<_, i64>(0)?,
                 cost: row.get::<_, f64>(1)?,
+                request_count: row.get::<_, i64>(2).map(|n| n.max(1) as u32).unwrap_or(1),
+                model: row.get::<_, String>(3).unwrap_or_default(),
             })
         })
         .map_err(|e| {
@@ -238,70 +249,8 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
 /// Open a read-only connection without creating `-wal`/`-shm` sidecars for idle
 /// WAL-mode databases (upstream #2544).
 fn open_readonly_connection(db_path: &Path) -> Result<Connection, ProviderError> {
-    let map_err = |e: rusqlite::Error| {
-        ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
-    };
-
-    // Prefer immutable URI when sidecars are absent so a clean WAL shutdown
-    // (header still WAL, no -wal/-shm) does not recreate them on open.
-    if wal_sidecars_missing(db_path)
-        && let Ok(conn) = open_immutable(db_path)
-    {
-        return Ok(conn);
-    }
-
-    match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(conn) => Ok(conn),
-        Err(err) if is_cant_open(&err) && wal_sidecars_missing(db_path) => {
-            open_immutable(db_path).map_err(map_err)
-        }
-        Err(err) => Err(map_err(err)),
-    }
-}
-
-fn open_immutable(db_path: &Path) -> Result<Connection, rusqlite::Error> {
-    let uri = sqlite_immutable_uri(db_path);
-    Connection::open_with_flags(
-        uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-}
-
-fn sqlite_immutable_uri(db_path: &Path) -> String {
-    let abs = db_path
-        .canonicalize()
-        .unwrap_or_else(|_| db_path.to_path_buf());
-    let raw = abs.to_string_lossy();
-    // Windows canonicalize() yields `\\?\C:\...`; strip that for SQLite URIs.
-    let stripped = raw
-        .strip_prefix(r"\\?\")
-        .or_else(|| raw.strip_prefix("//?/"))
-        .unwrap_or(raw.as_ref());
-    let path = stripped.replace('\\', "/");
-    // Prefer `file:` (no authority) so drive letters stay valid on Windows.
-    format!("file:{path}?immutable=1")
-}
-
-fn wal_sidecars_missing(db_path: &Path) -> bool {
-    let wal = sidecar_path(db_path, "-wal");
-    let shm = sidecar_path(db_path, "-shm");
-    !wal.exists() && !shm.exists()
-}
-
-fn sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
-    let mut s = db_path.as_os_str().to_os_string();
-    s.push(suffix);
-    PathBuf::from(s)
-}
-
-fn is_cant_open(err: &rusqlite::Error) -> bool {
-    matches!(
-        err.sqlite_error_code(),
-        Some(rusqlite::ErrorCode::CannotOpen)
-    ) || err
-        .to_string()
-        .to_ascii_lowercase()
-        .contains("unable to open")
+    crate::core::open_readonly_sqlite_connection(db_path, std::time::Duration::from_millis(250))
+        .map_err(|e| ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}")))
 }
 
 fn has_table(conn: &Connection, name: &str) -> bool {
@@ -361,6 +310,199 @@ fn percent(used: f64, limit: f64) -> f64 {
     }
     let value = (used / limit * 100.0).clamp(0.0, 100.0);
     (value * 10.0).round() / 10.0
+}
+
+/// Bucket label for rows whose local `modelID` is missing or blank (upstream #2649).
+const UNKNOWN_MODEL_NAME: &str = "unknown";
+
+/// One (day, model) cost bucket for the daily per-model breakdown (upstream #2649).
+///
+/// Mirrors `CostUsageDailyReport.ModelBreakdown` plus the day key, so the shared
+/// cost-history chart can render OpenCode Go the same way it renders Codex/Claude
+/// without a bespoke chart surface. Entries are sorted by `(day_key, model)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyModelCost {
+    /// `yyyy-MM-dd` local calendar day (matches Codex/Claude cost-history keying).
+    pub day_key: String,
+    /// Trimmed model id, or `UNKNOWN_MODEL_NAME` when the row had none.
+    pub model: String,
+    /// Cost in USD accumulated for this (day, model) bucket.
+    pub cost: f64,
+    /// Number of provider invocations (step-finish parts, or one per message).
+    pub request_count: u32,
+}
+
+/// Provider-local cost summary reusing the shared `CostSummary` fields the chart
+/// already consumes (`total_cost_usd`, `by_model`, `period_start/end`). Built
+/// from the same local rows as the daily breakdown so the two surfaces agree.
+#[derive(Debug, Clone, Default)]
+pub struct ModelCostSummary {
+    pub total_cost_usd: f64,
+    pub by_model: std::collections::HashMap<String, f64>,
+    pub request_count: u32,
+    pub period_start: Option<NaiveDate>,
+    pub period_end: Option<NaiveDate>,
+}
+
+/// Local calendar-day key (`yyyy-MM-dd`) for a UTC millisecond timestamp,
+/// matching how Codex/Claude cost history is keyed.
+fn day_key_local(ms: i64) -> Option<String> {
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|dt| dt.date_naive().format("%Y-%m-%d").to_string())
+}
+
+/// Local "today" derived from a UTC instant, so the day window is deterministic
+/// under test rather than snapping to wall-clock `Local::now()`.
+fn local_today_from_utc(now: DateTime<Utc>) -> NaiveDate {
+    Local.from_utc_datetime(&now.naive_utc()).date_naive()
+}
+
+/// Group rows into `(day, model)` cost buckets (upstream #2649).
+///
+/// Rows outside the `[since, now]` window are dropped; model ids are trimmed and
+/// blanks collapse to `UNKNOWN_MODEL_NAME`. The result is sorted by
+/// `(day_key, model)` for deterministic ordering.
+pub fn daily_model_costs(
+    rows: &[UsageRow],
+    now: DateTime<Utc>,
+    history_days: u32,
+) -> Vec<DailyModelCost> {
+    let clamped = history_days.clamp(1, 365);
+    let today = local_today_from_utc(now);
+    let since = today - Duration::days(clamped as i64 - 1);
+    let since_ms = Local
+        .from_local_datetime(&since.and_hms_opt(0, 0, 0).unwrap_or_default())
+        .single()
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0);
+    let now_ms = now.timestamp_millis();
+
+    let mut by_day_model: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, (f64, u32)>,
+    > = std::collections::BTreeMap::new();
+    for row in rows {
+        if row.created_ms < since_ms || row.created_ms > now_ms {
+            continue;
+        }
+        let Some(key) = day_key_local(row.created_ms) else {
+            continue;
+        };
+        let trimmed = row.model.trim();
+        let model = if trimmed.is_empty() {
+            UNKNOWN_MODEL_NAME
+        } else {
+            trimmed
+        };
+        let entry = by_day_model.entry(key).or_default();
+        let bucket = entry.entry(model.to_string()).or_insert((0.0, 0));
+        bucket.0 += row.cost;
+        bucket.1 = bucket.1.saturating_add(row.request_count);
+    }
+
+    let mut out = Vec::new();
+    for (day_key, models) in by_day_model {
+        for (model, (cost, request_count)) in models {
+            out.push(DailyModelCost {
+                day_key: day_key.clone(),
+                model,
+                cost,
+                request_count,
+            });
+        }
+    }
+    out
+}
+
+/// Build the provider-local cost summary for the last `days` days.
+pub fn model_cost_summary_from_rows(
+    rows: &[UsageRow],
+    now: DateTime<Utc>,
+    days: u32,
+) -> ModelCostSummary {
+    let clamped = days.clamp(1, 365);
+    let today = local_today_from_utc(now);
+    let since = today - Duration::days(clamped as i64 - 1);
+    let since_ms = Local
+        .from_local_datetime(&since.and_hms_opt(0, 0, 0).unwrap_or_default())
+        .single()
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0);
+    let now_ms = now.timestamp_millis();
+
+    let mut total = 0.0;
+    let mut request_count = 0u32;
+    let mut by_model: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut earliest: Option<NaiveDate> = None;
+    let mut latest: Option<NaiveDate> = None;
+    for row in rows {
+        if row.created_ms < since_ms || row.created_ms > now_ms {
+            continue;
+        }
+        total += row.cost;
+        request_count = request_count.saturating_add(row.request_count);
+        let trimmed = row.model.trim();
+        let model = if trimmed.is_empty() {
+            UNKNOWN_MODEL_NAME
+        } else {
+            trimmed
+        };
+        *by_model.entry(model.to_string()).or_insert(0.0) += row.cost;
+        if let Some(day) = day_key_local(row.created_ms)
+            .and_then(|k| NaiveDate::parse_from_str(&k, "%Y-%m-%d").ok())
+        {
+            earliest = Some(earliest.map(|e| e.min(day)).unwrap_or(day));
+            latest = Some(latest.map(|l| l.max(day)).unwrap_or(day));
+        }
+    }
+    ModelCostSummary {
+        total_cost_usd: total,
+        by_model,
+        request_count,
+        period_start: earliest,
+        period_end: latest,
+    }
+}
+
+/// Per-day cost series (`yyyy-MM-dd`, cost USD) for the shared cost-history chart,
+/// summed across all models. Reads the first available local OpenCode install.
+/// Empty when no install is detected.
+pub fn daily_cost_series(now: DateTime<Utc>, history_days: u32) -> Vec<(String, f64)> {
+    let Some(rows) = read_available_rows() else {
+        return Vec::new();
+    };
+    let buckets = daily_model_costs(&rows, now, history_days);
+    let mut by_day: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    for b in &buckets {
+        *by_day.entry(b.day_key.clone()).or_insert(0.0) += b.cost;
+    }
+    by_day.into_iter().collect()
+}
+
+/// Provider-local cost summary for the chart's local-usage panel. `None` when no
+/// local OpenCode install is detected.
+pub fn model_cost_summary_scan(now: DateTime<Utc>, days: u32) -> Option<ModelCostSummary> {
+    let rows = read_available_rows()?;
+    Some(model_cost_summary_from_rows(&rows, now, days))
+}
+
+/// Read usage rows from the first candidate install that yields any. Returns
+/// `None` when no install is reachable (auth+db both absent) rather than
+/// propagating `NotInstalled`, since the cost surfaces treat "no data" as empty.
+fn read_available_rows() -> Option<Vec<UsageRow>> {
+    for (auth, db) in candidate_paths() {
+        if !db.exists() {
+            continue;
+        }
+        match read_rows(&db) {
+            Ok(rows) if !rows.is_empty() || has_auth_key(&auth) => return Some(rows),
+            Ok(_) => continue,
+            Err(_) => continue,
+        }
+    }
+    None
 }
 
 /// ISO week start (Monday 00:00 UTC), matching upstream calendar settings.
@@ -483,6 +625,82 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// Build a message-only DB with optional per-row `modelID` (upstream #2649 fixtures).
+    fn write_message_db_with_model(path: &Path, rows: &[(i64, f64, Option<&str>)]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                data TEXT,
+                time_created INTEGER
+            );",
+        )
+        .unwrap();
+        for (i, (created_ms, cost, model)) in rows.iter().enumerate() {
+            let model_json = match model {
+                Some(m) => format!(r#","modelID":"{m}""#),
+                None => String::new(),
+            };
+            let data = format!(
+                r#"{{"providerID":"opencode-go","role":"assistant","cost":{cost}{model_json},"time":{{"created":{created_ms}}}}}"#
+            );
+            conn.execute(
+                "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+                rusqlite::params![format!("m{i}"), data, created_ms],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Insert one assistant message and return its id, optionally with a modelID.
+    fn insert_message(
+        conn: &Connection,
+        id: &str,
+        created_ms: i64,
+        cost: Option<f64>,
+        model: Option<&str>,
+    ) {
+        let cost_json = match cost {
+            Some(c) => format!(r#","cost":{c}"#),
+            None => String::new(),
+        };
+        let model_json = match model {
+            Some(m) => format!(r#","modelID":"{m}""#),
+            None => String::new(),
+        };
+        let data = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant"{cost_json}{model_json},"time":{{"created":{created_ms}}}}}"#
+        );
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, data, created_ms],
+        )
+        .unwrap();
+    }
+
+    /// Insert a step-finish part carrying a cost, attached to `message_id`.
+    fn insert_step_finish_part(
+        conn: &Connection,
+        id: &str,
+        message_id: &str,
+        created_ms: i64,
+        cost: f64,
+    ) {
+        let data =
+            format!(r#"{{"type":"step-finish","cost":{cost},"time":{{"created":{created_ms}}}}}"#);
+        conn.execute(
+            "INSERT INTO part (id, message_id, data, time_created) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, message_id, data, created_ms],
+        )
+        .unwrap();
+    }
+
+    fn iso_ms(iso: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .timestamp_millis()
     }
 
     #[test]
@@ -639,8 +857,8 @@ mod tests {
         }
 
         // Ensure idle-WAL case: header says WAL, no live sidecars.
-        let wal = sidecar_path(&db, "-wal");
-        let shm = sidecar_path(&db, "-shm");
+        let wal = crate::core::sqlite_sidecar_path(&db, "-wal");
+        let shm = crate::core::sqlite_sidecar_path(&db, "-shm");
         // Prefer rename-away over delete if OS still holds handles.
         for side in [&wal, &shm] {
             if side.exists() {
@@ -658,5 +876,313 @@ mod tests {
             !wal.exists() && !shm.exists(),
             "reader must not create -wal/-shm sidecars"
         );
+    }
+
+    // ---- A14: per-model daily cost breakdown (upstream #2649) -------------
+
+    fn a14_now() -> DateTime<Utc> {
+        Utc.timestamp_opt(1_772_798_400, 0).unwrap()
+    }
+
+    fn a14_now_afternoon() -> DateTime<Utc> {
+        Utc.timestamp_opt(1_772_798_400 + 4 * 3600, 0).unwrap()
+    }
+
+    #[test]
+    fn daily_entries_group_cost_by_model_within_a_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let now = a14_now_afternoon();
+        write_message_db_with_model(
+            &db,
+            &[
+                (
+                    iso_ms("2026-03-06T11:00:00.000Z"),
+                    3.0,
+                    Some("claude-sonnet-4-5"),
+                ),
+                (
+                    iso_ms("2026-03-06T12:00:00.000Z"),
+                    2.0,
+                    Some("gpt-5.1-codex"),
+                ),
+                (
+                    iso_ms("2026-03-06T13:00:00.000Z"),
+                    1.0,
+                    Some("claude-sonnet-4-5"),
+                ),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, now, 30);
+
+        // Day key is local-calendar; assert on tz-independent model aggregation.
+        let total: f64 = buckets.iter().map(|b| b.cost).sum();
+        assert!((total - 6.0).abs() < 1e-6, "total {total}");
+        assert_eq!(buckets.iter().map(|b| b.request_count).sum::<u32>(), 3);
+        let by_model: std::collections::HashMap<&str, f64> =
+            buckets.iter().map(|b| (b.model.as_str(), b.cost)).collect();
+        assert!((by_model["claude-sonnet-4-5"] - 4.0).abs() < 1e-6);
+        assert!((by_model["gpt-5.1-codex"] - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn step_finish_parts_inherit_their_model_from_the_parent_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);
+             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+        let created = iso_ms("2026-03-06T11:00:00.000Z");
+        insert_message(&conn, "m1", created, None, Some("grok-code-fast-1"));
+        insert_step_finish_part(&conn, "p1", "m1", created, 3.0);
+        drop(conn);
+
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert_eq!(buckets[0].model, "grok-code-fast-1");
+        assert!((buckets[0].cost - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn messages_without_a_model_fall_back_to_the_unknown_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(&db, &[(iso_ms("2026-03-06T11:00:00.000Z"), 4.0, None)]);
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert_eq!(buckets[0].model, UNKNOWN_MODEL_NAME);
+        assert!((buckets[0].cost - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn whitespace_only_model_ids_fall_back_to_the_unknown_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[(iso_ms("2026-03-06T11:00:00.000Z"), 5.0, Some("   "))],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert_eq!(buckets[0].model, UNKNOWN_MODEL_NAME);
+        assert!((buckets[0].cost - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn model_ids_with_incidental_whitespace_merge_with_the_trimmed_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[
+                (
+                    iso_ms("2026-03-06T11:00:00.000Z"),
+                    2.0,
+                    Some("claude-sonnet-4-5"),
+                ),
+                (
+                    iso_ms("2026-03-06T12:00:00.000Z"),
+                    3.0,
+                    Some("  claude-sonnet-4-5  "),
+                ),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert_eq!(buckets[0].model, "claude-sonnet-4-5");
+        assert!((buckets[0].cost - 5.0).abs() < 1e-6);
+        assert_eq!(buckets[0].request_count, 2);
+    }
+
+    #[test]
+    fn multiple_days_bucket_separately_and_sort_deterministically() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[
+                (iso_ms("2026-03-05T11:00:00.000Z"), 1.0, Some("a")),
+                (iso_ms("2026-03-06T11:00:00.000Z"), 2.0, Some("b")),
+                (iso_ms("2026-03-07T11:00:00.000Z"), 3.0, Some("a")),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        assert!(
+            buckets
+                .windows(2)
+                .all(|w| (w[0].day_key.as_str(), w[0].model.as_str())
+                    <= (w[1].day_key.as_str(), w[1].model.as_str())),
+            "not sorted: {buckets:?}"
+        );
+        assert!(
+            buckets
+                .iter()
+                .map(|b| b.day_key.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                >= 2
+        );
+    }
+
+    #[test]
+    fn zero_cost_rows_are_kept_and_aggregated() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[
+                (iso_ms("2026-03-06T11:00:00.000Z"), 0.0, Some("a")),
+                (iso_ms("2026-03-06T12:00:00.000Z"), 4.0, Some("a")),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert!((buckets[0].cost - 4.0).abs() < 1e-6);
+        assert_eq!(buckets[0].request_count, 2);
+    }
+
+    #[test]
+    fn malformed_rows_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                "m1",
+                r#"{"providerID":"opencode-go","role":"user","cost":9,"time":{"created":1772798400000}}"#,
+                1772798400000i64
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                "m2",
+                r#"{"providerID":"opencode-go","role":"assistant","cost":null,"modelID":"x","time":{"created":1772798400000}}"#,
+                1772798400000i64
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                "m3",
+                r#"{"providerID":"opencode-go","role":"assistant","cost":7,"modelID":"good","time":{"created":1772798400000}}"#,
+                1772798400000i64
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let rows = read_rows(&db).unwrap();
+        assert_eq!(rows.len(), 1, "only the valid assistant+cost row survives");
+        assert_eq!(rows[0].model, "good");
+    }
+
+    #[test]
+    fn rows_outside_history_window_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let far_past = iso_ms("2025-01-01T00:00:00.000Z");
+        let recent = a14_now().timestamp_millis();
+        write_message_db_with_model(
+            &db,
+            &[(far_past, 1.0, Some("old")), (recent, 2.0, Some("new"))],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now(), 1);
+        let models: Vec<&str> = buckets.iter().map(|b| b.model.as_str()).collect();
+        assert!(
+            !models.contains(&"old"),
+            "old row should be outside the 1-day window: {buckets:?}"
+        );
+    }
+
+    #[test]
+    fn day_boundary_keys_by_local_calendar_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let just_after_utc_midnight = iso_ms("2026-03-06T00:30:00.000Z");
+        write_message_db_with_model(&db, &[(just_after_utc_midnight, 1.5, Some("edge"))]);
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert!(
+            NaiveDate::parse_from_str(&buckets[0].day_key, "%Y-%m-%d").is_ok(),
+            "day_key not yyyy-MM-dd: {}",
+            buckets[0].day_key
+        );
+    }
+
+    #[test]
+    fn model_cost_summary_aggregates_total_and_by_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[
+                (iso_ms("2026-03-06T11:00:00.000Z"), 3.0, Some("a")),
+                (iso_ms("2026-03-06T12:00:00.000Z"), 1.0, Some("b")),
+                (iso_ms("2026-03-06T13:00:00.000Z"), 2.0, None),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let summary = model_cost_summary_from_rows(&rows, a14_now_afternoon(), 30);
+        assert!((summary.total_cost_usd - 6.0).abs() < 1e-6, "{summary:?}");
+        assert_eq!(summary.request_count, 3);
+        assert!((summary.by_model["a"] - 3.0).abs() < 1e-6);
+        assert!((summary.by_model["b"] - 1.0).abs() < 1e-6);
+        assert!((summary.by_model[UNKNOWN_MODEL_NAME] - 2.0).abs() < 1e-6);
+        assert!(summary.period_start.is_some() && summary.period_end.is_some());
+    }
+
+    #[test]
+    fn daily_series_sums_models_per_day_via_pure_aggregation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(
+            &db,
+            &[
+                (iso_ms("2026-03-06T11:00:00.000Z"), 3.0, Some("a")),
+                (iso_ms("2026-03-06T12:00:00.000Z"), 2.0, Some("b")),
+            ],
+        );
+        let rows = read_rows(&db).unwrap();
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        let mut by_day: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+        for b in &buckets {
+            *by_day.entry(b.day_key.clone()).or_insert(0.0) += b.cost;
+        }
+        let series: Vec<(String, f64)> = by_day.into_iter().collect();
+        assert_eq!(series.len(), 1, "{series:?}");
+        assert!((series[0].1 - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn daily_aggregation_is_independent_of_zen_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        write_message_db_with_model(&db, &[(iso_ms("2026-03-06T11:00:00.000Z"), 2.0, Some("a"))]);
+        let rows = read_rows(&db).unwrap();
+        let now = a14_now();
+        let b1 = daily_model_costs(&rows, now, 30);
+        let b2 = daily_model_costs(&rows, now, 30);
+        assert_eq!(b1, b2, "pure aggregation must be deterministic");
+        assert_eq!(b1.len(), 1);
     }
 }

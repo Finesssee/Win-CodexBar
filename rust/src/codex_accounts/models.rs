@@ -352,10 +352,12 @@ impl UsageWindowSnapshot {
     }
 
     pub fn role(&self) -> WindowRole {
-        match self.limit_window_seconds {
-            18_000 => WindowRole::Session,
-            604_800 => WindowRole::Weekly,
-            _ => WindowRole::Unknown,
+        use crate::core::RateWindowCadence;
+        match RateWindowCadence::from_seconds(self.limit_window_seconds) {
+            RateWindowCadence::Session => WindowRole::Session,
+            RateWindowCadence::Weekly => WindowRole::Weekly,
+            RateWindowCadence::Monthly => WindowRole::Monthly,
+            RateWindowCadence::Unknown => WindowRole::Unknown,
         }
     }
 }
@@ -365,6 +367,7 @@ impl UsageWindowSnapshot {
 pub enum WindowRole {
     Session,
     Weekly,
+    Monthly,
     Unknown,
 }
 
@@ -564,6 +567,10 @@ mod tests {
         assert_eq!(
             UsageWindowSnapshot::new(0.0, None, 1234).role(),
             WindowRole::Unknown
+        );
+        assert_eq!(
+            UsageWindowSnapshot::new(0.0, None, 2_592_000).role(),
+            WindowRole::Monthly
         );
     }
 

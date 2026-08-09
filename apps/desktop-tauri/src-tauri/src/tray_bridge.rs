@@ -562,11 +562,42 @@ fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     lang: codexbar::settings::Language,
 ) -> (String, String) {
-    let label = crate::commands::compact_tray_status_label(&snapshot.primary, lang);
+    // F5 (upstream 0.48.0): for Codex, prefer the first non-informational lane so
+    // a monthly-only plan shows the monthly window with its reset countdown
+    // instead of the informational "No active 5h session" placeholder.
+    let window = if snapshot.provider_id == "codex" {
+        codex_lane_headline_window(snapshot)
+    } else {
+        &snapshot.primary
+    };
+    let label = crate::commands::compact_tray_status_label(window, lang);
     (
         snapshot.provider_id.clone(),
         format!("{} {}", snapshot.display_name, label),
     )
+}
+
+/// F5 (upstream 0.48.0): pick the first non-informational Codex lane in
+/// session → weekly → monthly order. When all lanes are informational
+/// (no active session at all), fall back to the primary for the
+/// "No active 5h session" placeholder.
+pub(crate) fn codex_lane_headline_window(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> &crate::commands::RateWindowSnapshot {
+    if !snapshot.primary.is_informational {
+        return &snapshot.primary;
+    }
+    if let Some(ref secondary) = snapshot.secondary
+        && !secondary.is_informational
+    {
+        return secondary;
+    }
+    if let Some(ref tertiary) = snapshot.tertiary
+        && !tertiary.is_informational
+    {
+        return tertiary;
+    }
+    &snapshot.primary
 }
 
 fn render_tray_icon_for_settings(
@@ -1140,6 +1171,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             }),
+            tertiary_label: None,
             extra_rate_windows: Vec::new(),
             cost: cost.map(|(used, limit)| crate::commands::CostSnapshotBridge {
                 used,
@@ -1538,5 +1570,44 @@ mod tests {
 
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
         assert_eq!(primary, 90.0);
+    }
+
+    #[test]
+    fn f5_headline_prefers_non_informational_primary() {
+        let snapshot = fake_snapshot_with("codex", "Codex", 50.0, Some(20.0), Some(30.0), None);
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_falls_back_to_secondary_when_primary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(25.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_falls_back_to_tertiary_when_primary_and_secondary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(35.0), None);
+        snapshot.primary.is_informational = true;
+        snapshot.secondary.as_mut().unwrap().is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 35.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn f5_headline_returns_primary_when_all_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(0.0), None);
+        snapshot.primary.is_informational = true;
+        if let Some(sec) = &mut snapshot.secondary {
+            sec.is_informational = true;
+        }
+        if let Some(ter) = &mut snapshot.tertiary {
+            ter.is_informational = true;
+        }
+        let headline = codex_lane_headline_window(&snapshot);
+        // Falls back to primary (the placeholder) when all are informational.
+        assert!(headline.is_informational);
     }
 }

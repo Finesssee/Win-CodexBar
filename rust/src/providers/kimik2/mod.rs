@@ -4,6 +4,7 @@
 //! Uses API key for credit-based usage totals
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -12,6 +13,109 @@ use crate::core::{
 
 const KIMIK2_API_BASE_INTERNATIONAL: &str = "https://api.moonshot.ai";
 const KIMIK2_API_BASE_CHINA: &str = "https://api.moonshot.cn";
+
+/// Upstream 0.48.0 (`MoonshotSettingsReader`) environment keys.
+const MOONSHOT_API_KEY_KEYS: [&str; 3] = ["MOONSHOT_API_KEY", "MOONSHOT_KEY", "KIMI_API_KEY"];
+const MOONSHOT_REGION_ENV: &str = "MOONSHOT_REGION";
+/// Legacy pre-0.48 region key kept as a fallback signal.
+const MOONSHOT_LEGACY_REGION_ENV: &str = "MOONSHOT_API_REGION";
+const MOONSHOT_CONFIG_API_KEY_ENV: &str = "CODEXBAR_MOONSHOT_API_KEY";
+const MOONSHOT_CONFIG_API_KEY_REGION_ENV: &str = "CODEXBAR_MOONSHOT_API_KEY_REGION";
+
+/// Upstream 0.48.0 `MoonshotRegion`: Kimi Code's regional Open Platform
+/// planes. CN/intl keys are bound to their issuing host (#2621).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoonshotRegion {
+    International,
+    China,
+}
+
+impl MoonshotRegion {
+    fn base_url(self) -> &'static str {
+        match self {
+            MoonshotRegion::International => KIMIK2_API_BASE_INTERNATIONAL,
+            MoonshotRegion::China => KIMIK2_API_BASE_CHINA,
+        }
+    }
+
+    /// Upstream raw values are `international` / `china`; the local aliases
+    /// (`cn`, `global`, `intl`) keep older settings working.
+    fn parse(raw: &str) -> Option<Self> {
+        let mut value = raw.trim();
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            value = value[1..value.len() - 1].trim();
+        }
+        match value.to_ascii_lowercase().as_str() {
+            "china" | "cn" => Some(MoonshotRegion::China),
+            "international" | "global" | "intl" | "us" => Some(MoonshotRegion::International),
+            _ => None,
+        }
+    }
+}
+
+/// Upstream `MoonshotSettingsReader.region`: invalid/unset values default to
+/// `international`.
+fn region_from_env(env: &HashMap<String, String>) -> MoonshotRegion {
+    [MOONSHOT_REGION_ENV, MOONSHOT_LEGACY_REGION_ENV]
+        .iter()
+        .find_map(|key| env.get(*key).and_then(|raw| MoonshotRegion::parse(raw)))
+        .unwrap_or(MoonshotRegion::International)
+}
+
+/// Upstream fetch-region: persisted settings win, then environment.
+fn effective_region(ctx: &FetchContext, env: &HashMap<String, String>) -> MoonshotRegion {
+    ctx.api_region
+        .as_deref()
+        .and_then(MoonshotRegion::parse)
+        .unwrap_or_else(|| region_from_env(env))
+}
+
+fn cleaned_value(raw: &str) -> Option<String> {
+    let mut value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value = value[1..value.len() - 1].trim();
+    }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Upstream `MoonshotSettingsReader.apiKey(for:)`:
+/// 1. `CODEXBAR_MOONSHOT_API_KEY` only when
+///    `CODEXBAR_MOONSHOT_API_KEY_REGION` names this region.
+/// 2. Ambient keys (`MOONSHOT_API_KEY`, `MOONSHOT_KEY`, local `KIMI_API_KEY`)
+///    only when the environment-selected region is this one.
+fn api_key_for_region(env: &HashMap<String, String>, region: MoonshotRegion) -> Option<String> {
+    let config_key = env
+        .get(MOONSHOT_CONFIG_API_KEY_ENV)
+        .and_then(|raw| cleaned_value(raw));
+    if let Some(config_key) = config_key {
+        let bound = env
+            .get(MOONSHOT_CONFIG_API_KEY_REGION_ENV)
+            .and_then(|raw| MoonshotRegion::parse(raw));
+        if bound == Some(region) {
+            return Some(config_key);
+        }
+    }
+
+    if region_from_env(env) != region {
+        return None;
+    }
+    MOONSHOT_API_KEY_KEYS
+        .iter()
+        .find_map(|key| env.get(*key).and_then(|raw| cleaned_value(raw)))
+}
 
 /// Kimi K2 provider (API-based credits)
 pub struct KimiK2Provider {
@@ -23,7 +127,7 @@ impl KimiK2Provider {
         Self {
             metadata: ProviderMetadata {
                 id: ProviderId::KimiK2,
-                display_name: "Moonshot / Kimi API",
+                display_name: "Moonshot / Kimi Open Platform",
                 session_label: "Balance",
                 weekly_label: "Cash",
                 supports_opus: false,
@@ -36,56 +140,71 @@ impl KimiK2Provider {
         }
     }
 
-    /// Get API key from environment or config
-    fn get_api_key(api_key: Option<&str>) -> Option<String> {
-        if let Some(key) = api_key
-            && !key.is_empty()
-        {
-            return Some(key.to_string());
-        }
-
-        // Check environment variable first
-        if let Ok(key) = std::env::var("MOONSHOT_API_KEY")
-            && !key.is_empty()
-        {
+    /// Region-bound API key resolution (upstream 0.48.0 #2621):
+    /// explicit settings key → region-bound `CODEXBAR_MOONSHOT_API_KEY` →
+    /// ambient keys when they belong to the fetched region → legacy local
+    /// `config/moonshot/config.json` (ambient class).
+    fn get_api_key(
+        api_key: Option<&str>,
+        region: MoonshotRegion,
+        env: &HashMap<String, String>,
+    ) -> Option<String> {
+        if let Some(key) = api_key.and_then(cleaned_value) {
             return Some(key);
         }
 
-        // Check KIMI_API_KEY
-        if let Ok(key) = std::env::var("KIMI_API_KEY")
-            && !key.is_empty()
-        {
+        if let Some(key) = api_key_for_region(env, region) {
             return Some(key);
         }
 
-        // Check config file
-        if let Some(config_dir) = dirs::config_dir() {
+        // Legacy local config file (ambient class: only for the environment's
+        // own region, to keep the host binding invariant).
+        if region_from_env(env) == region
+            && let Some(config_dir) = dirs::config_dir()
+        {
             let config_file = config_dir.join("moonshot").join("config.json");
             if config_file.exists()
                 && let Ok(content) = std::fs::read_to_string(&config_file)
                 && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(key) = json.get("api_key").and_then(|v| v.as_str())
+                && let Some(key) = json
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .and_then(cleaned_value)
             {
-                return Some(key.to_string());
+                return Some(key);
             }
         }
 
         None
     }
 
-    fn api_bases_from_region(region: Option<&str>) -> &'static [&'static str] {
-        match region.unwrap_or_default().trim().to_lowercase().as_str() {
-            "cn" | "china" => &[KIMIK2_API_BASE_CHINA],
-            "global" | "international" | "intl" | "us" => &[KIMIK2_API_BASE_INTERNATIONAL],
-            _ => &[KIMIK2_API_BASE_INTERNATIONAL, KIMIK2_API_BASE_CHINA],
+    /// Base URLs to try, in order. `None` (no region signal anywhere) keeps
+    /// the legacy dual-fallback for accounts created before region binding;
+    /// any explicit region signal pins the request to its issuing plane.
+    fn api_bases(region: Option<MoonshotRegion>) -> &'static [&'static str] {
+        match region {
+            Some(MoonshotRegion::China) => &[KIMIK2_API_BASE_CHINA],
+            Some(MoonshotRegion::International) => &[KIMIK2_API_BASE_INTERNATIONAL],
+            None => &[KIMIK2_API_BASE_INTERNATIONAL, KIMIK2_API_BASE_CHINA],
         }
     }
 
     /// Fetch usage via Moonshot API
     async fn fetch_via_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
-        let api_key = Self::get_api_key(ctx.api_key.as_deref()).ok_or_else(|| {
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let region_signal = ctx
+            .api_region
+            .as_deref()
+            .and_then(MoonshotRegion::parse)
+            .or_else(|| {
+                [MOONSHOT_REGION_ENV, MOONSHOT_LEGACY_REGION_ENV]
+                    .iter()
+                    .find_map(|key| env.get(*key).and_then(|raw| MoonshotRegion::parse(raw)))
+            });
+        let region = region_signal.unwrap_or_else(|| effective_region(ctx, &env));
+        let api_key = Self::get_api_key(ctx.api_key.as_deref(), region, &env).ok_or_else(|| {
             ProviderError::NotInstalled(
-                "Moonshot API key not found. Set it in Preferences → Providers, MOONSHOT_API_KEY, or KIMI_API_KEY."
+                "Moonshot API key not found. Set it in Preferences → Providers, MOONSHOT_API_KEY, or MOONSHOT_KEY."
                     .to_string(),
             )
         })?;
@@ -95,8 +214,7 @@ impl KimiK2Provider {
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
-        let api_bases =
-            Self::api_bases_from_region(std::env::var("MOONSHOT_API_REGION").ok().as_deref());
+        let api_bases = Self::api_bases(region_signal);
         let mut auth_error = false;
 
         for api_base in api_bases {
@@ -274,41 +392,154 @@ impl Provider for KimiK2Provider {
 
 #[cfg(test)]
 mod tests {
-    use super::KimiK2Provider;
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
 
     #[test]
     fn explicit_api_key_overrides_environment_lookup() {
         assert_eq!(
-            KimiK2Provider::get_api_key(Some("kimi-direct-key")),
+            KimiK2Provider::get_api_key(
+                Some("kimi-direct-key"),
+                MoonshotRegion::International,
+                &env(&[])
+            ),
             Some("kimi-direct-key".to_string())
         );
     }
 
     #[test]
-    fn kimi_api_region_default_tries_both_regions() {
+    fn api_key_prefers_moonshot_api_key() {
+        let env = env(&[
+            ("MOONSHOT_API_KEY", "primary-token"),
+            ("MOONSHOT_KEY", "fallback-token"),
+        ]);
         assert_eq!(
-            KimiK2Provider::api_bases_from_region(None),
-            &[
-                super::KIMIK2_API_BASE_INTERNATIONAL,
-                super::KIMIK2_API_BASE_CHINA
-            ]
+            api_key_for_region(&env, MoonshotRegion::International).as_deref(),
+            Some("primary-token")
         );
     }
 
     #[test]
-    fn kimi_api_region_can_use_international_endpoint() {
+    fn api_key_strips_quotes() {
+        let env = env(&[("MOONSHOT_KEY", "\"quoted-token\"")]);
         assert_eq!(
-            KimiK2Provider::api_bases_from_region(Some("international")),
-            &[super::KIMIK2_API_BASE_INTERNATIONAL]
+            api_key_for_region(&env, MoonshotRegion::International).as_deref(),
+            Some("quoted-token")
         );
     }
 
     #[test]
-    fn kimi_api_region_can_pin_china_endpoint() {
+    fn region_defaults_to_international_for_unknown_values() {
         assert_eq!(
-            KimiK2Provider::api_bases_from_region(Some("china")),
-            &[super::KIMIK2_API_BASE_CHINA]
+            region_from_env(&env(&[("MOONSHOT_REGION", "moon")])),
+            MoonshotRegion::International
         );
+        assert_eq!(region_from_env(&env(&[])), MoonshotRegion::International);
+    }
+
+    #[test]
+    fn region_parses_china() {
+        assert_eq!(
+            region_from_env(&env(&[("MOONSHOT_REGION", "china")])),
+            MoonshotRegion::China
+        );
+        assert_eq!(
+            region_from_env(&env(&[("MOONSHOT_REGION", "MoonshotRegion.china")])),
+            MoonshotRegion::International
+        );
+        // Legacy local key remains a signal.
+        assert_eq!(
+            region_from_env(&env(&[("MOONSHOT_API_REGION", "cn")])),
+            MoonshotRegion::China
+        );
+        // Upstream key wins over the legacy key.
+        assert_eq!(
+            region_from_env(&env(&[
+                ("MOONSHOT_REGION", "international"),
+                ("MOONSHOT_API_REGION", "china")
+            ])),
+            MoonshotRegion::International
+        );
+    }
+
+    #[test]
+    fn region_bound_config_key_is_unavailable_to_the_other_host() {
+        let env = env(&[
+            ("CODEXBAR_MOONSHOT_API_KEY", "china-token"),
+            ("CODEXBAR_MOONSHOT_API_KEY_REGION", "china"),
+        ]);
+
+        assert_eq!(
+            api_key_for_region(&env, MoonshotRegion::China).as_deref(),
+            Some("china-token")
+        );
+        assert_eq!(
+            api_key_for_region(&env, MoonshotRegion::International),
+            None
+        );
+    }
+
+    #[test]
+    fn environment_key_requires_matching_explicit_china_region() {
+        let unscoped = env(&[("MOONSHOT_API_KEY", "china-token")]);
+        let china = env(&[
+            ("MOONSHOT_API_KEY", "china-token"),
+            ("MOONSHOT_REGION", "china"),
+        ]);
+
+        // Upstream: ambient keys bind to the environment's default region
+        // (international) unless MOONSHOT_REGION says otherwise.
+        assert_eq!(api_key_for_region(&unscoped, MoonshotRegion::China), None);
+        assert_eq!(
+            api_key_for_region(&unscoped, MoonshotRegion::International).as_deref(),
+            Some("china-token")
+        );
+        assert_eq!(
+            api_key_for_region(&china, MoonshotRegion::China).as_deref(),
+            Some("china-token")
+        );
+        assert_eq!(
+            api_key_for_region(&china, MoonshotRegion::International),
+            None
+        );
+    }
+
+    #[test]
+    fn api_bases_pin_to_explicit_region_or_fallback_to_both() {
+        assert_eq!(
+            KimiK2Provider::api_bases(None),
+            &[KIMIK2_API_BASE_INTERNATIONAL, KIMIK2_API_BASE_CHINA]
+        );
+        assert_eq!(
+            KimiK2Provider::api_bases(Some(MoonshotRegion::International)),
+            &[KIMIK2_API_BASE_INTERNATIONAL]
+        );
+        assert_eq!(
+            KimiK2Provider::api_bases(Some(MoonshotRegion::China)),
+            &[KIMIK2_API_BASE_CHINA]
+        );
+    }
+
+    #[test]
+    fn effective_region_prefers_settings_then_env() {
+        let env = env(&[("MOONSHOT_REGION", "china")]);
+        let ctx = FetchContext {
+            api_region: Some("international".to_string()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            super::effective_region(&ctx, &env),
+            MoonshotRegion::International
+        );
+
+        let ctx = FetchContext::default();
+        assert_eq!(super::effective_region(&ctx, &env), MoonshotRegion::China);
     }
 
     #[test]

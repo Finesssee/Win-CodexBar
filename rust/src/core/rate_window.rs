@@ -1,7 +1,67 @@
 //! Rate window model - represents a usage limit window (e.g., 5-hour session, 7-day weekly)
 
+use super::session_equivalent_forecast::{
+    MONTHLY_WINDOW_MINUTES, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES,
+};
 use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Duration cadence of a rate-limit window (upstream 0.48.0 F5).
+///
+/// Codex exposes three lanes: a 5-hour session, a 7-day weekly, and a 30-day
+/// monthly window. Centralizing the cadence here keeps duration-first labels
+/// and bucketing consistent across the ambient provider, the managed multi-
+/// account stack, and the CLI/tray surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RateWindowCadence {
+    /// 5-hour session window (300 minutes).
+    Session,
+    /// 7-day weekly window (10 080 minutes).
+    Weekly,
+    /// 30-day monthly window (43 200 minutes).
+    Monthly,
+    /// Any other window length the upstream buckets don't recognize.
+    Unknown,
+}
+
+impl RateWindowCadence {
+    /// Classify a window length given in minutes into a cadence.
+    ///
+    /// Bucketing (upstream `RateLane` + `classifyRateWindow`):
+    /// - exactly 300 → Session
+    /// - 43 200+    → Monthly
+    /// - 10 080..<43 200 → Weekly
+    /// - anything else → Unknown
+    pub fn from_minutes(minutes: u32) -> Self {
+        if minutes == SESSION_WINDOW_MINUTES {
+            Self::Session
+        } else if minutes >= MONTHLY_WINDOW_MINUTES {
+            Self::Monthly
+        } else if minutes >= WEEKLY_WINDOW_MINUTES {
+            Self::Weekly
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// Classify from seconds (the API and `UsageWindowSnapshot` report seconds).
+    pub fn from_seconds(seconds: i64) -> Self {
+        if seconds <= 0 {
+            return Self::Unknown;
+        }
+        Self::from_minutes(((seconds + 59) / 60) as u32)
+    }
+
+    /// Human-readable label key for this cadence (matches upstream lane names).
+    pub fn label_key(&self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 /// Represents a rate limit window with usage percentage and reset time
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +104,19 @@ impl RateWindow {
             reset_description: Some(description.into()),
             is_informational: true,
             ..Self::new(0.0)
+        }
+    }
+
+    /// Informational placeholder for an absent 5-hour session lane.
+    ///
+    /// Weekly-only plans (Codex, Claude web) occasionally report no active
+    /// session window. Informational primaries are omitted from quota math
+    /// and rendered as unavailable, so one canonical shape keeps providers
+    /// and downstream surfaces from diverging.
+    pub fn no_active_session() -> Self {
+        Self {
+            window_minutes: Some(SESSION_WINDOW_MINUTES),
+            ..Self::informational("No active 5h session")
         }
     }
 
@@ -173,6 +246,20 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
+    fn no_active_session_is_informational_five_hour_placeholder() {
+        let window = RateWindow::no_active_session();
+
+        assert!(window.is_informational);
+        assert_eq!(window.window_minutes, Some(SESSION_WINDOW_MINUTES));
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+        assert_eq!(window.used_percent, 0.0);
+        assert_eq!(window.resets_at, None);
+    }
+
+    #[test]
     fn test_remaining_percent() {
         let window = RateWindow::new(75.0);
         assert!((window.remaining_percent() - 25.0).abs() < f64::EPSILON);
@@ -220,5 +307,79 @@ mod tests {
             Some(31 * 24 * 60)
         );
         assert_eq!(RateWindow::monthly_window_minutes(None), None);
+    }
+
+    #[test]
+    fn cadence_boundary_session_exactly_300() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(300),
+            RateWindowCadence::Session
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_weekly_10080() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(10_080),
+            RateWindowCadence::Weekly
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_below_monthly_43199_is_weekly() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(43_199),
+            RateWindowCadence::Weekly
+        );
+    }
+
+    #[test]
+    fn cadence_boundary_monthly_43200() {
+        assert_eq!(
+            RateWindowCadence::from_minutes(43_200),
+            RateWindowCadence::Monthly
+        );
+    }
+
+    #[test]
+    fn cadence_from_seconds_rounding() {
+        // from_seconds rounds up: (seconds + 59) / 60
+        // 300 min = 18000s exactly → Session
+        assert_eq!(
+            RateWindowCadence::from_seconds(18_000),
+            RateWindowCadence::Session
+        );
+        // 18001s → (18001+59)/60 = 301 min → Unknown (not exactly 300)
+        assert_eq!(
+            RateWindowCadence::from_seconds(18_001),
+            RateWindowCadence::Unknown
+        );
+        // 10080 min = 604800s → Weekly
+        assert_eq!(
+            RateWindowCadence::from_seconds(604_800),
+            RateWindowCadence::Weekly
+        );
+        // 43200 min = 2592000s → Monthly
+        assert_eq!(
+            RateWindowCadence::from_seconds(2_592_000),
+            RateWindowCadence::Monthly
+        );
+        // 0 or negative → Unknown
+        assert_eq!(
+            RateWindowCadence::from_seconds(0),
+            RateWindowCadence::Unknown
+        );
+        assert_eq!(
+            RateWindowCadence::from_seconds(-1),
+            RateWindowCadence::Unknown
+        );
+    }
+
+    #[test]
+    fn cadence_label_keys() {
+        assert_eq!(RateWindowCadence::Session.label_key(), "session");
+        assert_eq!(RateWindowCadence::Weekly.label_key(), "weekly");
+        assert_eq!(RateWindowCadence::Monthly.label_key(), "monthly");
+        assert_eq!(RateWindowCadence::Unknown.label_key(), "unknown");
     }
 }

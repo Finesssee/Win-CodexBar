@@ -5,8 +5,11 @@ use chrono::Local;
 use chrono::{Duration, NaiveDate};
 use std::path::Path;
 
-use crate::core::{CodexUsageRecord, CostUsageDayRange, CostUsagePricing, JsonlScanner};
-use crate::cost_scanner::{CostSummary, ModelTokenCounts};
+use crate::core::{
+    CodexUsageRecord, CostUsageDayRange, CostUsagePricing, JsonlScanner,
+    is_unpriced_codex_routing_model,
+};
+use crate::cost_scanner::{CostSummary, ModelPricingCompleteness, ModelTokenCounts};
 
 pub(crate) fn codex_period_start(today: NaiveDate, days: u32) -> NaiveDate {
     today - Duration::days(days.saturating_sub(1) as i64)
@@ -160,23 +163,47 @@ fn add_codex_tokens_to_summary(
         return None;
     }
 
+    let is_routing_unpriced = is_unpriced_codex_routing_model(model);
     let model_key = if CostUsagePricing::is_codex_unattributed_model(model) {
         CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string()
+    } else if is_routing_unpriced {
+        // Preserve the original routing model name (e.g. "codex-auto-review") so
+        // the breakdown shows it as a deliberately-unpriced row, distinct from the
+        // model-less "unknown" sentinel.
+        model.to_string()
     } else {
         model.to_string()
     };
 
-    // Unattributed usage is visible but never priced and must not trigger a
-    // models.dev catalog refresh (it is deliberately unpriced, not "unknown yet").
-    if CostUsagePricing::is_codex_unattributed_model(&model_key) {
+    // Unattributed and routing-unpriced usage is visible but never priced and
+    // must not trigger a models.dev catalog refresh (it is deliberately unpriced,
+    // not "unknown yet"). Upstream 0.48.0 F18: codex-auto-review rows are retained
+    // with cost-nil so priced rows in the same history stay ranked.
+    if CostUsagePricing::is_codex_unattributed_model(&model_key) || is_routing_unpriced {
         summary.input_tokens += tokens.input;
         summary.cached_tokens += tokens.cached;
         summary.output_tokens += tokens.output;
         summary.by_model.entry(model_key.clone()).or_insert(0.0);
         add_tokens(
-            summary.by_model_tokens.entry(model_key).or_default(),
+            summary
+                .by_model_tokens
+                .entry(model_key.clone())
+                .or_default(),
             tokens,
         );
+        // Mark the breakdown as partial so the dashboard labels it (F18).
+        match &mut summary.model_pricing_completeness {
+            ModelPricingCompleteness::Complete => {
+                summary.model_pricing_completeness = ModelPricingCompleteness::Partial {
+                    unpriced_models: vec![model_key.clone()],
+                };
+            }
+            ModelPricingCompleteness::Partial { unpriced_models } => {
+                if !unpriced_models.contains(&model_key) {
+                    unpriced_models.push(model_key.clone());
+                }
+            }
+        }
         return Some(0.0);
     }
 
@@ -186,6 +213,18 @@ fn add_codex_tokens_to_summary(
     let cost = codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output);
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
+        match &mut summary.model_pricing_completeness {
+            ModelPricingCompleteness::Complete => {
+                summary.model_pricing_completeness = ModelPricingCompleteness::Partial {
+                    unpriced_models: vec![model_key.clone()],
+                };
+            }
+            ModelPricingCompleteness::Partial { unpriced_models } => {
+                if !unpriced_models.contains(&model_key) {
+                    unpriced_models.push(model_key.clone());
+                }
+            }
+        }
     }
 
     summary.input_tokens += tokens.input;
@@ -250,6 +289,19 @@ fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
     }
     if let Some(cost) = CostUsagePricing::codex_cost_usd(model, input, cached, output) {
         return cost;
+    }
+
+    // C4 (upstream 0.48.0): Fast-tier models are priced as Standard × multiplier.
+    // Try Fast pricing before the legacy gpt-4o fallback so Fast-bucket model
+    // IDs get real rates instead of fake gpt-4o defaults. Fast detection is
+    // name-based locally (upstream uses a priority-trace SQLite DB scan that
+    // is absent locally — documented divergence).
+    let normalized = CostUsagePricing::normalize_codex_model(model);
+    if (normalized.contains("fast") || normalized.contains("priority"))
+        && let Some(fast_cost) =
+            CostUsagePricing::codex_fast_cost_usd(model, input as i32, cached as i32, output as i32)
+    {
+        return fast_cost;
     }
 
     let (input_price, cached_price, output_price) = match model.to_lowercase().as_str() {

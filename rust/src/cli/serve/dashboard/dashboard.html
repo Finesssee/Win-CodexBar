@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'">
+<title>CodexBar dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #101014; color: #e8e8ec; font: 13px/1.45 -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 12px; padding: 14px 20px; background: rgba(16,16,20,.92); backdrop-filter: blur(8px); border-bottom: 1px solid #26262e; }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; }
+  #freshness { color: #8b8b95; font-size: 12px; }
+  #freshness.stale { color: #f8b04a; }
+  #first-load { padding: 40px 20px; color: #8b8b95; }
+  #error-banner { display: none; margin: 14px 20px 0; padding: 10px 14px; border: 1px solid #7c3f3f; background: #2a1b1b; color: #f0a0a0; border-radius: 8px; }
+  #auth-bar { display: none; gap: 8px; margin: 14px 20px 0; }
+  #auth-bar input { flex: 1; max-width: 420px; background: #17171d; color: inherit; border: 1px solid #33333c; border-radius: 6px; padding: 6px 9px; }
+  #auth-bar button { background: #2f6feb; color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+  main { padding: 16px 20px 40px; display: flex; flex-direction: column; gap: 22px; }
+  section.group > h2 { font-size: 13px; color: #9c9ca6; margin: 0 0 10px; font-weight: 600; }
+  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .card { background: #17171d; border: 1px solid #26262e; border-radius: 10px; padding: 12px 14px; }
+  .card-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+  .icon { width: 20px; height: 20px; border-radius: 5px; background: #2a2a33; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
+  .icon img { width: 100%; height: 100%; object-fit: cover; }
+  .name { font-weight: 650; }
+  .chip { margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid #3a3a44; color: #b5b5bf; }
+  .chip.ok { color: #7ee08c; border-color: #2f5c37; }
+  .chip.warning { color: #f8c04a; border-color: #6b5222; }
+  .chip.critical { color: #f08a8a; border-color: #67303a; }
+  .chip.off { color: #78787f; }
+  .identity { color: #8b8b95; font-size: 12px; margin: 2px 0 6px; min-height: 15px; }
+  .wrow { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .wlabel { width: 110px; flex: none; color: #b9b9c2; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { position: relative; flex: 1; height: 6px; border-radius: 3px; background: #26262e; overflow: hidden; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; background: #5aa2ff; border-radius: 3px; }
+  .bar.warn > i { background: #f8c04a; }
+  .bar.full > i { background: #e5626a; }
+  .wpct { width: 52px; flex: none; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+  .wreset { width: 128px; flex: none; color: #78787f; text-align: right; font-size: 11px; white-space: nowrap; }
+  .costline { margin-top: 8px; color: #9c9ca6; font-size: 12px; }
+  .charts { margin-top: 10px; display: flex; align-items: flex-end; gap: 2px; height: 46px; }
+  .charts .col { flex: 1; min-width: 3px; background: #24518f; border-radius: 1px 1px 0 0; }
+  .charts .col.zero { background: #232329; }
+  .chtitle { color: #78787f; font-size: 11px; margin-top: 4px; display: flex; justify-content: space-between; }
+  .err { color: #f08a8a; font-size: 12px; }
+  .pace { color: #9c9ca6; font-size: 12px; margin-top: 4px; }
+  .active-badge { font-size: 10px; color: #7ee08c; border: 1px solid #2f5c37; border-radius: 99px; padding: 1px 7px; margin-left: 6px; }
+  footer { color: #63636b; font-size: 11px; padding: 0 20px 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CodexBar</h1>
+  <span id="freshness">connecting…</span>
+  <span style="flex:1"></span>
+  <span id="who" style="color:#63636b;font-size:11px"></span>
+</header>
+<div id="error-banner" role="alert"></div>
+<div id="auth-bar">
+  <input id="token-input" type="password" placeholder="Dashboard bearer token" aria-label="Dashboard bearer token">
+  <button id="token-save">Unlock</button>
+</div>
+<div id="first-load">Building the first snapshot — this can take a minute; late results are always delivered, never discarded.</div>
+<main id="content" hidden></main>
+<footer>CodexBar serve dashboard · schema v1 · auto-refreshes while open</footer>
+<script>
+"use strict";
+const ICON_URLS = __PROVIDER_ICON_URLS__;
+const DEFAULT_REFRESH = Math.max(15, __REFRESH_SECONDS__);
+const SNAPSHOT_URL = "/dashboard/v1/snapshot";
+const COST_URL = "/cost";
+const state = { token: sessionStorage.getItem("codexbar.dashboard.token") || "", timer: null, refreshSeconds: DEFAULT_REFRESH };
+
+const els = {
+  content: document.getElementById("content"),
+  firstLoad: document.getElementById("first-load"),
+  freshness: document.getElementById("freshness"),
+  error: document.getElementById("error-banner"),
+  authBar: document.getElementById("auth-bar"),
+  tokenInput: document.getElementById("token-input"),
+};
+
+function authHeaders() {
+  return state.token ? { "Authorization": "Bearer " + state.token } : {};
+}
+function showError(message) {
+  els.error.style.display = message ? "block" : "none";
+  els.error.textContent = message || "";
+}
+function showAuthBar(on) {
+  els.authBar.style.display = on ? "flex" : "none";
+}
+function dateValue(value) {
+  const ms = Date.parse(value || "");
+  return Number.isFinite(ms) ? ms : null;
+}
+function relTime(iso) {
+  const ms = dateValue(iso);
+  if (ms === null) return "";
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h " + (m % 60) + "m ago";
+  return Math.floor(h / 24) + "d ago";
+}
+function untilTime(iso) {
+  const ms = dateValue(iso);
+  if (ms === null) return "";
+  let s = Math.round((ms - Date.now()) / 1000);
+  if (s <= 0) return "now";
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.ceil(s / 60);
+  if (d > 0) return "in " + d + "d " + h + "h";
+  if (h > 0) return "in " + h + "h " + m + "m";
+  return "in " + m + "m";
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function pctClass(used) {
+  if (used >= 90) return "bar full";
+  if (used >= 70) return "bar warn";
+  return "bar";
+}
+function windowRow(w) {
+  const used = Number.isFinite(w.usedPercent) ? Math.max(0, Math.min(100, w.usedPercent)) : 0;
+  return '<div class="wrow">' +
+    '<span class="wlabel" title="' + esc(w.label) + '">' + esc(w.label) + "</span>" +
+    '<span class="' + pctClass(used) + '"><i style="width:' + used.toFixed(1) + '%"></i></span>' +
+    '<span class="wpct">' + used.toFixed(0) + "%</span>" +
+    '<span class="wreset">' + esc(untilTime(w.resetAt)) + "</span></div>";
+}
+function iconHtml(id, name) {
+  const url = ICON_URLS[id];
+  return '<span class="icon">' + (url ? '<img src="' + url + '" alt="' + esc(name) + ' icon" loading="lazy">' : "") + "</span>";
+}
+function statusChip(status) {
+  if (!status || !status.level) return ""; // #2723: chip hidden without status
+  const cls = status.level === "ok" ? "ok" : status.level === "warning" ? "warning" : "critical";
+  return '<span class="chip ' + cls + '" title="' + esc(status.label || "") + '">' + esc(status.label || status.level) + "</span>";
+}
+function identityLine(identity) {
+  if (!identity) return "";
+  const bits = [identity.accountEmail, identity.plan].filter(Boolean);
+  return bits.length ? '<div class="identity">' + esc(bits.join(" · ")) + "</div>" : "";
+}
+function accountCard(providerId, account) {
+  const badge = account.active ? '<span class="active-badge">active</span>' : "";
+  let inner = '<div class="card-head">' + iconHtml(providerId, account.label) +
+    '<span class="name">' + esc(account.label) + badge + "</span></div>" + identityLine(account.identity);
+  if (account.error) inner += '<div class="err">' + esc(account.error) + "</div>";
+  (account.windows || []).forEach(w => { inner += windowRow(w); });
+  const pace = account.pace && (account.pace.primary || account.pace.secondary || account.pace.tertiary);
+  if (pace) inner += '<div class="pace">' + esc((pace.summary) || "") + "</div>";
+  return '<div class="card">' + inner + "</div>";
+}
+function providerCard(row, dailyCharts) {
+  let inner = '<div class="card-head">' + iconHtml(row.id, row.name) +
+    '<span class="name">' + esc(row.name) + "</span>" +
+    (row.enabled === false ? '<span class="chip off">disabled</span>' : statusChip(row.status)) + "</div>";
+  inner += identityLine(row.identity);
+  if (row.error) inner += '<div class="err">' + esc((row.error && row.error.message) || row.error) + "</div>";
+  (row.windows || []).forEach(w => { inner += windowRow(w); });
+  if (row.cost && (row.cost.todayUSD != null || row.cost.last30DaysUSD != null)) {
+    const today = row.cost.todayUSD == null ? "—" : "$" + Number(row.cost.todayUSD).toFixed(2);
+    const month = row.cost.last30DaysUSD == null ? "—" : "$" + Number(row.cost.last30DaysUSD).toFixed(2);
+    inner += '<div class="costline">Today ' + today + " · last 30 days " + month + "</div>";
+  }
+  const daily = dailyCharts[row.id];
+  if (daily && daily.some(v => (v.totalCost || 0) > 0)) {
+    const max = Math.max.apply(null, daily.map(d => d.totalCost || 0));
+    inner += '<div class="charts" role="img" aria-label="Daily spend for ' + esc(row.name) + '">';
+    daily.forEach(d => {
+      const h = max > 0 ? Math.max(2, Math.round(((d.totalCost || 0) / max) * 44)) : 0;
+      inner += '<span class="col' + ((d.totalCost || 0) > 0 ? "" : " zero") + '" style="height:' + h + 'px" title="' + esc(d.date) + ": $" + Number(d.totalCost || 0).toFixed(2) + '"></span>';
+    });
+    inner += "</div>";
+    inner += '<div class="chtitle"><span>' + esc(daily[0].date) + "</span><span>" + esc(daily[daily.length - 1].date) + "</span></div>";
+  }
+  return inner;
+}
+function render(snapshot, dailyCharts) {
+  els.firstLoad.style.display = "none";
+  els.content.hidden = false;
+  const rows = (snapshot.providers || []).slice().sort((a, b) =>
+    ((a.display && a.display.sortKey) || 0) - ((b.display && b.display.sortKey) || 0));
+  let html = "";
+  rows.forEach(row => {
+    const hasAccounts = Array.isArray(row.accounts);
+    html += '<section class="group"><h2>' + esc(row.name) + "</h2>";
+    html += '<div class="cards">';
+    html += '<div class="card">' + providerCard(row, dailyCharts) +
+      (row.accountsError ? '<div class="err">' + esc(row.accountsError) + "</div>" : "") + "</div>";
+    if (hasAccounts) row.accounts.forEach(acc => { html += accountCard(row.id, acc); });
+    html += "</div></section>";
+  });
+  if (!rows.length) html = '<div id="first-load">No enabled providers.</div>';
+  els.content.innerHTML = html;
+  state.snapshot = snapshot;
+  const host = snapshot.host || {};
+  state.refreshSeconds = Math.max(15, Number(host.refreshIntervalSeconds) || DEFAULT_REFRESH);
+  updateFreshness();
+  schedule();
+}
+function updateFreshness() {
+  if (!state.snapshot) return;
+  const generated = dateValue(state.snapshot.generatedAt);
+  els.freshness.classList.remove("stale");
+  document.getElementById("who").textContent = (state.snapshot.host && state.snapshot.host.codexBarVersion) ? ("codexbar " + state.snapshot.host.codexBarVersion) : "";
+  els.freshness.textContent = generated === null ? "updated —" : "updated " + relTime(state.snapshot.generatedAt);
+  const staleAfter = Number(state.snapshot.staleAfterSeconds) || 0;
+  if (generated !== null && staleAfter > 0 && (Date.now() - generated) / 1000 > staleAfter) {
+    els.freshness.classList.add("stale");
+    els.freshness.textContent += " · stale";
+  }
+}
+function schedule() {
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(refresh, state.refreshSeconds * 1000);
+}
+async function refresh() {
+  try {
+    const [snapResp, costResp] = await Promise.all([
+      fetch(SNAPSHOT_URL, { headers: authHeaders(), cache: "no-store" }),
+      fetch(COST_URL, { headers: authHeaders(), cache: "no-store" }),
+    ]);
+    if (snapResp.status === 401 || costResp.status === 401) {
+      showAuthBar(true); showError(""); schedule(); return;
+    }
+    showAuthBar(false);
+    if (!snapResp.ok) { showError("Snapshot error: HTTP " + snapResp.status); schedule(); return; }
+    showError("");
+    const snapshot = await snapResp.json();
+    let daily = {};
+    if (costResp.ok) {
+      try {
+        (await costResp.json() || []).forEach(row => {
+          if (row && row.provider && Array.isArray(row.daily)) daily[row.provider] = row.daily;
+        });
+      } catch (e) { /* charts are optional */ }
+    }
+    render(snapshot, daily);
+  } catch (e) {
+    showError("Refresh failed: " + (e && e.message ? e.message : e));
+    schedule();
+  }
+}
+document.getElementById("token-save").addEventListener("click", () => {
+  state.token = els.tokenInput.value.trim();
+  sessionStorage.setItem("codexbar.dashboard.token", state.token);
+  els.tokenInput.value = "";
+  refresh();
+});
+setInterval(updateFreshness, 1000);
+refresh();
+</script>
+</body>
+</html>

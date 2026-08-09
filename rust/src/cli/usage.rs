@@ -209,6 +209,9 @@ fn build_usage_fetch_context(args: &UsageArgs, source_mode: SourceMode) -> Fetch
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        // `codexbar usage` is a foreground read: optional enrichment (e.g. the
+        // OpenCode Go Zen balance) is worth its full bounded wait (#2583).
+        requires_optional_usage_completeness: true,
     }
 }
 
@@ -493,9 +496,25 @@ fn append_usage_window_lines(
         use_color,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
+    // F5 (upstream 0.48.0): monthly (30-day) lane. Label by duration cadence.
+    if let Some(tertiary) = usage.tertiary.as_ref() {
+        let cadence =
+            crate::core::RateWindowCadence::from_minutes(tertiary.window_minutes.unwrap_or(0));
+        let label = match cadence {
+            crate::core::RateWindowCadence::Monthly => "Monthly",
+            _ => "Tertiary",
+        };
+        append_window_line(lines, label, tertiary, use_color);
+    }
 }
 
 fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow, use_color: bool) {
+    if window.is_informational {
+        let description = window.reset_description.as_deref().unwrap_or("unavailable");
+        lines.push(format!("  {:<8} {}", format!("{}:", label), description));
+        return;
+    }
+
     let bar = render_progress_bar(window.used_percent, 20, use_color);
     let reset = window
         .format_countdown()
@@ -547,15 +566,20 @@ fn append_model_specific_line(
 pub fn render_brief_text(provider: ProviderId, result: &ProviderFetchResult) -> String {
     let metadata = instantiate_provider(provider).metadata().clone();
     let usage = &result.usage;
-    let reset = usage
-        .primary
-        .format_countdown()
-        .unwrap_or_else(|| "n/a".to_string());
-    let mut parts = vec![format!(
-        "{} {}",
-        metadata.session_label,
-        format_percent(usage.primary.used_percent)
-    )];
+    let mut parts = Vec::new();
+    let reset = if usage.primary.is_informational {
+        parts.push(format!("{} unavailable", metadata.session_label));
+        usage.secondary.as_ref().unwrap_or(&usage.primary)
+    } else {
+        parts.push(format!(
+            "{} {}",
+            metadata.session_label,
+            format_percent(usage.primary.used_percent)
+        ));
+        &usage.primary
+    }
+    .format_countdown()
+    .unwrap_or_else(|| "n/a".to_string());
     if let Some(secondary) = &usage.secondary {
         parts.push(format!(
             "{} {}",

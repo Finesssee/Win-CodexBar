@@ -5,7 +5,7 @@ Tencent **CodeBuddy CN** credit usage for Win-CodexBar.
 ## What it shows
 
 - Primary meter: **Credits** used % across all returned resource packages
-- Description: `remaining/total` plus package count
+- Description: compact `remaining / total left` (fits the tray metric row)
 - Reset time: earliest package expire time when present
 
 ## Setup
@@ -24,6 +24,10 @@ Tencent **CodeBuddy CN** credit usage for Win-CodexBar.
    ```
 
    (compatible with `D:\workspace\codebuddy-statusline`)
+
+Auth priority: manual Cookie → `cb_cookie.txt` → browser cookies for
+`codebuddy.cn`. Cookies are never logged; only a truncated SHA-256 fingerprint
+of the cookie reaches the local cache (see below).
 
 ## API
 
@@ -61,15 +65,38 @@ If `Accounts` is `[]`, your package codes differ. Copy `PackageCodes` from the b
 $env:CB_PACKAGE_CODES = '["TCACA_code_007_...","TCACA_code_029_..."]'
 ```
 
+Entries are validated: strings only, trimmed, ≤ 128 chars, no control
+characters, at most 64 codes.
+
+### Endpoint override (advanced)
+
+`CB_API_URL` may point the provider at another endpoint (useful for staging or
+local mocks). It is validated: must be a well-formed `https:` URL; `http:` is
+accepted only for loopback hosts (`localhost`, `127.0.0.1`, `::1`). Invalid
+values are ignored with a warning and the default CN endpoint is used.
+
 ## Local cache fallback
 
-Source mode **Auto** / **CLI** can read:
+Source mode **Auto** (transient web failures only) / **CLI** can read:
 
 ```
 %USERPROFILE%\.codebuddy\cb_credits.json
 ```
 
-produced by `codebuddy-statusline`’s `parse_credits.js` pipeline.
+also produced by `codebuddy-statusline`’s `parse_credits.js` pipeline.
+
+Semantics:
+
+- Written only after a **successful** web fetch, from typed numeric totals —
+  never re-parsed out of the tray's display label.
+- Expired/invalid cookies (HTTP 401/403 or an auth-flavoured API response)
+  propagate as an auth error; they are **never** masked by the cache.
+- The cache may carry `accountHash` (truncated SHA-256 of the cookie that
+  wrote it); a cache belonging to a different account is rejected. Caches
+  without a fingerprint (external helpers) are accepted.
+- Schema: `{ total, used, remaining, source, updatedAt, resetsAt?, accountHash? }`
+  — values are exact `f64` numbers, `resetsAt` RFC 3339.
+- The API response is capped at 8 MiB and the cache file at 1 MiB.
 
 ## CLI
 

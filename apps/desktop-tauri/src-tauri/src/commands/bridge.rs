@@ -155,6 +155,7 @@ impl ProviderUsageSnapshot {
         id: ProviderId,
         metadata: &ProviderMetadata,
         result: &ProviderFetchResult,
+        token_account_id: Option<uuid::Uuid>,
     ) -> Self {
         let usage = &result.usage;
 
@@ -194,8 +195,17 @@ impl ProviderUsageSnapshot {
             s
         });
 
-        let session_equivalent_forecast =
-            session_equivalent_forecast_for(id, &usage.primary, usage.secondary.as_ref());
+        // Scope forecast history to the signed-in account so switching accounts on one
+        // provider does not blend burn samples across plans. Codex publishes no email or
+        // organization (ADR 0003 ambient/managed lanes), so its discriminator is the
+        // managed token-account id.
+        let account_key = forecast_account_key(usage, token_account_id);
+        let session_equivalent_forecast = session_equivalent_forecast_for(
+            id,
+            account_key.as_deref(),
+            &usage.primary,
+            usage.secondary.as_ref(),
+        );
 
         Self {
             provider_id: id.cli_name().to_string(),
@@ -302,8 +312,45 @@ impl ProviderUsageSnapshot {
     }
 }
 
+/// Account discriminator that forecast history is scoped to.
+///
+/// Deliberately mirrors `quota_notification_account_identity` precedence
+/// (token account -> email -> organization) so a single account is never seen as two
+/// different identities by the notification and forecast subsystems. Kept as a separate
+/// function because that one consumes an already-built `ProviderUsageSnapshot`, while the
+/// forecast needs the key *while* the snapshot is being built.
+///
+/// `providers::tests::forecast_account_key_matches_notification_identity` pins them
+/// together.
+pub(super) fn forecast_account_key(
+    usage: &codexbar::core::UsageSnapshot,
+    token_account_id: Option<uuid::Uuid>,
+) -> Option<String> {
+    if let Some(id) = token_account_id {
+        return Some(format!("token-account:{}", id.as_hyphenated()));
+    }
+    if let Some(email) = usage
+        .account_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(email.to_ascii_lowercase());
+    }
+    if let Some(org) = usage
+        .account_organization
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(format!("org:{}", org.to_ascii_lowercase()));
+    }
+    None
+}
+
 fn session_equivalent_forecast_for(
     id: ProviderId,
+    account_key: Option<&str>,
     session: &RateWindow,
     weekly: Option<&RateWindow>,
 ) -> Option<SessionEquivalentForecastSnapshot> {
@@ -313,10 +360,16 @@ fn session_equivalent_forecast_for(
     let weekly = weekly?;
     let now = chrono::Utc::now();
     let provider_id = id.cli_name();
-    codexbar::core::record_provider_windows(provider_id, session, Some(weekly), now);
+    codexbar::core::record_provider_windows(provider_id, account_key, session, Some(weekly), now);
     let work_days = Settings::load().weekly_progress_work_days;
-    let forecast =
-        codexbar::core::forecast_for_provider(provider_id, session, weekly, now, work_days)?;
+    let forecast = codexbar::core::forecast_for_provider(
+        provider_id,
+        account_key,
+        session,
+        weekly,
+        now,
+        work_days,
+    )?;
     Some(SessionEquivalentForecastSnapshot {
         estimated_windows_to_exhaust_weekly: forecast.estimated_windows_to_exhaust_weekly,
         windows_until_reset: forecast.windows_until_reset,

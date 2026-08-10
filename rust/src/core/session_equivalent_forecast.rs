@@ -511,13 +511,37 @@ fn is_workday(date: DateTime<Utc>, work_days: u8) -> bool {
 
 // ── In-process history store ─────────────────────────────────────────
 
+/// Identity that forecast history is scoped to.
+///
+/// History must never be shared across accounts. Plan sizes differ, so blending
+/// observations from two accounts yields a silently wrong median — see the account
+/// isolation regression test below.
+///
+/// ponytail: when this is persisted to disk, hash `account_key` rather than writing the
+/// raw address; in-process it stays plain because the email is already resident in
+/// `UsageSnapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForecastScope {
+    pub provider_id: String,
+    pub account_key: Option<String>,
+}
+
+impl ForecastScope {
+    pub fn new(provider_id: &str, account_key: Option<&str>) -> Self {
+        Self {
+            provider_id: provider_id.to_string(),
+            account_key: account_key.map(str::to_string),
+        }
+    }
+}
+
 /// Append-only ring of session/weekly observations for burn estimation.
 ///
 /// ponytail: history is process-local and lost on restart; upgrade path = disk cache
 /// keyed by provider+account once forecast quality justifies persistence.
 #[derive(Debug, Default)]
 pub struct SessionEquivalentHistoryStore {
-    by_provider: HashMap<String, ProviderHistory>,
+    by_scope: HashMap<ForecastScope, ProviderHistory>,
 }
 
 #[derive(Debug, Default)]
@@ -530,10 +554,10 @@ static HISTORY_STORE: LazyLock<Mutex<SessionEquivalentHistoryStore>> =
     LazyLock::new(|| Mutex::new(SessionEquivalentHistoryStore::default()));
 
 impl SessionEquivalentHistoryStore {
-    /// Record one observation pair for a provider (session + optional weekly).
+    /// Record one observation pair for a provider+account (session + optional weekly).
     pub fn record(
         &mut self,
-        provider_id: &str,
+        scope: &ForecastScope,
         session: Option<PlanUtilizationHistoryEntry>,
         weekly: Option<PlanUtilizationHistoryEntry>,
         sample_limit: usize,
@@ -541,7 +565,7 @@ impl SessionEquivalentHistoryStore {
         let limit = sample_limit.max(1);
         // Keep more raw points than completed groups so grouping still has density.
         let ring = limit.saturating_mul(8).max(24);
-        let hist = self.by_provider.entry(provider_id.to_string()).or_default();
+        let hist = self.by_scope.entry(scope.clone()).or_default();
         if let Some(entry) = session {
             push_ring(&mut hist.session, entry, ring);
         }
@@ -550,8 +574,8 @@ impl SessionEquivalentHistoryStore {
         }
     }
 
-    pub fn histories(&self, provider_id: &str) -> Vec<PlanUtilizationSeriesHistory> {
-        let Some(hist) = self.by_provider.get(provider_id) else {
+    pub fn histories(&self, scope: &ForecastScope) -> Vec<PlanUtilizationSeriesHistory> {
+        let Some(hist) = self.by_scope.get(scope) else {
             return Vec::new();
         };
         let mut out = Vec::new();
@@ -591,8 +615,12 @@ pub fn global_history_store() -> &'static Mutex<SessionEquivalentHistoryStore> {
 }
 
 /// Record session/weekly windows from a live provider usage snapshot.
+///
+/// `account_key` scopes the history so switching accounts on one provider does not
+/// blend burn observations across plans.
 pub fn record_provider_windows(
     provider_id: &str,
+    account_key: Option<&str>,
     session: &crate::core::RateWindow,
     weekly: Option<&crate::core::RateWindow>,
     now: DateTime<Utc>,
@@ -624,7 +652,7 @@ pub fn record_provider_windows(
 
     if let Ok(mut guard) = global_history_store().lock() {
         guard.record(
-            provider_id,
+            &ForecastScope::new(provider_id, account_key),
             Some(session_entry),
             weekly_entry,
             SessionEquivalentBurnEstimator::DEFAULT_SAMPLE_LIMIT,
@@ -662,7 +690,7 @@ pub fn retain_last_full_session_estimate(
 // ponytail: in-memory only, lost on restart; upgrade = persist to cache file.
 #[derive(Debug, Default)]
 struct LastFullSessionEstimateStore {
-    by_provider: HashMap<String, RetainedFullSessionEstimate>,
+    by_scope: HashMap<ForecastScope, RetainedFullSessionEstimate>,
 }
 
 static LAST_FULL_SESSION_ESTIMATE_STORE: LazyLock<Mutex<LastFullSessionEstimateStore>> =
@@ -672,38 +700,40 @@ fn last_full_session_estimate_store() -> &'static Mutex<LastFullSessionEstimateS
     &LAST_FULL_SESSION_ESTIMATE_STORE
 }
 
-/// Remember/recall the last learned full-session burn estimate for a provider.
+/// Remember/recall the last learned full-session burn estimate for a provider+account.
 pub fn remember_full_session_estimate(
-    provider_id: &str,
+    scope: &ForecastScope,
     fresh: Option<f64>,
     now: DateTime<Utc>,
 ) -> Option<f64> {
     let Ok(mut guard) = last_full_session_estimate_store().lock() else {
         return fresh.filter(|v| v.is_finite() && *v > 0.0);
     };
-    let previous = guard.by_provider.get(provider_id).copied();
+    let previous = guard.by_scope.get(scope).copied();
     let retained = retain_last_full_session_estimate(previous, fresh, now);
     if let Some(entry) = retained {
-        guard.by_provider.insert(provider_id.to_string(), entry);
+        guard.by_scope.insert(scope.clone(), entry);
         Some(entry.estimate)
     } else {
-        guard.by_provider.remove(provider_id);
+        guard.by_scope.remove(scope);
         None
     }
 }
 
-/// Compute forecast for a provider using the in-process history ring.
+/// Compute forecast for a provider+account using the in-process history ring.
 pub fn forecast_for_provider(
     provider_id: &str,
+    account_key: Option<&str>,
     session: &crate::core::RateWindow,
     weekly: &crate::core::RateWindow,
     now: DateTime<Utc>,
     work_days: Option<u8>,
 ) -> Option<SessionEquivalentForecast> {
+    let scope = ForecastScope::new(provider_id, account_key);
     let histories = global_history_store()
         .lock()
         .ok()
-        .map(|g| g.histories(provider_id))
+        .map(|g| g.histories(&scope))
         .unwrap_or_default();
     let fresh_burn = SessionEquivalentBurnEstimator::estimate(
         &histories,
@@ -718,7 +748,7 @@ pub fn forecast_for_provider(
         .as_ref()
         .map(|b| b.sample_count)
         .unwrap_or(SessionEquivalentBurnEstimator::MINIMUM_SAMPLE_COUNT);
-    let median = remember_full_session_estimate(provider_id, fresh_median, now)?;
+    let median = remember_full_session_estimate(&scope, fresh_median, now)?;
     let burn = SessionEquivalentBurnEstimate {
         median_weekly_percent_per_window: median,
         sample_count,
@@ -1020,10 +1050,11 @@ mod tests {
     #[test]
     fn history_ring_retains_latest_samples() {
         let mut store = SessionEquivalentHistoryStore::default();
+        let scope = ForecastScope::new("claude", None);
         let base = ts(1_700_500_000);
         for i in 0..30 {
             store.record(
-                "claude",
+                &scope,
                 Some(PlanUtilizationHistoryEntry {
                     captured_at: base + Duration::minutes(i),
                     used_percent: i as f64,
@@ -1033,10 +1064,66 @@ mod tests {
                 7,
             );
         }
-        let h = store.histories("claude");
+        let h = store.histories(&scope);
         assert_eq!(h.len(), 1);
         assert!(h[0].entries.len() <= 7 * 8);
         assert!((h[0].entries.last().unwrap().used_percent - 29.0).abs() < 1e-9);
+    }
+
+    /// Two accounts on one provider must not share burn samples.
+    ///
+    /// Regression: history was keyed by `provider_id` alone, so switching the active
+    /// account blended both accounts' observations into one ring and produced a median
+    /// drawn from a mixture of plans.
+    #[test]
+    fn history_is_isolated_per_account() {
+        let mut store = SessionEquivalentHistoryStore::default();
+        let base = ts(1_700_500_000);
+        let alice = ForecastScope::new("codex", Some("alice@example.com"));
+        let bob = ForecastScope::new("codex", Some("bob@example.com"));
+
+        for i in 0..5 {
+            store.record(
+                &alice,
+                Some(PlanUtilizationHistoryEntry {
+                    captured_at: base + Duration::minutes(i),
+                    used_percent: 10.0,
+                    resets_at: Some(base + Duration::hours(5)),
+                }),
+                None,
+                7,
+            );
+        }
+        store.record(
+            &bob,
+            Some(PlanUtilizationHistoryEntry {
+                captured_at: base + Duration::minutes(99),
+                used_percent: 90.0,
+                resets_at: Some(base + Duration::hours(5)),
+            }),
+            None,
+            7,
+        );
+
+        let alice_hist = store.histories(&alice);
+        let bob_hist = store.histories(&bob);
+        assert_eq!(alice_hist[0].entries.len(), 5);
+        assert_eq!(bob_hist[0].entries.len(), 1);
+        assert!(
+            alice_hist[0]
+                .entries
+                .iter()
+                .all(|e| (e.used_percent - 10.0).abs() < 1e-9),
+            "bob's 90% sample leaked into alice's history"
+        );
+        assert!((bob_hist[0].entries[0].used_percent - 90.0).abs() < 1e-9);
+
+        // A provider with no account discriminator is its own bucket, not a catch-all.
+        assert!(
+            store
+                .histories(&ForecastScope::new("codex", None))
+                .is_empty()
+        );
     }
 
     #[test]

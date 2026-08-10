@@ -591,7 +591,10 @@ impl ClaudeWebApiFetcher {
 
     /// Convert a usage window to a RateWindow
     fn to_rate_window(&self, window: &UsageWindow, window_minutes: Option<u32>) -> RateWindow {
-        let used_percent = normalize_utilization(window.utilization.unwrap_or(0.0));
+        // `utilization` is already expressed in percent units: `1.0` means 1%,
+        // not 100%. Treating values <= 1 as fractions reported a 1% session as a
+        // fully consumed quota.
+        let used_percent = window.utilization.unwrap_or(0.0);
 
         let resets_at = window
             .resets_at
@@ -670,14 +673,6 @@ impl ClaudeWebApiFetcher {
 impl Default for ClaudeWebApiFetcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
     }
 }
 
@@ -777,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_fractional_utilization_to_percent() {
+    fn keeps_sub_one_utilization_in_percent_units() {
         let window = UsageWindow {
             utilization: Some(0.23),
             resets_at: None,
@@ -785,7 +780,7 @@ mod tests {
 
         let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
 
-        assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+        assert!((rate.used_percent - 0.23).abs() < f64::EPSILON);
     }
 
     #[test]

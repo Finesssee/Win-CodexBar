@@ -518,8 +518,8 @@ impl ClaudeOAuthFetcher {
 
         let mut usage = UsageSnapshot::new(primary);
 
-        // Secondary: prefer limits[] weekly_all over legacy seven_day (avoids
-        // phantom 100% when Anthropic leaves seven_day.utilization stale).
+        // Secondary: prefer limits[] weekly_all over legacy seven_day, which
+        // Anthropic can leave stale.
         if let Some(weekly) =
             super::scoped_weekly::weekly_all_window(&response.limits).or_else(|| {
                 response
@@ -578,7 +578,11 @@ impl ClaudeOAuthFetcher {
 
     /// Convert OAuth usage window to RateWindow
     fn to_rate_window(window: &UsageWindow, window_minutes: Option<u32>) -> Option<RateWindow> {
-        let utilization = normalize_utilization(window.utilization?);
+        // `utilization` is already expressed in percent units: `1.0` means 1%,
+        // not 100%. Treating values <= 1 as fractions reported a 1% session as a
+        // fully consumed quota. `scoped_weekly::weekly_all_window` has always
+        // read the sibling `limits[].percent` field this way.
+        let utilization = window.utilization?;
 
         let resets_at = window
             .resets_at
@@ -599,14 +603,6 @@ impl ClaudeOAuthFetcher {
 impl Default for ClaudeOAuthFetcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
     }
 }
 
@@ -636,7 +632,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn converts_fractional_utilization_to_percent() {
+    fn keeps_sub_one_utilization_in_percent_units() {
         let window = UsageWindow {
             utilization: Some(0.23),
             resets_at: None,
@@ -644,7 +640,23 @@ mod tests {
 
         let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
 
-        assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+        assert!((rate.used_percent - 0.23).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn one_percent_session_is_not_reported_as_full_quota() {
+        let window = UsageWindow {
+            utilization: Some(1.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+
+        assert!(
+            (rate.used_percent - 1.0).abs() < f64::EPSILON,
+            "session was {}, expected 1% (not 100%)",
+            rate.used_percent
+        );
     }
 
     #[test]
@@ -688,8 +700,8 @@ mod tests {
         };
         let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
 
-        assert_eq!(usage.primary.used_percent, 100.0);
-        assert!((usage.secondary.expect("weekly").used_percent - 14.0).abs() < 0.001);
+        assert_eq!(usage.primary.used_percent, 1.0);
+        assert!((usage.secondary.expect("weekly").used_percent - 0.14).abs() < 0.001);
         let scoped = usage
             .extra_rate_windows
             .iter()

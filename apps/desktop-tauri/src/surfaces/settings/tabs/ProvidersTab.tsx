@@ -14,6 +14,7 @@ import {
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { reorderProviders } from "../../../lib/tauri";
+import { selectSingleMetricUsageWindow } from "../../../lib/usageWindows";
 import { useProviders } from "../../../hooks/useProviders";
 
 interface ProvidersTabProps {
@@ -262,8 +263,7 @@ function providerSidebarMetric(
   snap: ProviderUsageSnapshot | null,
 ): string | undefined {
   if (!snap) return undefined;
-  const rate = snap.primary;
-  if (!rate) return undefined;
+  const rate = selectSingleMetricUsageWindow(snap);
   if (Number.isFinite(rate.usedPercent)) {
     return `${Math.round(Math.max(0, rate.usedPercent))}%`;
   }

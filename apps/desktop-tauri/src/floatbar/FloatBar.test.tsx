@@ -35,16 +35,24 @@ vi.mock("@tauri-apps/api/core", () => coreMocks);
 import FloatBar from "./FloatBar";
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
-import type { BootstrapState, ProviderUsageSnapshot, SettingsSnapshot } from "../types/bridge";
+import type {
+  BootstrapState,
+  ProviderUsageSnapshot,
+  RateWindowSnapshot,
+  SettingsSnapshot,
+} from "../types/bridge";
+
+type RateWindowOptions = {
+  exhausted?: boolean;
+  informational?: boolean;
+  resetsAt?: string | null;
+  resetDescription?: string | null;
+};
 
 function rateWindow(
   used: number,
-  opts: {
-    exhausted?: boolean;
-    resetsAt?: string | null;
-    resetDescription?: string | null;
-  } = {},
-) {
+  opts: RateWindowOptions = {},
+): RateWindowSnapshot {
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
@@ -52,6 +60,7 @@ function rateWindow(
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
+    isInformational: opts.informational,
     reservePercent: null,
     reserveDescription: null,
   };
@@ -66,13 +75,23 @@ function snapshot(
     error?: string | null;
     resetsAt?: string | null;
     resetDescription?: string | null;
+    informational?: boolean;
+    secondary?: {
+      used: number;
+      exhausted?: boolean;
+      informational?: boolean;
+      resetsAt?: string | null;
+      resetDescription?: string | null;
+    };
   } = {},
 ): ProviderUsageSnapshot {
   return {
     providerId: id,
     displayName: display,
     primary: rateWindow(used, opts),
-    secondary: null,
+    secondary: opts.secondary
+      ? rateWindow(opts.secondary.used, opts.secondary)
+      : null,
     modelSpecific: null,
     tertiary: null,
     extraRateWindows: [],
@@ -212,6 +231,94 @@ describe("FloatBar", () => {
     // Highest used (codex, 75%) shows first; display follows showAsUsed.
     expect(titles[0]).toMatch(/Codex: 75% used/);
     expect(titles[1]).toMatch(/Claude: 20% used/);
+  });
+
+  it("keeps a normal primary window when a secondary window is available", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 20, { secondary: { used: 90 } }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
+        "Claude: 20% used",
+      );
+    });
+  });
+
+  it("uses a real secondary window when the primary window is informational", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 10, {
+        informational: true,
+        secondary: {
+          used: 80,
+          resetsAt: null,
+          resetDescription: "Resets in 2 hours",
+        },
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowResetInline: true }),
+    );
+
+    const { container } = renderFloatBar(bootstrap({ floatBarShowResetInline: true }));
+    await waitFor(() => {
+      const pill = container.querySelector(".floatbar__pill");
+      expect(pill?.getAttribute("title")).toContain("Claude: 80% used\nResets in 2 hours");
+      expect(pill?.classList.contains("floatbar__pill--warn")).toBe(true);
+      expect(container.querySelector(".floatbar__reset")?.textContent).toContain("2 hours");
+    });
+  });
+
+  it("keeps an informational primary window when no secondary window is available", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 10, { informational: true }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
+        "Claude: 10% used",
+      );
+    });
+  });
+
+  it("keeps an informational primary window when the secondary window is informational", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 10, {
+        informational: true,
+        secondary: { used: 90, informational: true },
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
+        "Claude: 10% used",
+      );
+    });
+  });
+
+  it("sorts providers by their effective rate window", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 90, {
+        informational: true,
+        secondary: { used: 20 },
+      }),
+      snapshot("codex", "Codex", 50),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll(".floatbar__pill")).map(
+        (pill) => pill.getAttribute("title"),
+      );
+      expect(titles).toEqual(["Codex: 50% used", "Claude: 20% used"]);
+    });
   });
 
   it("loads local cost summaries without using the foreground chart endpoint", async () => {

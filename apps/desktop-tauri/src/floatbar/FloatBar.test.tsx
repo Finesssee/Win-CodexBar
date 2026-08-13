@@ -41,6 +41,7 @@ function rateWindow(
   used: number,
   opts: {
     exhausted?: boolean;
+    informational?: boolean;
     resetsAt?: string | null;
     resetDescription?: string | null;
   } = {},
@@ -52,6 +53,7 @@ function rateWindow(
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
+    isInformational: opts.informational ?? false,
     reservePercent: null,
     reserveDescription: null,
   };
@@ -212,6 +214,51 @@ describe("FloatBar", () => {
     // Highest used (codex, 75%) shows first; display follows showAsUsed.
     expect(titles[0]).toMatch(/Codex: 75% used/);
     expect(titles[1]).toMatch(/Claude: 20% used/);
+  });
+
+  it("uses the secondary window when the primary window is informational", async () => {
+    const codex = snapshot("codex", "Codex", 0);
+    codex.primary = rateWindow(0, {
+      informational: true,
+      resetDescription: "No active 5h session",
+    });
+    codex.secondary = rateWindow(26, {
+      resetDescription: "Weekly reset",
+    });
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 20),
+      codex,
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowResetInline: true }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarShowResetInline: true }),
+    );
+
+    await waitFor(() => {
+      const pills = container.querySelectorAll(".floatbar__pill");
+      expect(pills.length).toBe(2);
+      expect(pills[0].getAttribute("title")).toContain("Codex: 26% used");
+      expect(pills[0].getAttribute("title")).toContain("Weekly reset");
+      expect(pills[0].textContent).toContain("26%");
+      expect(pills[0].textContent).not.toContain("No active 5h session");
+    });
+  });
+
+  it("uses the secondary window when calculating the pill tone", async () => {
+    const codex = snapshot("codex", "Codex", 0);
+    codex.primary = rateWindow(0, { informational: true });
+    codex.secondary = rateWindow(20, { exhausted: true });
+    tauriMocks.getCachedProviders.mockResolvedValue([codex]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill--crit")).not.toBeNull();
+    });
   });
 
   it("loads local cost summaries without using the foreground chart endpoint", async () => {

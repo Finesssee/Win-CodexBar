@@ -23,6 +23,7 @@ import type {
   BootstrapState,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
+  RateWindowSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
@@ -82,6 +83,12 @@ type FloatBarCostTarget = {
 
 function providerCostKey(provider: ProviderUsageSnapshot): string {
   return `${provider.providerId}:${provider.accountEmail ?? ""}`;
+}
+
+function floatBarRateWindow(provider: ProviderUsageSnapshot): RateWindowSnapshot {
+  return provider.primary.isInformational && provider.secondary
+    ? provider.secondary
+    : provider.primary;
 }
 
 function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is ProviderLocalUsageSummary {
@@ -178,11 +185,12 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
 }) {
-  const remaining = Math.max(0, Math.min(100, provider.primary.remainingPercent));
-  const used = Math.max(0, Math.min(100, provider.primary.usedPercent));
+  const rateWindow = floatBarRateWindow(provider);
+  const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
+  const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const exhausted = provider.primary.isExhausted || provider.error;
+  const exhausted = rateWindow.isExhausted || provider.error;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || remaining <= critRemaining) tone = "crit";
   else if (remaining <= highRemaining) tone = "warn";
@@ -190,8 +198,8 @@ function ProviderPill({
   const brand = getProviderIcon(provider.providerId).brandColor;
   const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
-    provider.primary.resetsAt,
-    provider.primary.resetDescription,
+    rateWindow.resetsAt,
+    rateWindow.resetDescription,
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";
@@ -308,7 +316,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       const wanted = new Set(filterIds);
       list = list.filter((p) => wanted.has(p.providerId));
     }
-    return [...list].sort((a, b) => b.primary.usedPercent - a.primary.usedPercent);
+    return [...list].sort(
+      (a, b) => floatBarRateWindow(b).usedPercent - floatBarRateWindow(a).usedPercent,
+    );
   }, [providers, settings.enabledProviders, filterIds]);
 
   const visibleCostTargets = useMemo<FloatBarCostTarget[]>(

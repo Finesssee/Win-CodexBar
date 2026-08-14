@@ -88,6 +88,315 @@ function Get-InnoSetupCompiler {
     }
     return (Get-CommandPath 'ISCC.exe')
 }
+function Refresh-PrerequisitePath {
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $paths = @($env:Path, $machinePath, $userPath) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    }
+    if ($paths.Count -gt 0) {
+        $env:Path = $paths -join ';'
+    }
+}
+
+function Add-PrerequisitePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "Cannot add missing tool directory to PATH: $Path"
+    }
+    $entries = @($env:Path -split ';' | Where-Object { $_ })
+    if ($entries -notcontains $Path) {
+        $env:Path = "$Path;$env:Path"
+    }
+    try {
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $userEntries = @($userPath -split ';' | Where-Object { $_ })
+        if ($userEntries -notcontains $Path) {
+            [Environment]::SetEnvironmentVariable('Path', "$Path;$userPath", 'User')
+        }
+    } catch {
+        Write-Warning "Could not persist PATH for future processes: $($_.Exception.Message)"
+    }
+}
+
+function Invoke-PrerequisiteDownload {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Host "Downloading $Uri"
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
+}
+
+function Assert-PrerequisiteDownloadHash {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$FilePath
+    )
+
+    $fileName = Split-Path -Leaf $FilePath
+    $checksums = (Invoke-WebRequest -UseBasicParsing -Uri $Uri).Content
+    $pattern = "\s$([regex]::Escape($fileName))$"
+    $line = @($checksums -split "`r?`n" | Where-Object { $_ -match $pattern } | Select-Object -First 1)
+    if ($line.Count -ne 1) {
+        throw "No SHA-256 checksum was published for $fileName."
+    }
+    $expected = ($line[0] -split '\s+')[0].ToLowerInvariant()
+    $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "SHA-256 mismatch for $fileName (actual $actual, expected $expected)."
+    }
+    Write-Host "[ok] SHA-256 $fileName"
+}
+
+function Install-ChocoPackageFallback {
+    param([Parameter(Mandatory)][string]$Id)
+
+    if ($AssertOnly) {
+        throw "Missing prerequisite '$Id' (AssertOnly mode does not install packages)."
+    }
+    $choco = Get-CommandPath 'choco'
+    if (-not $choco) {
+        throw "choco is unavailable."
+    }
+    Write-Host "Installing Chocolatey package $Id"
+    Invoke-Native $choco @('install', $Id, '--yes', '--no-progress')
+    Refresh-PrerequisitePath
+}
+
+function Install-PackageWithFallback {
+    param(
+        [Parameter(Mandatory)][string]$WingetId,
+        [Parameter(Mandatory)][string]$ChocoId
+    )
+
+    if ($AssertOnly) {
+        throw "Missing prerequisite '$WingetId' (AssertOnly mode does not install packages)."
+    }
+    $attempts = New-Object System.Collections.Generic.List[string]
+    if (Get-CommandPath 'winget') {
+        try {
+            Install-WingetPackage $WingetId | Out-Null
+            Refresh-PrerequisitePath
+            return
+        } catch {
+            $attempts.Add("winget: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('winget: unavailable')
+    }
+    if (Get-CommandPath 'choco') {
+        try {
+            Install-ChocoPackageFallback $ChocoId | Out-Null
+            return
+        } catch {
+            $attempts.Add("choco: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('choco: unavailable')
+    }
+    throw "Unable to provision '$WingetId'/'$ChocoId'. $($attempts -join '; ')"
+}
+
+function Require-PrerequisiteCommand {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$WingetId,
+        [Parameter(Mandatory)][string]$ChocoId
+    )
+
+    $path = Get-CommandPath $Name
+    if (-not $path) {
+        Install-PackageWithFallback $WingetId $ChocoId | Out-Null
+        $path = Get-CommandPath $Name
+    }
+    if (-not $path) {
+        throw "Required command '$Name' is still unavailable after provisioning '$WingetId'."
+    }
+    Write-Host "[ok] $($Name): $path"
+    return $path
+}
+
+function Get-NodeInfoFallback {
+    Refresh-PrerequisitePath
+    $path = Get-CommandPath 'node'
+    if (-not $path) {
+        $candidates = @(
+            (Join-Path $env:ProgramFiles 'nodejs\node.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'nodejs\node.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe')
+        )
+        foreach ($candidate in $candidates) {
+            if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                $path = $candidate
+                break
+            }
+        }
+    }
+    if (-not $path) { return $null }
+    $version = (& $path --version).Trim()
+    $major = $null
+    try {
+        $major = Get-NodeMajor $version
+    } catch {
+        $major = $null
+    }
+    return [pscustomobject]@{
+        Path = $path
+        Version = $version
+        Major = $major
+    }
+}
+
+function Install-NodeMsiFallback {
+    param([Parameter(Mandatory)][string]$Version)
+
+    $root = Join-Path ([IO.Path]::GetTempPath()) 'codexbar-node-bootstrap'
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $fileName = "node-$Version-x64.msi"
+    $installer = Join-Path $root $fileName
+    $baseUri = "https://nodejs.org/dist/$Version"
+    Invoke-PrerequisiteDownload "$baseUri/$fileName" $installer
+    Assert-PrerequisiteDownloadHash "$baseUri/SHASUMS256.txt" $installer
+    $msiexec = Join-Path $env:WINDIR 'System32\msiexec.exe'
+    if (-not (Test-Path -LiteralPath $msiexec -PathType Leaf)) {
+        throw "msiexec.exe is unavailable at $msiexec."
+    }
+    Write-Host "Installing Node $Version from MSI"
+    & $msiexec '/i' $installer '/quiet' '/norestart'
+    if (($LASTEXITCODE -ne 0) -and ($LASTEXITCODE -ne 3010)) {
+        throw "msiexec.exe exited with code $LASTEXITCODE."
+    }
+    Refresh-PrerequisitePath
+}
+
+function Install-NodeZipFallback {
+    param([Parameter(Mandatory)][string]$Version)
+
+    $root = Join-Path $env:LOCALAPPDATA 'CodexBar\release-toolchain\node'
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $staging = Join-Path ([IO.Path]::GetTempPath()) 'codexbar-node-bootstrap'
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    $fileName = "node-$Version-win-x64.zip"
+    $archive = Join-Path $staging $fileName
+    $baseUri = "https://nodejs.org/dist/$Version"
+    Invoke-PrerequisiteDownload "$baseUri/$fileName" $archive
+    Assert-PrerequisiteDownloadHash "$baseUri/SHASUMS256.txt" $archive
+    $installRoot = Join-Path $root $Version
+    Expand-Archive -LiteralPath $archive -DestinationPath $installRoot -Force
+    $nodeDirectory = Join-Path $installRoot "node-$Version-win-x64"
+    Add-PrerequisitePath $nodeDirectory
+}
+
+function Install-NodeWithFallback {
+    param(
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$WingetId,
+        [Parameter(Mandatory)][int]$RequiredMajor
+    )
+
+    if ($AssertOnly) {
+        throw "Node $RequiredMajor.x is required; AssertOnly mode does not install packages."
+    }
+    $attempts = New-Object System.Collections.Generic.List[string]
+    if (Get-CommandPath 'winget') {
+        try {
+            Install-WingetPackage $WingetId -Upgrade | Out-Null
+            $info = Get-NodeInfoFallback
+            if ($info -and $info.Major -eq $RequiredMajor) { return }
+            $found = if ($info) { $info.Version } else { 'unavailable' }
+            $attempts.Add("winget: installed $found, expected major $RequiredMajor")
+        } catch {
+            $attempts.Add("winget: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('winget: unavailable')
+    }
+    try {
+        Install-NodeMsiFallback $Version | Out-Null
+        $info = Get-NodeInfoFallback
+        if ($info -and $info.Major -eq $RequiredMajor) { return }
+        $found = if ($info) { $info.Version } else { 'unavailable' }
+        $attempts.Add("MSI: installed $found, expected major $RequiredMajor")
+    } catch {
+        $attempts.Add("MSI: $($_.Exception.Message)")
+    }
+    if (Get-CommandPath 'choco') {
+        try {
+            Install-ChocoPackageFallback 'nodejs-lts' | Out-Null
+            $info = Get-NodeInfoFallback
+            if ($info -and $info.Major -eq $RequiredMajor) { return }
+            $found = if ($info) { $info.Version } else { 'unavailable' }
+            $attempts.Add("choco: installed $found, expected major $RequiredMajor")
+        } catch {
+            $attempts.Add("choco: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('choco: unavailable')
+    }
+    try {
+        Install-NodeZipFallback $Version | Out-Null
+        $info = Get-NodeInfoFallback
+        if ($info -and $info.Major -eq $RequiredMajor) { return }
+        $found = if ($info) { $info.Version } else { 'unavailable' }
+        $attempts.Add("zip: installed $found, expected major $RequiredMajor")
+    } catch {
+        $attempts.Add("zip: $($_.Exception.Message)")
+    }
+    throw "Unable to provision Node $RequiredMajor.x. $($attempts -join '; ')"
+}
+
+function Install-InnoSetupFallback {
+    if ($AssertOnly) {
+        throw 'Inno Setup 6 ISCC.exe is unavailable.'
+    }
+    $attempts = New-Object System.Collections.Generic.List[string]
+    if (Get-CommandPath 'winget') {
+        try {
+            Install-WingetPackage 'JRSoftware.InnoSetup' | Out-Null
+            $iscc = Get-InnoSetupCompiler
+            if ($iscc) { return $iscc }
+            $attempts.Add('winget: ISCC.exe was still unavailable')
+        } catch {
+            $attempts.Add("winget: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('winget: unavailable')
+    }
+    if (Get-CommandPath 'choco') {
+        try {
+            Install-ChocoPackageFallback 'innosetup' | Out-Null
+            $iscc = Get-InnoSetupCompiler
+            if ($iscc) { return $iscc }
+            $attempts.Add('choco: ISCC.exe was still unavailable')
+        } catch {
+            $attempts.Add("choco: $($_.Exception.Message)")
+        }
+    } else {
+        $attempts.Add('choco: unavailable')
+    }
+    try {
+        $root = Join-Path ([IO.Path]::GetTempPath()) 'codexbar-inno-bootstrap'
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        $installer = Join-Path $root 'innosetup.exe'
+        Invoke-PrerequisiteDownload 'https://jrsoftware.org/download.php/is.exe' $installer
+        Write-Host 'Installing Inno Setup 6 from jrsoftware.org'
+        & $installer '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/SP-'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup installer exited with code $LASTEXITCODE."
+        }
+        Refresh-PrerequisitePath
+        $iscc = Get-InnoSetupCompiler
+        if ($iscc) { return $iscc }
+        $attempts.Add('official installer: ISCC.exe was still unavailable')
+    } catch {
+        $attempts.Add("official installer: $($_.Exception.Message)")
+    }
+    throw "Unable to provision Inno Setup 6. $($attempts -join '; ')"
+}
 
 $packageJsonPath = Join-Path $RepoRoot 'apps\desktop-tauri\package.json'
 if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
@@ -99,39 +408,39 @@ if ($expectedPnpm -notmatch '^10\.18\.1$') {
     throw "Unexpected packageManager '$($packageJson.packageManager)'; release pipeline pins pnpm 10.18.1."
 }
 
-Require-Command 'git' 'Git.Git' | Out-Null
+Require-PrerequisiteCommand 'git' 'Git.Git' 'git' | Out-Null
 $requiredNodeMajor = 24
 $nodePackageId = 'OpenJS.NodeJS.LTS'
-$node = Get-CommandPath 'node'
-$nodeVersion = ''
-$nodeMajor = $null
-if ($node) {
-    $nodeVersion = (& $node --version).Trim()
-    try {
-        $nodeMajor = Get-NodeMajor $nodeVersion
-    } catch {
-        $nodeMajor = $null
-    }
-}
-if ($nodeMajor -ne $requiredNodeMajor) {
+$nodeFallbackVersion = 'v24.18.0'
+$nodeInfo = Get-NodeInfoFallback
+if (-not $nodeInfo -or $nodeInfo.Major -ne $requiredNodeMajor) {
     if ($AssertOnly) {
-        throw "Node $requiredNodeMajor.x is required; found $nodeVersion."
+        $found = if ($nodeInfo) { $nodeInfo.Version } else { 'unavailable' }
+        throw "Node $requiredNodeMajor.x is required; found $found."
     }
-    if ($node) {
-        Install-WingetPackage $nodePackageId -Upgrade
-    } else {
-        Install-WingetPackage $nodePackageId
-    }
-    $node = Get-CommandPath 'node'
-    if (-not $node) {
-        throw "Required command 'node' is still unavailable after provisioning '$nodePackageId'."
-    }
-    $nodeVersion = (& $node --version).Trim()
+    Install-NodeWithFallback $nodeFallbackVersion $nodePackageId $requiredNodeMajor
+    $nodeInfo = Get-NodeInfoFallback
 }
-Assert-NodeMajor $nodeVersion $requiredNodeMajor | Out-Null
-Write-Host "[ok] Node $nodeVersion (major $requiredNodeMajor)"
+if (-not $nodeInfo) {
+    throw "Required command 'node' is still unavailable after provisioning '$nodePackageId'."
+}
+Assert-NodeMajor $nodeInfo.Version $requiredNodeMajor | Out-Null
+Write-Host "[ok] Node $($nodeInfo.Version) (major $requiredNodeMajor)"
 
 $corepack = Get-CommandPath 'corepack'
+if (-not $corepack) {
+    $nodeDirectory = Split-Path -Parent $nodeInfo.Path
+    foreach ($candidate in @(
+        (Join-Path $nodeDirectory 'corepack.cmd'),
+        (Join-Path $nodeDirectory 'corepack.ps1'),
+        (Join-Path $nodeDirectory 'corepack')
+    )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $corepack = $candidate
+            break
+        }
+    }
+}
 if (-not $corepack) {
     throw "Corepack is required with Node $requiredNodeMajor to activate pinned pnpm $expectedPnpm."
 }
@@ -149,9 +458,9 @@ if ($pnpmVersion -ne $expectedPnpm) {
 }
 Write-Host "[ok] pnpm $pnpmVersion"
 
-Require-Command 'cargo' 'Rustlang.Rustup' | Out-Null
-Require-Command 'rustc' 'Rustlang.Rustup' | Out-Null
-$rustup = Require-Command 'rustup' 'Rustlang.Rustup'
+Require-PrerequisiteCommand 'cargo' 'Rustlang.Rustup' 'rustup.install' | Out-Null
+Require-PrerequisiteCommand 'rustc' 'Rustlang.Rustup' 'rustup.install' | Out-Null
+$rustup = Require-PrerequisiteCommand 'rustup' 'Rustlang.Rustup' 'rustup.install'
 $target = 'x86_64-pc-windows-msvc'
 $installedTargets = @(& $rustup target list --installed)
 if ($installedTargets -notcontains $target) {
@@ -164,11 +473,7 @@ Write-Host "[ok] Rust target $target"
 
 $iscc = Get-InnoSetupCompiler
 if (-not $iscc) {
-    if ($AssertOnly) {
-        throw 'Inno Setup 6 ISCC.exe is unavailable.'
-    }
-    Install-WingetPackage 'JRSoftware.InnoSetup'
-    $iscc = Get-InnoSetupCompiler
+    $iscc = Install-InnoSetupFallback
 }
 if (-not $iscc) {
     throw 'Inno Setup 6 ISCC.exe is unavailable after provisioning.'

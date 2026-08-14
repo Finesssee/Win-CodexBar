@@ -444,11 +444,20 @@ if (-not $corepack) {
 if (-not $corepack) {
     throw "Corepack is required with Node $requiredNodeMajor to activate pinned pnpm $expectedPnpm."
 }
+$pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\release-toolchain\pnpm'
 if (-not $AssertOnly) {
-    Invoke-Native $corepack @('enable')
+    New-Item -ItemType Directory -Force -Path $pnpmShimDir | Out-Null
+    Invoke-Native $corepack @('enable', '--install-directory', $pnpmShimDir)
+    Add-PrerequisitePath $pnpmShimDir
     Invoke-Native $corepack @('prepare', "pnpm@$expectedPnpm", '--activate')
 }
 $pnpm = Get-CommandPath 'pnpm'
+if (-not $pnpm) {
+    $pnpmCandidate = Join-Path $pnpmShimDir 'pnpm.cmd'
+    if (Test-Path -LiteralPath $pnpmCandidate -PathType Leaf) {
+        $pnpm = $pnpmCandidate
+    }
+}
 if (-not $pnpm) {
     throw "pnpm $expectedPnpm is unavailable after Corepack provisioning."
 }

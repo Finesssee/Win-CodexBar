@@ -85,6 +85,7 @@ foreach ($nodeRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALA
 }
 if ($env:APPDATA) { Add-PathIfPresent (Join-Path $env:APPDATA 'npm') }
 if ($env:LOCALAPPDATA) { Add-PathIfPresent (Join-Path $env:LOCALAPPDATA 'pnpm') }
+if ($env:LOCALAPPDATA) { Add-PathIfPresent (Join-Path $env:LOCALAPPDATA 'CodexBar\release-toolchain\pnpm') }
 
 function Require-Command {
     param([string]$Name)

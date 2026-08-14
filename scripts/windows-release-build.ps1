@@ -65,10 +65,26 @@ $AssetsDir = Join-Path $WorkRoot "assets"
 $DesktopCargoTargetDir = Join-Path $CacheDir "cargo-target"
 $CliCargoTargetDir = Join-Path $CacheDir "cargo-target-cli"
 
-$UserCargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-if (Test-Path $UserCargoBin) {
-    $env:Path = "$UserCargoBin;$env:Path"
+function Add-PathIfPresent {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return
+    }
+    if (@($env:Path -split ';') -notcontains $Path) {
+        $env:Path = "$Path;$env:Path"
+    }
 }
+
+$UserCargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+Add-PathIfPresent $UserCargoBin
+foreach ($nodeRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
+    if (-not [string]::IsNullOrWhiteSpace($nodeRoot)) {
+        Add-PathIfPresent (Join-Path $nodeRoot 'nodejs')
+    }
+}
+if ($env:APPDATA) { Add-PathIfPresent (Join-Path $env:APPDATA 'npm') }
+if ($env:LOCALAPPDATA) { Add-PathIfPresent (Join-Path $env:LOCALAPPDATA 'pnpm') }
 
 function Require-Command {
     param([string]$Name)

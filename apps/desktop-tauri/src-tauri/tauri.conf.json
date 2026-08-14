@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CodexBar Desktop",
-  "version": "0.49.3",
+  "version": "0.49.2",
   "identifier": "com.codexbar.desktop",
   "build": {
     "beforeDevCommand": "pnpm run dev",

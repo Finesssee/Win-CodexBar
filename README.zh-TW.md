@@ -154,13 +154,13 @@ Winget 分發已透過 [microsoft/winget-pkgs](https://github.com/microsoft/wing
 常用釋出引數：
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.32.2 -WarmCacheOnly
-.\scripts\windows-release-build.ps1 -Ref v0.32.2 -SmokeInstall
-.\scripts\windows-release-build.ps1 -Ref v0.32.2 -UploadRelease v0.32.2
-.\scripts\release-doctor.ps1 -Version 0.32.2
+.\scripts\windows-release-build.ps1 -Ref vX.Y.Z -WarmCacheOnly
+.\scripts\windows-release-build.ps1 -Ref vX.Y.Z -SmokeInstall
+.\scripts\release-doctor.ps1 -Version X.Y.Z
 ```
 
-安裝包和便攜版資產以 Windows 構建伺服器指令碼為主釋出路徑。
+構建指令碼不再上傳 GitHub Release。釋出僅透過需要人工核准的 CircleCI
+Windows 草稿釋出流程完成；它會校驗 SHA-256，絕不覆蓋已有資產。
 
 ## 首次執行
 

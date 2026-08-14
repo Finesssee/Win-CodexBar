@@ -32,15 +32,10 @@
     After packaging, run scripts/windows-smoke-install.ps1 against the generated
     installer and uninstall it again.
 
-.PARAMETER UploadRelease
-    GitHub release tag to upload assets to after packaging, for example v0.27.5.
-    Requires the GitHub CLI to be installed and authenticated.
 
 .EXAMPLE
     .\scripts\windows-release-build.ps1 -Ref v0.27.4
 
-.EXAMPLE
-    .\scripts\windows-release-build.ps1 -Ref v0.27.5 -SmokeInstall -UploadRelease v0.27.5
 #>
 
 param(
@@ -49,8 +44,7 @@ param(
     [string]$WorkRoot = "C:\code\Win-CodexBar-release",
     [switch]$RefreshInstallerDependencies,
     [switch]$WarmCacheOnly,
-    [switch]$SmokeInstall,
-    [string]$UploadRelease = ""
+    [switch]$SmokeInstall
 )
 
 Set-StrictMode -Version Latest
@@ -427,23 +421,6 @@ try {
         }
     }
 
-    if ($UploadRelease) {
-        $gh = Require-Command "gh"
-        $assetPaths = @(
-            $installerAsset,
-            "$installerAsset.sha256",
-            $portableExe,
-            "$portableExe.sha256"
-        )
-        foreach ($path in $assetPaths) {
-            if (-not (Test-Path $path)) {
-                throw "Missing upload asset: $path"
-            }
-        }
-
-        Invoke-Native $gh.Source @("release", "view", $UploadRelease)
-        Invoke-Native $gh.Source (@("release", "upload", $UploadRelease) + $assetPaths + @("--clobber"))
-    }
 
     Write-Host ""
     Write-Host "Release assets:"

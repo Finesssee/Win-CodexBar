@@ -64,17 +64,15 @@ Release assets land in `C:\code\Win-CodexBar-release\assets`. Keep the
 Useful release flags:
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.27.5 -WarmCacheOnly
-.\scripts\windows-release-build.ps1 -Ref v0.27.5 -WarmCliCache
-.\scripts\windows-release-build.ps1 -Ref v0.27.5 -SmokeInstall
-.\scripts\windows-release-build.ps1 -Ref v0.27.5 -UploadRelease v0.27.5
-.\scripts\release-doctor.ps1 -Version 0.27.5
+.\scripts\windows-release-build.ps1 -Ref vX.Y.Z -WarmCacheOnly
+.\scripts\windows-release-build.ps1 -Ref vX.Y.Z -SmokeInstall
+.\scripts\release-doctor.ps1 -Version X.Y.Z
 ```
 
-A hosted **PR check** runs on Blacksmith Windows for pull requests and pushes
-to `main`/`master`; see `.github/CI.md` for its scope and budget modes. The
-Windows release script remains the primary path for installer and portable
-artifacts; there is no hosted release workflow.
+`windows-release-build.ps1` only builds and smoke-tests. It has no upload
+switch. The hosted release path is the approval-gated CircleCI workflow
+documented in `docs/release/ci-cd.md`; publication uses its no-clobber,
+SHA-256-checked draft publisher.
 
 ## macOS Windows Cross Build
 

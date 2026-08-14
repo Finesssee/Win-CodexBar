@@ -55,12 +55,11 @@ For the Inno Setup release artifact, prefer the cached Windows release builder:
 
 It keeps a clean managed checkout while reusing Cargo, pnpm, and signed
 installer dependency caches. Use `-WarmCacheOnly` after large ports to prepare
-the desktop cache without packaging, `-WarmCliCache` as a compatibility alias
-because release packaging now builds CLI artifacts every time, `-SmokeInstall`
-to install/uninstall the generated installer, and `-UploadRelease vX.Y.Z` to
-upload assets directly to GitHub.
-Run the standalone smoke installer test on a Windows machine before manual
-upload or publication:
+the desktop cache, and `-SmokeInstall` to install/uninstall the generated
+installer. The builder has no upload switch. Publication is performed only by
+the approval-gated CircleCI draft publisher in `docs/release/ci-cd.md`, which
+checks hashes and never overwrites an existing asset.
+Run the standalone smoke installer test on a Windows machine before approval:
 
 ```powershell
 powershell -ExecutionPolicy Bypass `

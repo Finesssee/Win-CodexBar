@@ -1,0 +1,104 @@
+version: 2.1
+
+orbs:
+  win: circleci/windows@5.0
+
+jobs:
+  release-build:
+    executor:
+      name: win/default
+      size: large
+    environment:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_TERM_COLOR: never
+      CARGO_TERM_PROGRESS_WHEN: never
+      NO_COLOR: '1'
+    steps:
+      - checkout
+      - run:
+          name: Assert build job has no GitHub write credential
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          command: |
+            if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN must be absent from release-build.' }
+      - run:
+          name: Validate canonical release tag, SHA, versions, and main ancestry
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          command: |
+            $ErrorActionPreference = 'Stop'
+            if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN must be absent from the credential-free release-build job.' }
+            $root = (Get-Location).Path
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\release-preflight.ps1') -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot $root
+            if ($LASTEXITCODE -ne 0) { throw "release-preflight.ps1 failed with exit code $LASTEXITCODE" }
+      - run:
+          name: Provision and assert pinned release prerequisites
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $root = (Get-Location).Path
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\install-release-prerequisites.ps1') -RepoRoot $root
+            if ($LASTEXITCODE -ne 0) { throw "install-release-prerequisites.ps1 failed with exit code $LASTEXITCODE" }
+      - run:
+          name: Build, smoke-install, and emit verified assets
+          no_output_timeout: 45m
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $root = (Get-Location).Path
+            $output = Join-Path $root 'release-output'
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\circleci-release-build.ps1') -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot $root -OutputDir $output
+            if ($LASTEXITCODE -ne 0) { throw "circleci-release-build.ps1 failed with exit code $LASTEXITCODE" }
+      - persist_to_workspace:
+          root: .
+          paths:
+            - release-output
+            - scripts/publish-github-release.ps1
+            - scripts/release-pipeline-common.ps1
+      - store_artifacts:
+          path: release-output
+          destination: release-output
+
+  release-publish:
+    executor:
+      name: win/default
+      size: medium
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Upload matching assets to a draft GitHub Release
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          command: |
+            $ErrorActionPreference = 'Stop'
+            if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN is required only in the restricted publisher context.' }
+            $root = (Get-Location).Path
+            $manifestPath = Join-Path $root 'release-output\release-manifest.json'
+            if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Missing persisted release manifest: $manifestPath" }
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            if ($manifest.repository -ne 'nesszer/Win-CodexBar') { throw "Manifest repository is not canonical nesszer/Win-CodexBar." }
+            if ($manifest.tag -ne $env:CIRCLE_TAG) { throw "Manifest tag does not match CIRCLE_TAG." }
+            if (-not $env:CIRCLE_SHA1 -or $env:CIRCLE_SHA1 -notmatch '^[0-9a-fA-F]{40}$' -or [string]$manifest.commit -cne ($env:CIRCLE_SHA1).ToLowerInvariant()) { throw 'Manifest commit must equal lowercase CIRCLE_SHA1.' }
+            $env:RELEASE_SHA = [string]$manifest.commit
+            $publisher = Join-Path $root 'scripts\publish-github-release.ps1'
+            if (-not (Test-Path -LiteralPath $publisher -PathType Leaf)) { throw "Missing persisted publisher helper: $publisher" }
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $publisher -AssetsDir (Join-Path $root 'release-output') -Tag $env:CIRCLE_TAG
+            if ($LASTEXITCODE -ne 0) { throw "publish-github-release.ps1 failed with exit code $LASTEXITCODE" }
+
+workflows:
+  release:
+    jobs:
+      - release-build:
+          filters: &release-tag-filter
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+            branches:
+              ignore: /.*/
+      - release-approval:
+          type: approval
+          requires:
+            - release-build
+          filters: *release-tag-filter
+      - release-publish:
+          context: github-release-publisher
+          requires:
+            - release-approval
+          filters: *release-tag-filter

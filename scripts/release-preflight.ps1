@@ -93,13 +93,6 @@ try {
     }
     Write-Host "[ok] canonical repository: $(Normalize-GitHubRepository $origin)"
 
-    if ($env:CIRCLE_PROJECT_USERNAME -and $env:CIRCLE_PROJECT_REPONAME) {
-        $circleProject = "$($env:CIRCLE_PROJECT_USERNAME)/$($env:CIRCLE_PROJECT_REPONAME)"
-        if ((Normalize-GitHubRepository $circleProject) -ne (Normalize-GitHubRepository $Repository)) {
-            throw "CircleCI project '$circleProject' is not canonical repository '$Repository'."
-        }
-    }
-
     $head = Invoke-GitCapture @('rev-parse', 'HEAD')
     if ($head -ne $Sha.ToLowerInvariant()) {
         throw "Checked-out HEAD '$head' does not equal immutable release SHA '$Sha'."

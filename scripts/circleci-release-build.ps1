@@ -30,8 +30,14 @@ function Invoke-LoggedPowerShell {
         [Parameter(Mandatory)][string]$LogPath
     )
 
-    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $LogPath
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1 | Tee-Object -FilePath $LogPath
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($exitCode -ne 0) {
         Write-Host "--- $LogPath ---"
         if (Test-Path -LiteralPath $LogPath) { Get-Content -LiteralPath $LogPath }

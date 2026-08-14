@@ -57,8 +57,15 @@ if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) { throw "Missin
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Clear-DirectoryContents $OutputDir
 $version = Get-ReleaseVersionFromTag $Tag
-$tempRoot = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
-$workRoot = Join-Path $tempRoot ('win-codexbar-circleci-' + [guid]::NewGuid().ToString('N'))
+$tempRoot = if ($env:USERPROFILE) {
+    Join-Path $env:USERPROFILE 'cb'
+} elseif ($env:TEMP) {
+    Join-Path $env:TEMP 'cb'
+} else {
+    Join-Path ([IO.Path]::GetTempPath()) 'cb'
+}
+New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+$workRoot = Join-Path $tempRoot ('r-' + [guid]::NewGuid().ToString('N'))
 $assetsDir = Join-Path $workRoot 'assets'
 $doctorLog = Join-Path $OutputDir 'release-doctor.log'
 $buildLog = Join-Path $OutputDir 'windows-release-build.log'

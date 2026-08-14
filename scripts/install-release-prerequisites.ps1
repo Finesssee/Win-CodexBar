@@ -480,8 +480,14 @@ if (-not $iscc) {
 }
 $innoVersion = (Get-Item -LiteralPath $iscc).VersionInfo.FileVersion
 if ($innoVersion -notmatch '^6\.') {
-    $compilerHelp = (& $iscc '/?' 2>&1 | Out-String)
-    if ($compilerHelp -notmatch '(?i)Inno Setup 6') {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $compilerHelp = (& $iscc '/?' 2>&1 | Out-String)
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($compilerHelp -notmatch '(?i)(Inno Setup 6|Usage:\s+iscc)') {
         throw "Inno Setup 6.x is required; found '$innoVersion'."
     }
     $innoVersion = '6.x (compiler verified)'

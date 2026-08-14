@@ -103,9 +103,16 @@ function Invoke-Native {
         [string[]]$ArgumentList
     )
 
-    & $FilePath @ArgumentList
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FilePath exited with code $LASTEXITCODE"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @ArgumentList 2>&1 | ForEach-Object { Write-Host $_ }
+        $nativeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($nativeExitCode -ne 0) {
+        throw "$FilePath exited with code $nativeExitCode"
     }
 }
 
@@ -225,9 +232,16 @@ try {
     }
     if ($env:CARGO_BUILD_TARGET -and $rustup) {
         $toolchain = "stable-x86_64-pc-windows-msvc"
-        & $rustup.Source set auto-self-update disable
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Warning: rustup auto-self-update disable failed with exit code $LASTEXITCODE"
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $rustup.Source set auto-self-update disable 2>&1 | ForEach-Object { Write-Host $_ }
+            $rustupExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($rustupExitCode -ne 0) {
+            Write-Host "Warning: rustup auto-self-update disable failed with exit code $rustupExitCode"
         }
         Invoke-Native $rustup.Source @("toolchain", "install", $toolchain, "--profile", "minimal")
         if ($env:CARGO_BUILD_TARGET -ne "x86_64-pc-windows-msvc") {

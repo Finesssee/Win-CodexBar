@@ -17,12 +17,12 @@ jobs:
       - checkout
       - run:
           name: Assert build job has no GitHub write credential
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN must be absent from release-build.' }
       - run:
           name: Validate canonical release tag, SHA, versions, and main ancestry
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
             if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN must be absent from the credential-free release-build job.' }
@@ -31,7 +31,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "release-preflight.ps1 failed with exit code $LASTEXITCODE" }
       - run:
           name: Provision and assert pinned release prerequisites
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
             $root = (Get-Location).Path
@@ -40,7 +40,7 @@ jobs:
       - run:
           name: Build, smoke-install, and emit verified assets
           no_output_timeout: 45m
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
             $root = (Get-Location).Path
@@ -66,7 +66,7 @@ jobs:
           at: .
       - run:
           name: Upload matching assets to a draft GitHub Release
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
             if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN is required only in the restricted publisher context.' }

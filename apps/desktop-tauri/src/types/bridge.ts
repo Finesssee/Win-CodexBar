@@ -73,6 +73,15 @@ export type FloatBarStyle = "floating" | "taskbar";
 export type TrayVisibilitySupport = "supported" | "unsupportedOs";
 export type TrayVisibilityState = "promoted" | "notPromoted" | "entryNotFound" | "unknown";
 
+export type DeepSeekPricingPeriod = "standard" | "peak" | "offPeak";
+
+export interface DeepSeekPricingStatus {
+  period: DeepSeekPricingPeriod;
+  currentLocalTime: string;
+  nextTransitionLocalTime: string | null;
+  effectiveLocalTime: string;
+}
+
 export interface TrayVisibilityStatusDto {
   support: TrayVisibilitySupport;
   state: TrayVisibilityState;

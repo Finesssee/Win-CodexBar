@@ -38,6 +38,7 @@ import type {
   CodexAccountUsageSnapshot,
   CodexAccountsStateBridge,
   CodexSwitchResult,
+  DeepSeekPricingStatus,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -122,6 +123,10 @@ export function refreshProvidersIfStale(): Promise<void> {
 
 export function getCachedProviders(): Promise<ProviderUsageSnapshot[]> {
   return invoke<ProviderUsageSnapshot[]>("get_cached_providers");
+}
+
+export function getDeepSeekPricingStatus(): Promise<DeepSeekPricingStatus | null> {
+  return invoke<DeepSeekPricingStatus | null>("get_deepseek_pricing_status");
 }
 
 export function getWorkAreaRect(): Promise<WorkAreaRect> {

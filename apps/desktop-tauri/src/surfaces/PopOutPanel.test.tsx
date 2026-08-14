@@ -18,6 +18,7 @@ const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  getDeepSeekPricingStatus: vi.fn().mockResolvedValue(null),
 }));
 
 const eventMocks = vi.hoisted(() => ({

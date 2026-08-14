@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
   getProviderChartData: vi.fn(),
+  getDeepSeekPricingStatus: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
 }));
@@ -133,8 +134,17 @@ describe("MenuCard", () => {
         WayfinderOffline: "Gateway offline",
         WayfinderDryRun: "Dry run",
         WayfinderMissingKeys: "Missing keys",
+        DeepSeekPricingTitle: "DeepSeek pricing",
+        DeepSeekPricingStandard: "Standard / pre-schedule",
+        DeepSeekPricingPeak: "Peak hours",
+        DeepSeekPricingOffPeak: "Off-peak hours",
+        DeepSeekPricingCurrent: "Current local time:",
+        DeepSeekPricingNext: "Next transition:",
+        DeepSeekPricingEffective: "Effective local time:",
+        DeepSeekPricingAdvice: "Official schedule",
       }),
     );
+    tauriMocks.getDeepSeekPricingStatus.mockResolvedValue(null);
     tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",
       costHistory: [{ date: "2026-05-24", value: 1.23 }],
@@ -171,6 +181,24 @@ describe("MenuCard", () => {
     expect(screen.queryByText("30d cost")).not.toBeInTheDocument();
     expect(screen.queryByText("30d tokens")).not.toBeInTheDocument();
     expect(screen.queryByText("Estimated from local logs")).not.toBeInTheDocument();
+  });
+
+  it("shows DeepSeek peak/off-peak pricing status", async () => {
+    tauriMocks.getDeepSeekPricingStatus.mockResolvedValue({
+      period: "offPeak",
+      currentLocalTime: "2026-08-17 05:00:00 UTC",
+      nextTransitionLocalTime: "2026-08-17 06:00:00 UTC",
+      effectiveLocalTime: "2026-08-16 18:00:00 EDT",
+    });
+    const snapshot = provider(null);
+    snapshot.providerId = "deepseek";
+    snapshot.displayName = "DeepSeek";
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("DeepSeek pricing: Off-peak hours")).toBeInTheDocument();
+    expect(screen.getByText("Current local time: 2026-08-17 05:00:00 UTC")).toBeInTheDocument();
+    expect(screen.getByText("Next transition: 2026-08-17 06:00:00 UTC")).toBeInTheDocument();
   });
 
   it("can render metric bars as used instead of remaining", async () => {

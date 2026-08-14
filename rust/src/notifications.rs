@@ -128,6 +128,7 @@ pub struct NotificationManager {
     /// Track previous session percent for depleted/restored transitions (per account)
     previous_session_percent: std::collections::HashMap<SessionTransitionKey, f64>,
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
+    deepseek_pricing_period: Option<String>,
 }
 
 impl NotificationManager {
@@ -136,7 +137,30 @@ impl NotificationManager {
             sent_notifications: std::collections::HashSet::new(),
             previous_session_percent: std::collections::HashMap::new(),
             predictive_warning_keys: std::collections::HashSet::new(),
+            deepseek_pricing_period: None,
         }
+    }
+
+    /// Observe a DeepSeek pricing period and notify once per observed transition.
+    /// Intentionally silent; this advisory must not play a notification sound.
+    pub fn notify_pricing_transition(&mut self, period: &str, settings: &Settings) {
+        let changed = self
+            .deepseek_pricing_period
+            .as_deref()
+            .is_some_and(|previous| previous != period);
+        self.deepseek_pricing_period = Some(period.to_string());
+        if !settings.show_notifications || !changed {
+            return;
+        }
+        let label = match period {
+            "peak" => "peak",
+            "offPeak" => "off-peak",
+            _ => "standard/pre-schedule",
+        };
+        self.show_toast(
+            "DeepSeek pricing schedule",
+            &format!("DeepSeek is currently in {label} hours."),
+        );
     }
 
     pub fn record_predictive_observation(

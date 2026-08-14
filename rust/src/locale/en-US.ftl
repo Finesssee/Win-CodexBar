@@ -749,3 +749,12 @@ NetworkProxyUserLabel = Username (optional)
 NetworkProxyPasswordLabel = Password (optional)
 NetworkProxyPasswordHelper = Stored in local settings.json. Prefer a local proxy without auth when possible.
 NetworkProxyInvalidUrl = Invalid proxy URL. Use http://host:port.
+
+DeepSeekPricingTitle = DeepSeek pricing
+DeepSeekPricingStandard = Standard / pre-schedule
+DeepSeekPricingPeak = Peak hours
+DeepSeekPricingOffPeak = Off-peak hours
+DeepSeekPricingCurrent = Current local time:
+DeepSeekPricingNext = Next transition:
+DeepSeekPricingEffective = Effective local time:
+DeepSeekPricingAdvice = Official schedule: peak 01:00-04:00 and 06:00-10:00 UTC; off-peak is half-price.

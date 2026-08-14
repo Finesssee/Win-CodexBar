@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+pub mod pricing;
+
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,

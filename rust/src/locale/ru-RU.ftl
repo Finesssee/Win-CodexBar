@@ -714,3 +714,12 @@ NetworkProxyUserLabel = Имя пользователя (необязатель�
 NetworkProxyPasswordLabel = Пароль (необязательно)
 NetworkProxyPasswordHelper = Хранится в локальном файле settings.json. По возможности предпочитайте локальный прокси без аутентификации.
 NetworkProxyInvalidUrl = Неверный URL-адрес прокси. Используйте http://хост:порт.
+
+DeepSeekPricingTitle = DeepSeek pricing
+DeepSeekPricingStandard = Standard / pre-schedule
+DeepSeekPricingPeak = Peak hours
+DeepSeekPricingOffPeak = Off-peak hours
+DeepSeekPricingCurrent = Current local time:
+DeepSeekPricingNext = Next transition:
+DeepSeekPricingEffective = Effective local time:
+DeepSeekPricingAdvice = Official schedule: peak 01:00-04:00 and 06:00-10:00 UTC; off-peak is half-price.

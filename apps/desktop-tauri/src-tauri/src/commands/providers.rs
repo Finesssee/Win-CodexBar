@@ -1,4 +1,6 @@
 use super::*;
+use chrono::{Local, Utc};
+use serde::Serialize;
 use std::sync::Arc;
 
 const MAX_CONCURRENT_PROVIDER_FETCHES: usize = 8;
@@ -889,6 +891,49 @@ fn predictive_warning_identity(
         return None;
     }
     Some(format!("{source}:{account}"))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepSeekPricingStatus {
+    pub period: &'static str,
+    pub current_local_time: String,
+    pub next_transition_local_time: Option<String>,
+    pub effective_local_time: String,
+}
+
+#[tauri::command]
+pub fn get_deepseek_pricing_status(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Option<DeepSeekPricingStatus> {
+    let settings = Settings::load();
+    if !settings.enabled_providers.contains("deepseek") {
+        return None;
+    }
+    let now = Utc::now();
+    let schedule = codexbar::providers::deepseek::pricing::status_at(now);
+    let period = match schedule.period {
+        codexbar::providers::deepseek::pricing::PricingPeriod::Standard => "standard",
+        codexbar::providers::deepseek::pricing::PricingPeriod::Peak => "peak",
+        codexbar::providers::deepseek::pricing::PricingPeriod::OffPeak => "offPeak",
+    };
+    if let Ok(mut app_state) = state.lock() {
+        app_state
+            .notification_manager
+            .notify_pricing_transition(period, &settings);
+    }
+    let local = |instant: chrono::DateTime<Utc>| {
+        instant
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S %Z")
+            .to_string()
+    };
+    Some(DeepSeekPricingStatus {
+        period,
+        current_local_time: Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string(),
+        next_transition_local_time: schedule.next_transition.map(local),
+        effective_local_time: local(codexbar::providers::deepseek::pricing::EFFECTIVE_AT),
+    })
 }
 
 #[tauri::command]

@@ -16,6 +16,7 @@ import { FLOATBAR_WINDOW_LABEL } from "./floatbar/api";
 import { LocaleProvider } from "./i18n/LocaleProvider";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
+import { useDeepSeekPricingStatus } from "./hooks/useDeepSeekPricingStatus";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
 const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
@@ -62,6 +63,7 @@ function AppInner() {
   const [themePreference, setThemePreference] = useState<ThemePreference>("dark");
 
   useTheme(themePreference);
+  useDeepSeekPricingStatus();
 
   const reloadBootstrapState = useCallback(
     () => getBootstrapState(),

@@ -343,18 +343,30 @@ impl QwenCloudProvider {
                 ),
             )
         });
+        let weekly = snapshot.weekly_used_percent.map(|percent| {
+            RateWindow::with_details(
+                percent,
+                Some(WEEKLY_MINUTES),
+                snapshot.weekly_resets_at,
+                quota_detail_percent(percent, snapshot.weekly_total_quota),
+            )
+        });
+
+        // Prefer the 5-hour window; fall back to the legacy 30-day envelope; if the
+        // account only exposes the weekly window (e.g. Qwen Cloud individual plans),
+        // promote it to primary instead of failing the whole fetch.
+        let has_five_hour_or_legacy = five_hour.is_some() || legacy.is_some();
         let primary = five_hour
             .or(legacy)
+            .or_else(|| weekly.clone())
             .ok_or_else(|| ProviderError::Parse("Qwen Cloud usage windows missing".into()))?;
         let mut usage = UsageSnapshot::new(primary);
 
-        if let Some(weekly_percent) = snapshot.weekly_used_percent {
-            usage = usage.with_secondary(RateWindow::with_details(
-                weekly_percent,
-                Some(WEEKLY_MINUTES),
-                snapshot.weekly_resets_at,
-                quota_detail_percent(weekly_percent, snapshot.weekly_total_quota),
-            ));
+        // The weekly window is secondary only when it was not promoted to primary.
+        if has_five_hour_or_legacy
+            && let Some(weekly) = weekly
+        {
+            usage = usage.with_secondary(weekly);
         }
 
         if let Some(plan) = snapshot.plan_name.filter(|plan| !plan.trim().is_empty()) {
@@ -1387,5 +1399,37 @@ mod tests {
         assert_eq!(provider.metadata().weekly_label, "Weekly");
         assert!(!provider.metadata().default_enabled);
         assert_eq!(provider.metadata().dashboard_url, Some(DASHBOARD_URL));
+    }
+
+    #[test]
+    fn weekly_only_shape_promotes_weekly_to_primary() {
+        // Real-world fixture: the account exposes only the weekly window, so
+        // there is no per5HourPercentage at all. Previously this failed with
+        // "Qwen Cloud usage windows missing"; now the weekly window becomes
+        // the primary window instead.
+        let payload = serde_json::json!({
+            "code": "200",
+            "data": {
+                "DataV2": {
+                    "data": {
+                        "success": true,
+                        "data": {
+                            "per1WeekPercentage": 0.8439116574633999,
+                            "per1WeekResetTime": 1785234900000_i64
+                        }
+                    },
+                    "success": true,
+                    "httpStatus": 200
+                }
+            },
+            "successResponse": true
+        });
+        let usage = QwenCloudProvider::snapshot_to_usage(
+            QwenCloudProvider::parse(payload.to_string().as_bytes(), None, None).unwrap(),
+        )
+        .unwrap();
+        assert!((usage.primary.used_percent - 84.39116574634).abs() < 1e-9);
+        assert_eq!(usage.primary.window_minutes, Some(WEEKLY_MINUTES));
+        assert!(usage.secondary.is_none());
     }
 }

@@ -80,6 +80,15 @@ try {
     Write-Host "Credential-free release build passed for $Tag ($Sha)."
 } finally {
     if (Test-Path -LiteralPath $workRoot -PathType Container) {
-        [IO.Directory]::Delete($workRoot, $true)
+        foreach ($entry in @(Get-ChildItem -LiteralPath $workRoot -Force -Recurse -ErrorAction SilentlyContinue)) {
+            if ($entry -is [IO.FileInfo]) {
+                try { $entry.IsReadOnly = $false } catch { }
+            }
+        }
+        try {
+            [IO.Directory]::Delete($workRoot, $true)
+        } catch {
+            Write-Warning "Could not remove ephemeral WorkRoot '$workRoot': $($_.Exception.Message)"
+        }
     }
 }

@@ -236,9 +236,16 @@ function Install-PackageWithFallback {
             $rustupInit = Join-Path ([IO.Path]::GetTempPath()) 'rustup-init.exe'
             Invoke-PrerequisiteDownload 'https://win.rustup.rs/x86_64' $rustupInit
             Write-Host 'Installing rustup via official rustup-init.exe'
-            & $rustupInit '-y' '--default-toolchain' 'stable-x86_64-pc-windows-msvc' '--profile' 'default' 2>&1 | ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "rustup-init.exe exited with code $LASTEXITCODE."
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $rustupInit '-y' '--default-toolchain' 'stable-x86_64-pc-windows-msvc' '--profile' 'default' '--no-modify-path' 2>&1 | ForEach-Object { Write-Host $_ }
+                $rustupInitExit = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+            if ($rustupInitExit -ne 0) {
+                throw "rustup-init.exe exited with code $rustupInitExit."
             }
             Refresh-PrerequisitePath
             return

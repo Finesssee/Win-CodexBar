@@ -200,9 +200,17 @@ function Get-ObjdumpImportsWebView2Loader {
 }
 
 $git = Require-Command "git"
+$rustup = Get-Command rustup -ErrorAction SilentlyContinue
+if ($rustup) {
+    $rustupBinDir = Split-Path -Parent $rustup.Source
+    if (@($env:Path -split ';') -notcontains $rustupBinDir) {
+        $env:Path = "$rustupBinDir;$env:Path"
+    }
+}
 $cargo = Require-Command "cargo"
 $pnpm = Require-Command "pnpm"
-$rustup = Get-Command rustup -ErrorAction SilentlyContinue
+Write-Host "Cargo command: $($cargo.Source)"
+Write-Host "Rustc command: $((Get-Command rustc -ErrorAction Stop).Source)"
 
 New-Item -ItemType Directory -Force $WorkRoot, $CacheDir, $DesktopCargoTargetDir, $CliCargoTargetDir, $PnpmStoreDir, $InstallerDepsDir, $AssetsDir | Out-Null
 

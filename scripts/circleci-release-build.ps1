@@ -118,8 +118,6 @@ try {
         }
         try {
             [IO.Directory]::Delete($workRoot, $true)
-        } catch {
-            Write-Warning "Could not remove ephemeral WorkRoot '$workRoot': $($_.Exception.Message)"
+        } catch { }
         }
     }
-}

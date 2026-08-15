@@ -473,15 +473,20 @@ Write-Host "[ok] pnpm $pnpmVersion"
 Require-PrerequisiteCommand 'cargo' 'Rustlang.Rustup' 'rustup.install' | Out-Null
 Require-PrerequisiteCommand 'rustc' 'Rustlang.Rustup' 'rustup.install' | Out-Null
 $rustup = Require-PrerequisiteCommand 'rustup' 'Rustlang.Rustup' 'rustup.install'
+$toolchain = 'stable-x86_64-pc-windows-msvc'
 $target = 'x86_64-pc-windows-msvc'
-$installedTargets = @(& $rustup target list --installed)
+if (-not $AssertOnly) {
+    Invoke-Native $rustup @('toolchain', 'install', $toolchain, '--profile', 'minimal')
+    Invoke-Native $rustup @('default', $toolchain)
+}
+$installedTargets = @(& $rustup "+$toolchain" target list --installed)
 if ($installedTargets -notcontains $target) {
     if ($AssertOnly) {
-        throw "Rust target $target is not installed."
+        throw "Rust target $target is not installed for $toolchain."
     }
-    Invoke-Native $rustup @('target', 'add', $target)
+    Invoke-Native $rustup @("+$toolchain", 'target', 'add', $target)
 }
-Write-Host "[ok] Rust target $target"
+Write-Host "[ok] Rust target $target ($toolchain)"
 
 $iscc = Get-InnoSetupCompiler
 if (-not $iscc) {

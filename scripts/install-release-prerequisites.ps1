@@ -128,8 +128,21 @@ function Invoke-PrerequisiteDownload {
     )
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Write-Host "Downloading $Uri"
-    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            Write-Host "Downloading $Uri (attempt $attempt/$maxAttempts)"
+            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
+            return
+        } catch {
+            if ($attempt -lt $maxAttempts) {
+                Write-Warning "Download failed (attempt $attempt/$maxAttempts): $($_.Exception.Message)"
+                Start-Sleep -Seconds 10
+            } else {
+                throw
+            }
+        }
+    }
 }
 
 function Assert-PrerequisiteDownloadHash {
@@ -163,9 +176,28 @@ function Install-ChocoPackageFallback {
     if (-not $choco) {
         throw "choco is unavailable."
     }
-    Write-Host "Installing Chocolatey package $Id"
-    Invoke-Native $choco @('install', $Id, '--yes', '--no-progress')
-    Refresh-PrerequisitePath
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        Write-Host "Installing Chocolatey package $Id (attempt $attempt/$maxAttempts)"
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $choco install $Id --yes --no-progress 2>&1 | ForEach-Object { Write-Host $_ }
+            $chocoExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($chocoExit -eq 0) {
+            Refresh-PrerequisitePath
+            return
+        }
+        if ($attempt -lt $maxAttempts) {
+            Write-Warning "choco install $Id exited with code $chocoExit (attempt $attempt/$maxAttempts), retrying in 10s"
+            Start-Sleep -Seconds 10
+        } else {
+            throw "choco install $Id exited with code $chocoExit after $maxAttempts attempts."
+        }
+    }
 }
 
 function Install-PackageWithFallback {
@@ -198,6 +230,21 @@ function Install-PackageWithFallback {
         }
     } else {
         $attempts.Add('choco: unavailable')
+    }
+    if ($WingetId -eq 'Rustlang.Rustup') {
+        try {
+            $rustupInit = Join-Path ([IO.Path]::GetTempPath()) 'rustup-init.exe'
+            Invoke-PrerequisiteDownload 'https://win.rustup.rs/x86_64' $rustupInit
+            Write-Host 'Installing rustup via official rustup-init.exe'
+            & $rustupInit '-y' '--default-toolchain' 'stable-x86_64-pc-windows-msvc' '--profile' 'default' 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+                throw "rustup-init.exe exited with code $LASTEXITCODE."
+            }
+            Refresh-PrerequisitePath
+            return
+        } catch {
+            $attempts.Add("rustup-init: $($_.Exception.Message)")
+        }
     }
     throw "Unable to provision '$WingetId'/'$ChocoId'. $($attempts -join '; ')"
 }
@@ -379,22 +426,30 @@ function Install-InnoSetupFallback {
     } else {
         $attempts.Add('choco: unavailable')
     }
-    try {
-        $root = Join-Path ([IO.Path]::GetTempPath()) 'codexbar-inno-bootstrap'
-        New-Item -ItemType Directory -Force -Path $root | Out-Null
-        $installer = Join-Path $root 'innosetup.exe'
-        Invoke-PrerequisiteDownload 'https://jrsoftware.org/download.php/is.exe' $installer
-        Write-Host 'Installing Inno Setup 6 from jrsoftware.org'
-        & $installer '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/SP-'
-        if ($LASTEXITCODE -ne 0) {
-            throw "Inno Setup installer exited with code $LASTEXITCODE."
+    $innoMaxAttempts = 3
+    for ($innoAttempt = 1; $innoAttempt -le $innoMaxAttempts; $innoAttempt++) {
+        try {
+            $root = Join-Path ([IO.Path]::GetTempPath()) 'codexbar-inno-bootstrap'
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $installer = Join-Path $root 'innosetup.exe'
+            Invoke-PrerequisiteDownload 'https://jrsoftware.org/download.php/is.exe' $installer
+            Write-Host 'Installing Inno Setup 6 from jrsoftware.org (attempt $innoAttempt/$innoMaxAttempts)'
+            & $installer '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/SP-'
+            if ($LASTEXITCODE -ne 0) {
+                throw "Inno Setup installer exited with code $LASTEXITCODE."
+            }
+            Refresh-PrerequisitePath
+            $iscc = Get-InnoSetupCompiler
+            if ($iscc) { return $iscc }
+            $attempts.Add('official installer: ISCC.exe was still unavailable')
+            break
+        } catch {
+            $attempts.Add("official installer (attempt $innoAttempt): $($_.Exception.Message)")
+            if ($innoAttempt -lt $innoMaxAttempts) {
+                Write-Warning "Inno Setup install failed (attempt $innoAttempt/$innoMaxAttempts), retrying in 10s"
+                Start-Sleep -Seconds 10
+            }
         }
-        Refresh-PrerequisitePath
-        $iscc = Get-InnoSetupCompiler
-        if ($iscc) { return $iscc }
-        $attempts.Add('official installer: ISCC.exe was still unavailable')
-    } catch {
-        $attempts.Add("official installer: $($_.Exception.Message)")
     }
     throw "Unable to provision Inno Setup 6. $($attempts -join '; ')"
 }

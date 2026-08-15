@@ -229,7 +229,7 @@ if ($rustupExitCode -ne 0) {
 }
 $toolchain = 'stable-x86_64-pc-windows-msvc'
 $target = if ($env:CARGO_BUILD_TARGET) { $env:CARGO_BUILD_TARGET } else { 'x86_64-pc-windows-msvc' }
-Invoke-Native $rustup.Source @('toolchain', 'install', $toolchain, '--profile', 'minimal')
+Invoke-Native $rustup.Source @('toolchain', 'install', $toolchain, '--profile', 'default')
 & $rustup.Source target add $target --toolchain $toolchain 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) {
     throw "$($rustup.Source) target add $target --toolchain $toolchain exited with code $LASTEXITCODE"

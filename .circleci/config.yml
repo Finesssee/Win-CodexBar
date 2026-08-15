@@ -84,7 +84,13 @@ jobs:
             $ghExe = Get-ChildItem -Path $ghDir -Recurse -Filter 'gh.exe' | Select-Object -First 1
             if (-not $ghExe) { throw "gh.exe not found after extracting $zipPath" }
             $env:Path = "$($ghExe.DirectoryName);$env:Path"
-            [Environment]::SetEnvironmentVariable('Path', $env:Path, 'User')
+            foreach ($scope in @('Machine', 'User')) {
+                $scopePath = [Environment]::GetEnvironmentVariable('Path', $scope)
+                $scopeEntries = @($scopePath -split ';' | Where-Object { $_ })
+                if ($scopeEntries -notcontains $ghExe.DirectoryName) {
+                    [Environment]::SetEnvironmentVariable('Path', "$($ghExe.DirectoryName);$scopePath", $scope)
+                }
+            }
             Write-Host "Installed gh at $($ghExe.FullName)"
       - run:
           name: Upload matching assets to a draft GitHub Release

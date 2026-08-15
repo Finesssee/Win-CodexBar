@@ -157,7 +157,7 @@ function Assert-ManifestAndAssets {
     }
 
     $publishFiles = @(Get-ChildItem -LiteralPath $AssetsDir -File | Where-Object {
-        $_.Name -ne 'release-manifest.json' -and $_.Name -notmatch '\\.log$'
+        $_.Name -ne 'release-manifest.json' -and $_.Name -notmatch '\.log$'
     } | Select-Object -ExpandProperty Name | Sort-Object)
     if (($publishFiles -join '|') -ne ($expectedNames -join '|')) {
         throw "Persisted bundle contains unexpected publishable files: $($publishFiles -join ', ')."

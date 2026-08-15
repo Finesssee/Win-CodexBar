@@ -200,15 +200,25 @@ function Get-ObjdumpImportsWebView2Loader {
 }
 
 $git = Require-Command "git"
-$rustup = Get-Command rustup -ErrorAction SilentlyContinue
-if ($rustup) {
-    $rustupBinDir = Split-Path -Parent $rustup.Source
-    if (@($env:Path -split ';') -notcontains $rustupBinDir) {
+$rustupBinCandidates = @()
+if ($env:CARGO_HOME) {
+    $rustupBinCandidates += Join-Path $env:CARGO_HOME 'bin'
+}
+if ($env:USERPROFILE) {
+    $rustupBinCandidates += Join-Path $env:USERPROFILE '.cargo\bin'
+}
+foreach ($rustupBinDir in $rustupBinCandidates) {
+    if ((Test-Path -LiteralPath $rustupBinDir -PathType Container) -and (@($env:Path -split ';') -notcontains $rustupBinDir)) {
         $env:Path = "$rustupBinDir;$env:Path"
     }
 }
+$rustup = Get-Command rustup -ErrorAction SilentlyContinue
+if (-not $rustup) {
+    throw 'rustup is required for Windows release builds.'
+}
 $cargo = Require-Command "cargo"
 $pnpm = Require-Command "pnpm"
+Write-Host "Rustup command: $($rustup.Source)"
 Write-Host "Cargo command: $($cargo.Source)"
 Write-Host "Rustc command: $((Get-Command rustc -ErrorAction Stop).Source)"
 

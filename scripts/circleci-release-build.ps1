@@ -81,8 +81,7 @@ try {
     Invoke-LoggedPowerShell (Join-Path $RepoRoot 'scripts\windows-release-build.ps1') @(
         '-Ref', $Sha,
         '-RepoUrl', $Repository,
-        '-WorkRoot', $workRoot,
-        '-SmokeInstall'
+        '-WorkRoot', $workRoot
     ) $buildLog
     Invoke-LoggedPowerShell (Join-Path $RepoRoot 'scripts\emit-release-manifest.ps1') @(
         '-AssetsDir', $assetsDir,

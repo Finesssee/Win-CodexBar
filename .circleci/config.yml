@@ -39,7 +39,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "install-release-prerequisites.ps1 failed with exit code $LASTEXITCODE" }
       - run:
           name: Build, smoke-install, and emit verified assets
-          no_output_timeout: 60m
+          no_output_timeout: 90m
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'

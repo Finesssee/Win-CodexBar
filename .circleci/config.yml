@@ -69,7 +69,7 @@ jobs:
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
-            if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN is required only in the restricted publisher context.' }
+            $env:GH_TOKEN = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:gh_token) { $env:gh_token } else { '' }; if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN is required only in the restricted publisher context.' }
             $root = (Get-Location).Path
             $manifestPath = Join-Path $root 'release-output\release-manifest.json'
             if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Missing persisted release manifest: $manifestPath" }
@@ -98,7 +98,7 @@ workflows:
             - release-build
           filters: *release-tag-filter
       - release-publish:
-          context: github-release-publisher
+          context: gh-release-publisher
           requires:
             - release-approval
           filters: *release-tag-filter

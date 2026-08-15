@@ -182,6 +182,7 @@ function Assert-ManifestAndAssets {
     Write-Host '[ok] manifest, exact four asset names, SHA-256 values, and sidecars verified before API access'
 }
 
+$env:GH_TOKEN = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:gh_token) { $env:gh_token } else { '' }
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
     throw 'GH_TOKEN is required and must be provided only by the restricted CircleCI publisher context.'
 }

@@ -216,6 +216,14 @@ $rustup = Get-Command rustup -ErrorAction SilentlyContinue
 if (-not $rustup) {
     throw 'rustup is required for Windows release builds.'
 }
+$toolchain = 'stable-x86_64-pc-windows-msvc'
+$target = if ($env:CARGO_BUILD_TARGET) { $env:CARGO_BUILD_TARGET } else { 'x86_64-pc-windows-msvc' }
+Invoke-Native $rustup.Source @('toolchain', 'install', $toolchain, '--profile', 'minimal')
+& $rustup.Source target add $target --toolchain $toolchain 2>&1 | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    throw "$($rustup.Source) target add $target --toolchain $toolchain exited with code $LASTEXITCODE"
+}
+$env:RUSTUP_TOOLCHAIN = $toolchain
 $cargo = Require-Command "cargo"
 $pnpm = Require-Command "pnpm"
 Write-Host "Rustup command: $($rustup.Source)"
@@ -249,7 +257,6 @@ try {
         $env:CARGO_BUILD_TARGET = "x86_64-pc-windows-msvc"
     }
     if ($env:CARGO_BUILD_TARGET -and $rustup) {
-        $toolchain = "stable-x86_64-pc-windows-msvc"
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = 'Continue'
@@ -261,21 +268,8 @@ try {
         if ($rustupExitCode -ne 0) {
             Write-Host "Warning: rustup auto-self-update disable failed with exit code $rustupExitCode"
         }
-        Invoke-Native $rustup.Source @("toolchain", "install", $toolchain, "--profile", "minimal")
-        $previousErrorActionPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & $rustup.Source target add $env:CARGO_BUILD_TARGET --toolchain $toolchain 2>&1 | ForEach-Object { Write-Host $_ }
-            $rustupExitCode = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-        if ($rustupExitCode -ne 0) {
-            throw "$($rustup.Source) target add $env:CARGO_BUILD_TARGET --toolchain $toolchain exited with code $rustupExitCode"
-        }
         $installedRustTargets = @(& $rustup.Source target list --installed --toolchain $toolchain)
         Write-Host "Rust installed targets ($toolchain): $($installedRustTargets -join ', ')"
-        $env:RUSTUP_TOOLCHAIN = $toolchain
     }
     $env:PNPM_HOME = if ($env:PNPM_HOME) { $env:PNPM_HOME } else { Join-Path $CacheDir "pnpm-home" }
 

@@ -481,17 +481,17 @@ if (-not $AssertOnly) {
         throw "$rustup default $toolchain exited with code $LASTEXITCODE"
     }
 }
-$installedTargets = @(& $rustup target list --installed)
+$installedTargets = @(& $rustup target list --installed --toolchain $toolchain)
 if ($LASTEXITCODE -ne 0) {
-    throw "$rustup target list --installed exited with code $LASTEXITCODE"
+    throw "$rustup target list --installed --toolchain $toolchain exited with code $LASTEXITCODE"
 }
 if ($installedTargets -notcontains $target) {
     if ($AssertOnly) {
         throw "Rust target $target is not installed for $toolchain."
     }
-    & $rustup target add $target
+    & $rustup target add $target --toolchain $toolchain
     if ($LASTEXITCODE -ne 0) {
-        throw "$rustup target add $target exited with code $LASTEXITCODE"
+        throw "$rustup target add $target --toolchain $toolchain exited with code $LASTEXITCODE"
     }
 }
 Write-Host "[ok] Rust target $target ($toolchain)"

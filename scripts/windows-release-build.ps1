@@ -242,11 +242,21 @@ if ($rustupExitCode -ne 0) {
     throw "$($rustup.Source) target add $target --toolchain $toolchain exited with code $rustupExitCode"
 }
 $env:RUSTUP_TOOLCHAIN = $toolchain
-$cargo = Require-Command "cargo"
+$rustupBinDir = Split-Path -Parent $rustup.Source
+foreach ($proxy in @('cargo', 'rustc', 'rustfmt', 'clippy-driver', 'rls', 'rust-analyzer')) {
+    $proxyPath = Join-Path $rustupBinDir "$proxy.exe"
+    if (-not (Test-Path -LiteralPath $proxyPath)) {
+        Copy-Item -LiteralPath $rustup.Source -Destination $proxyPath -Force
+        Write-Host "Created rustup proxy: $proxyPath"
+    }
+}
+$env:Path = "$rustupBinDir;$env:Path"
+$cargo = Get-Command cargo -ErrorAction Stop
+$rustcCmd = Get-Command rustc -ErrorAction Stop
 $pnpm = Require-Command "pnpm"
 Write-Host "Rustup command: $($rustup.Source)"
 Write-Host "Cargo command: $($cargo.Source)"
-Write-Host "Rustc command: $((Get-Command rustc -ErrorAction Stop).Source)"
+Write-Host "Rustc command: $($rustcCmd.Source)"
 
 New-Item -ItemType Directory -Force $WorkRoot, $CacheDir, $DesktopCargoTargetDir, $CliCargoTargetDir, $PnpmStoreDir, $InstallerDepsDir, $AssetsDir | Out-Null
 

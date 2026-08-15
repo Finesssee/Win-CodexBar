@@ -235,11 +235,16 @@ if ($LASTEXITCODE -ne 0) {
     throw "$($rustup.Source) target add $target --toolchain $toolchain exited with code $LASTEXITCODE"
 }
 $env:RUSTUP_TOOLCHAIN = $toolchain
+Write-Host "DEBUG: about to resolve cargo"
 $cargo = Require-Command "cargo"
+Write-Host "DEBUG: cargo resolved to $($cargo.Source)"
+Write-Host "DEBUG: about to resolve pnpm"
 $pnpm = Require-Command "pnpm"
+Write-Host "DEBUG: pnpm resolved to $($pnpm.Source)"
 Write-Host "Rustup command: $($rustup.Source)"
 Write-Host "Cargo command: $($cargo.Source)"
 Write-Host "Rustc command: $((Get-Command rustc -ErrorAction Stop).Source)"
+Write-Host "DEBUG: PATH = $env:Path"
 
 New-Item -ItemType Directory -Force $WorkRoot, $CacheDir, $DesktopCargoTargetDir, $CliCargoTargetDir, $PnpmStoreDir, $InstallerDepsDir, $AssetsDir | Out-Null
 

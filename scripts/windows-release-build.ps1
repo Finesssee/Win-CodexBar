@@ -244,9 +244,19 @@ try {
             Write-Host "Warning: rustup auto-self-update disable failed with exit code $rustupExitCode"
         }
         Invoke-Native $rustup.Source @("toolchain", "install", $toolchain, "--profile", "minimal")
-        if ($env:CARGO_BUILD_TARGET -ne "x86_64-pc-windows-msvc") {
-            Invoke-Native $rustup.Source @("target", "add", $env:CARGO_BUILD_TARGET, "--toolchain", $toolchain)
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $rustup.Source target add $env:CARGO_BUILD_TARGET --toolchain $toolchain 2>&1 | ForEach-Object { Write-Host $_ }
+            $rustupExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
         }
+        if ($rustupExitCode -ne 0) {
+            throw "$($rustup.Source) target add $env:CARGO_BUILD_TARGET --toolchain $toolchain exited with code $rustupExitCode"
+        }
+        $installedRustTargets = @(& $rustup.Source target list --installed --toolchain $toolchain)
+        Write-Host "Rust installed targets ($toolchain): $($installedRustTargets -join ', ')"
         $env:RUSTUP_TOOLCHAIN = $toolchain
     }
     $env:PNPM_HOME = if ($env:PNPM_HOME) { $env:PNPM_HOME } else { Join-Path $CacheDir "pnpm-home" }

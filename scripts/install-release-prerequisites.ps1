@@ -476,15 +476,23 @@ $rustup = Require-PrerequisiteCommand 'rustup' 'Rustlang.Rustup' 'rustup.install
 $toolchain = 'stable-x86_64-pc-windows-msvc'
 $target = 'x86_64-pc-windows-msvc'
 if (-not $AssertOnly) {
-    Invoke-Native $rustup @('toolchain', 'install', $toolchain, '--profile', 'minimal')
-    Invoke-Native $rustup @('default', $toolchain)
+    & $rustup default $toolchain
+    if ($LASTEXITCODE -ne 0) {
+        throw "$rustup default $toolchain exited with code $LASTEXITCODE"
+    }
 }
-$installedTargets = @(& $rustup "+$toolchain" target list --installed)
+$installedTargets = @(& $rustup target list --installed)
+if ($LASTEXITCODE -ne 0) {
+    throw "$rustup target list --installed exited with code $LASTEXITCODE"
+}
 if ($installedTargets -notcontains $target) {
     if ($AssertOnly) {
         throw "Rust target $target is not installed for $toolchain."
     }
-    Invoke-Native $rustup @("+$toolchain", 'target', 'add', $target)
+    & $rustup target add $target
+    if ($LASTEXITCODE -ne 0) {
+        throw "$rustup target add $target exited with code $LASTEXITCODE"
+    }
 }
 Write-Host "[ok] Rust target $target ($toolchain)"
 

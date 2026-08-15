@@ -65,38 +65,26 @@ jobs:
       - attach_workspace:
           at: .
       - run:
-          name: Install GitHub CLI
+          name: Install gh, verify manifest, and publish release assets
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
             $gh = Get-Command gh -ErrorAction SilentlyContinue
-            if ($gh) { Write-Host "gh already installed at $($gh.Source)"; exit 0 }
-            $ghDir = Join-Path $env:LOCALAPPDATA 'gh'
-            New-Item -ItemType Directory -Force -Path $ghDir | Out-Null
-            $zipPath = Join-Path ([IO.Path]::GetTempPath()) 'gh.zip'
-            $apiUri = 'https://api.github.com/repos/cli/cli/releases/latest'
-            $release = Invoke-RestMethod -Uri $apiUri -Headers @{ 'User-Agent' = 'circleci' }
-            $asset = $release.assets | Where-Object { $_.name -match 'windows_amd64\.zip$' } | Select-Object -First 1
-            if (-not $asset) { throw 'Could not find GitHub CLI Windows amd64 zip in latest release' }
-            Write-Host "Downloading $($asset.name)"
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
-            Expand-Archive -LiteralPath $zipPath -DestinationPath $ghDir -Force
-            $ghExe = Get-ChildItem -Path $ghDir -Recurse -Filter 'gh.exe' | Select-Object -First 1
-            if (-not $ghExe) { throw "gh.exe not found after extracting $zipPath" }
-            $env:Path = "$($ghExe.DirectoryName);$env:Path"
-            foreach ($scope in @('Machine', 'User')) {
-                $scopePath = [Environment]::GetEnvironmentVariable('Path', $scope)
-                $scopeEntries = @($scopePath -split ';' | Where-Object { $_ })
-                if ($scopeEntries -notcontains $ghExe.DirectoryName) {
-                    [Environment]::SetEnvironmentVariable('Path', "$($ghExe.DirectoryName);$scopePath", $scope)
-                }
+            if (-not $gh) {
+              $ghDir = Join-Path $env:LOCALAPPDATA 'gh'
+              New-Item -ItemType Directory -Force -Path $ghDir | Out-Null
+              $zipPath = Join-Path ([IO.Path]::GetTempPath()) 'gh.zip'
+              $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/cli/cli/releases/latest' -Headers @{ 'User-Agent' = 'circleci' }
+              $asset = $release.assets | Where-Object { $_.name -match 'windows_amd64\.zip$' } | Select-Object -First 1
+              if (-not $asset) { throw 'Could not find GitHub CLI Windows amd64 zip' }
+              Write-Host "Downloading $($asset.name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
+              Expand-Archive -LiteralPath $zipPath -DestinationPath $ghDir -Force
+              $ghExe = Get-ChildItem -Path $ghDir -Recurse -Filter 'gh.exe' | Select-Object -First 1
+              if (-not $ghExe) { throw 'gh.exe not found after extraction' }
+              $env:Path = "$($ghExe.DirectoryName);$env:Path"
+              Write-Host "Installed gh at $($ghExe.FullName)"
             }
-            Write-Host "Installed gh at $($ghExe.FullName)"
-      - run:
-          name: Upload matching assets to a draft GitHub Release
-          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
-          command: |
-            $ErrorActionPreference = 'Stop'
             $env:GH_TOKEN = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:gh_token) { $env:gh_token } else { '' }; if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN is required only in the restricted publisher context.' }
             $root = (Get-Location).Path
             $manifestPath = Join-Path $root 'release-output\release-manifest.json'

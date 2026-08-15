@@ -35,8 +35,14 @@ function Invoke-GhJson {
     $stdoutPath = [IO.Path]::GetTempFileName()
     $stderrPath = [IO.Path]::GetTempFileName()
     try {
-        & $gh.Source @Arguments 1>$stdoutPath 2>$stderrPath
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $gh.Source @Arguments 1>$stdoutPath 2>$stderrPath
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         if ($exitCode -ne 0) {
             $errorText = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue
             throw "gh $($Arguments -join ' ') failed with exit code $($exitCode): $errorText"
@@ -51,10 +57,16 @@ function Invoke-GhJson {
 function Invoke-GhUpload {
     param([Parameter(Mandatory)][string]$Path)
 
-    $gh = Get-Command gh -ErrorAction Stop
-    & $gh.Source release upload $Tag $Path '--repo' $Repository
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh release upload failed for $(Split-Path $Path -Leaf) with exit code $LASTEXITCODE"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $gh.Source release upload $Tag $Path '--repo' $Repository 2>&1 | ForEach-Object { Write-Host $_ }
+        $uploadExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($uploadExitCode -ne 0) {
+        throw "gh release upload failed for $(Split-Path $Path -Leaf) with exit code $uploadExitCode"
     }
 }
 
@@ -63,8 +75,15 @@ function Get-Release {
     $stdoutPath = [IO.Path]::GetTempFileName()
     $stderrPath = [IO.Path]::GetTempFileName()
     try {
-        & $gh.Source api "repos/$Repository/releases/tags/$Tag" 1>$stdoutPath 2>$stderrPath
-        if ($LASTEXITCODE -eq 0) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $gh.Source api "repos/$Repository/releases/tags/$Tag" 1>$stdoutPath 2>$stderrPath
+            $ghExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($ghExitCode -eq 0) {
             return Get-Content -Raw -LiteralPath $stdoutPath | ConvertFrom-Json
         }
         $errorText = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue

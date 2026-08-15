@@ -105,18 +105,19 @@ function Add-PrerequisitePath {
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         throw "Cannot add missing tool directory to PATH: $Path"
     }
-    $entries = @($env:Path -split ';' | Where-Object { $_ })
-    if ($entries -notcontains $Path) {
+    if (@($env:Path -split ';' | Where-Object { $_ }) -notcontains $Path) {
         $env:Path = "$Path;$env:Path"
     }
-    try {
-        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $userEntries = @($userPath -split ';' | Where-Object { $_ })
-        if ($userEntries -notcontains $Path) {
-            [Environment]::SetEnvironmentVariable('Path', "$Path;$userPath", 'User')
+    foreach ($scope in @('Machine', 'User')) {
+        try {
+            $scopePath = [Environment]::GetEnvironmentVariable('Path', $scope)
+            $scopeEntries = @($scopePath -split ';' | Where-Object { $_ })
+            if ($scopeEntries -notcontains $Path) {
+                [Environment]::SetEnvironmentVariable('Path', "$Path;$scopePath", $scope)
+            }
+        } catch {
+            Write-Warning "Could not persist PATH for $scope scope: $($_.Exception.Message)"
         }
-    } catch {
-        Write-Warning "Could not persist PATH for future processes: $($_.Exception.Message)"
     }
 }
 
@@ -425,6 +426,8 @@ if (-not $nodeInfo) {
     throw "Required command 'node' is still unavailable after provisioning '$nodePackageId'."
 }
 Assert-NodeMajor $nodeInfo.Version $requiredNodeMajor | Out-Null
+$nodeDirectory = Split-Path -Parent $nodeInfo.Path
+Add-PrerequisitePath $nodeDirectory
 Write-Host "[ok] Node $($nodeInfo.Version) (major $requiredNodeMajor)"
 
 $corepack = Get-CommandPath 'corepack'

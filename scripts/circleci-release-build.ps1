@@ -23,6 +23,25 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'release-pipeline-common.ps1')
 
+function Refresh-ChildProcessPath {
+    $pathValues = @(
+        $env:Path
+        [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        [Environment]::GetEnvironmentVariable('Path', 'User')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $entries = New-Object System.Collections.Generic.List[string]
+    foreach ($value in $pathValues) {
+        foreach ($entry in ($value -split ';')) {
+            if (-not [string]::IsNullOrWhiteSpace($entry) -and -not $entries.Contains($entry)) {
+                $entries.Add($entry)
+            }
+        }
+    }
+    $env:Path = $entries -join ';'
+}
+
+Refresh-ChildProcessPath
+
 function Invoke-LoggedPowerShell {
     param(
         [Parameter(Mandatory)][string]$ScriptPath,

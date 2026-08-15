@@ -216,6 +216,17 @@ $rustup = Get-Command rustup -ErrorAction SilentlyContinue
 if (-not $rustup) {
     throw 'rustup is required for Windows release builds.'
 }
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    & $rustup.Source set auto-self-update disable 2>&1 | ForEach-Object { Write-Host $_ }
+    $rustupExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($rustupExitCode -ne 0) {
+    Write-Host "Warning: rustup auto-self-update disable failed with exit code $rustupExitCode"
+}
 $toolchain = 'stable-x86_64-pc-windows-msvc'
 $target = if ($env:CARGO_BUILD_TARGET) { $env:CARGO_BUILD_TARGET } else { 'x86_64-pc-windows-msvc' }
 Invoke-Native $rustup.Source @('toolchain', 'install', $toolchain, '--profile', 'minimal')
@@ -257,17 +268,6 @@ try {
         $env:CARGO_BUILD_TARGET = "x86_64-pc-windows-msvc"
     }
     if ($env:CARGO_BUILD_TARGET -and $rustup) {
-        $previousErrorActionPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            & $rustup.Source set auto-self-update disable 2>&1 | ForEach-Object { Write-Host $_ }
-            $rustupExitCode = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-        if ($rustupExitCode -ne 0) {
-            Write-Host "Warning: rustup auto-self-update disable failed with exit code $rustupExitCode"
-        }
         $installedRustTargets = @(& $rustup.Source target list --installed --toolchain $toolchain)
         Write-Host "Rust installed targets ($toolchain): $($installedRustTargets -join ', ')"
     }

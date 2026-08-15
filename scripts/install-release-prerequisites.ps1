@@ -247,6 +247,10 @@ function Install-PackageWithFallback {
             if ($rustupInitExit -ne 0) {
                 throw "rustup-init.exe exited with code $rustupInitExit."
             }
+            $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+            if (Test-Path -LiteralPath $cargoBin -PathType Container) {
+                Add-PrerequisitePath $cargoBin
+            }
             Refresh-PrerequisitePath
             return
         } catch {

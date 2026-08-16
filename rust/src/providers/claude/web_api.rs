@@ -784,6 +784,22 @@ mod tests {
     }
 
     #[test]
+    fn one_percent_session_is_not_reported_as_full_quota() {
+        let window = UsageWindow {
+            utilization: Some(1.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!(
+            (rate.used_percent - 1.0).abs() < f64::EPSILON,
+            "session was {}, expected 1% (not 100%)",
+            rate.used_percent
+        );
+    }
+
+    #[test]
     fn null_five_hour_session_is_informational_placeholder() {
         let placeholder = crate::core::RateWindow::no_active_session();
         assert!(placeholder.is_informational);

@@ -26,7 +26,39 @@ pub struct AntigravityProvider {
 
 /// Return a regex that matches `--<flag> <value>` or `--<flag>=<value>`.
 fn flag_re(flag: &str) -> Regex {
-    Regex::new(&format!(r"--{f}(?:\s+|\s*=\s*)(\S+)", f = flag)).expect("valid flag pattern")
+    Regex::new(&format!("--{f}(?:\\s+|\\s*=\\s*)(\\S+)", f = flag)).expect("valid flag pattern")
+}
+
+/// The kind of local Antigravity process a `ProcessInfo` was derived from.
+///
+/// The desktop IDE/app language server authenticates local requests with a
+/// `--csrf_token` flag and requires the `X-Codeium-Csrf-Token` header. The
+/// `agy` CLI hosts the same language server in-process but launches it without
+/// that flag and serves the quota endpoints with no CSRF header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessSource {
+    /// Desktop IDE/app language server — requires a CSRF token.
+    Ide,
+    /// `agy` CLI language server — no CSRF token required.
+    Cli,
+}
+
+/// True when `command_line` looks like the `agy` CLI language server process.
+///
+/// `agy.exe` (and `antigravity-cli` / `antigravity_cli`) hosts the same local
+/// language server as the IDE but under a different process name and without a
+/// `--csrf_token` flag. Match either the bare `agy` executable or the
+/// `antigravity-cli` package name; a leading path separator prevents unrelated
+/// names (e.g. `notantigravity-cli`) from matching.
+fn is_agy_cli_command(command_line: &str) -> bool {
+    let lower = command_line.to_ascii_lowercase();
+    let cli_path_re = Regex::new(r"(^|[\\/])(antigravity-cli|antigravity_cli)([\s/\\]|$)")
+        .expect("valid antigravity-cli pattern");
+    if cli_path_re.is_match(&lower) {
+        return true;
+    }
+    let agy_re = Regex::new(r"(^|[\\/])agy(\.exe)?(\s|$)").expect("valid agy pattern");
+    agy_re.is_match(&lower)
 }
 
 impl AntigravityProvider {
@@ -57,7 +89,10 @@ impl AntigravityProvider {
         cmd.args([
                 "-ExecutionPolicy", "Bypass",
                 "-Command",
-                "Get-CimInstance Win32_Process | Where-Object { $_.Name -like '*language_server_windows*' -or $_.Name -like 'language_server.exe' } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+                // Match the desktop IDE/app language server (language_server.exe /
+                // language_server_windows*) and the `agy` CLI (agy / agy.exe), which
+                // hosts the same language server in-process with no --csrf_token flag.
+                "Get-CimInstance Win32_Process | Where-Object { $_.Name -like '*language_server_windows*' -or $_.Name -like 'language_server.exe' -or $_.Name -eq 'agy.exe' -or $_.Name -eq 'agy' } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
             ]);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -84,48 +119,66 @@ impl AntigravityProvider {
         let port_re = flag_re("extension_server_port");
         let https_port_re = flag_re("https_server_port");
 
+        // Prefer desktop IDE/app matches (which carry a --csrf_token) over the
+        // tokenless `agy` CLI so the CSRF-protected endpoint is used when both
+        // happen to be running. Only fall back to a CLI match when no IDE match
+        // is found, mirroring upstream's process-kind precedence.
+        let mut cli_match: Option<ProcessInfo> = None;
+
         for line in stdout.lines() {
-            if line.contains("--csrf_token") {
-                // Line is "<pid>\t<command line>"; split off the PID prefix we added so the
-                // PID can be used to enumerate the process's real listening ports below.
-                let (pid, line) = match line.split_once('\t') {
-                    Some((p, rest)) => (p.trim().parse::<u32>().ok(), rest),
-                    None => (None, line),
-                };
+            // Line is "<pid>\t<command line>"; split off the PID prefix we added so the
+            // PID can be used to enumerate the process's real listening ports below.
+            let (pid, line) = match line.split_once('\t') {
+                Some((p, rest)) => (p.trim().parse::<u32>().ok(), rest),
+                None => (None, line),
+            };
 
-                let csrf_token = csrf_re
-                    .captures(line)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_string());
+            let csrf_token = csrf_re
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string());
 
-                let ext_csrf_token = ext_csrf_re
-                    .captures(line)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_string());
+            let ext_csrf_token = ext_csrf_re
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string());
 
-                let port = port_re
-                    .captures(line)
-                    .and_then(|c| c.get(1))
-                    .and_then(|m| m.as_str().parse::<u16>().ok())
-                    .or_else(|| {
-                        https_port_re
-                            .captures(line)
-                            .and_then(|c| c.get(1))
-                            .and_then(|m| m.as_str().parse::<u16>().ok())
-                    });
+            let port = port_re
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u16>().ok())
+                .or_else(|| {
+                    https_port_re
+                        .captures(line)
+                        .and_then(|c| c.get(1))
+                        .and_then(|m| m.as_str().parse::<u16>().ok())
+                });
 
-                if let Some(token) = csrf_token {
-                    return Some(ProcessInfo {
-                        csrf_token: token,
-                        extension_server_csrf_token: ext_csrf_token,
-                        extension_port: port,
-                        pid,
-                    });
-                }
+            // Desktop IDE/app language server: requires --csrf_token.
+            if let Some(token) = csrf_token {
+                return Some(ProcessInfo {
+                    csrf_token: token,
+                    extension_server_csrf_token: ext_csrf_token,
+                    extension_port: port,
+                    pid,
+                    source: ProcessSource::Ide,
+                });
+            }
+
+            // `agy` CLI: hosts the same language server without --csrf_token.
+            // Allow an empty CSRF token; the CLI's quota endpoint requires none.
+            if cli_match.is_none() && is_agy_cli_command(line) {
+                cli_match = Some(ProcessInfo {
+                    csrf_token: String::new(),
+                    extension_server_csrf_token: None,
+                    extension_port: port,
+                    pid,
+                    source: ProcessSource::Cli,
+                });
             }
         }
 
-        None
+        cli_match
     }
 
     /// Find the actual API port by probing the language server's candidate ports.
@@ -271,18 +324,27 @@ impl AntigravityProvider {
             }
         });
 
-        // Use extension server CSRF token if available, otherwise fall back to language server token
-        let csrf_token = process_info
-            .extension_server_csrf_token
-            .as_deref()
-            .unwrap_or(&process_info.csrf_token);
-
-        let resp = client
+        // The `agy` CLI serves the quota endpoints without a CSRF token; the
+        // desktop IDE/app server requires one. Only attach the CSRF header when
+        // the matched process is the desktop server (and a token was found).
+        let requires_csrf = process_info.source == ProcessSource::Ide;
+        let csrf_token = if requires_csrf {
+            process_info
+                .extension_server_csrf_token
+                .as_deref()
+                .unwrap_or(&process_info.csrf_token)
+        } else {
+            ""
+        };
+        let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Connect-Protocol-Version", "1")
-            .header("X-Codeium-Csrf-Token", csrf_token)
-            .json(&body)
+            .json(&body);
+        if requires_csrf {
+            request = request.header("X-Codeium-Csrf-Token", csrf_token);
+        }
+        let resp = request
             .send()
             .await
             .map_err(|e| ProviderError::Other(format!("API request failed: {}", e)))?;
@@ -431,8 +493,20 @@ impl Provider for AntigravityProvider {
         &self.metadata
     }
 
-    async fn fetch_usage(&self, _ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
-        tracing::debug!("Fetching Antigravity usage via local probe");
+    async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        // Both `auto` and `cli` resolve to the same local language-server probe:
+        // `detect_process_info` prefers the CSRF-protected desktop IDE/app server
+        // and falls back to the tokenless `agy` CLI when only that is running.
+        // `oauth` is not supported here (no remote API path is ported yet), so
+        // surface it explicitly instead of silently probing locally.
+        if ctx.source_mode == SourceMode::OAuth {
+            return Err(ProviderError::UnsupportedSource(ctx.source_mode));
+        }
+
+        match ctx.source_mode {
+            SourceMode::Cli => tracing::debug!("Fetching Antigravity usage via CLI (agy) probe"),
+            _ => tracing::debug!("Fetching Antigravity usage via local probe"),
+        }
 
         match self.fetch_user_status().await {
             Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
@@ -457,6 +531,9 @@ struct ProcessInfo {
     extension_server_csrf_token: Option<String>,
     extension_port: Option<u16>,
     pid: Option<u32>,
+    /// Whether the process is the desktop IDE/app server (CSRF required) or the
+    /// `agy` CLI (no CSRF). See [`ProcessSource`].
+    source: ProcessSource,
 }
 
 // API Response types
@@ -714,6 +791,7 @@ mod tests {
         assert_eq!(process.pid, Some(4242));
         assert_eq!(process.extension_port, Some(54123));
         assert_eq!(process.csrf_token, "11111111-2222-3333-4444-555555555555");
+        assert_eq!(process.source, ProcessSource::Ide);
     }
 
     #[test]
@@ -726,6 +804,7 @@ mod tests {
         assert_eq!(process.pid, Some(34564));
         assert_eq!(process.extension_port, Some(0));
         assert_eq!(process.csrf_token, "68dda2fb-6b26-40c0-aeef-b9a628615714");
+        assert_eq!(process.source, ProcessSource::Ide);
     }
 
     #[test]
@@ -738,6 +817,7 @@ mod tests {
         assert_eq!(process.pid, Some(34564));
         assert_eq!(process.extension_port, None);
         assert_eq!(process.csrf_token, "aabbccdd-1122-3344-5566-778899001122");
+        assert_eq!(process.source, ProcessSource::Ide);
     }
 
     #[test]
@@ -750,6 +830,7 @@ mod tests {
         assert_eq!(process.pid, Some(34564));
         assert_eq!(process.extension_port, Some(61999));
         assert_eq!(process.csrf_token, "68dda2fb-6b26-40c0-aeef-b9a628615714");
+        assert_eq!(process.source, ProcessSource::Ide);
     }
 
     fn make_response(models: Vec<(&str, f64)>) -> UserStatusResponse {
@@ -845,5 +926,108 @@ mod tests {
         let error = ProviderError::NotInstalled(NOT_RUNNING_MESSAGE.to_string()).to_string();
 
         assert!(error.contains("Start Google Antigravity and sign in"));
+    }
+
+    // ── agy CLI process matching ───────────────────────────────────────
+
+    #[test]
+    fn detects_agy_exe_cli_process_with_empty_csrf() {
+        // agy.exe hosts the language server in-process with no --csrf_token.
+        let output = "7777\tC:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session --model gemini-2.5-pro";
+
+        let process = AntigravityProvider::parse_process_info(output)
+            .expect("agy CLI process should be detected");
+
+        assert_eq!(process.pid, Some(7777));
+        assert_eq!(process.source, ProcessSource::Cli);
+        assert_eq!(process.csrf_token, "");
+        assert!(
+            process.csrf_token.is_empty(),
+            "agy CLI requires no CSRF token"
+        );
+        assert_eq!(process.extension_server_csrf_token, None);
+        assert_eq!(process.extension_port, None);
+    }
+
+    #[test]
+    fn detects_bare_agy_command() {
+        // The CLI may appear under the bare `agy` name (no .exe suffix).
+        let output = "8888\tagy serve";
+
+        let process = AntigravityProvider::parse_process_info(output)
+            .expect("bare agy command should be detected");
+
+        assert_eq!(process.pid, Some(8888));
+        assert_eq!(process.source, ProcessSource::Cli);
+        assert!(process.csrf_token.is_empty());
+    }
+
+    #[test]
+    fn detects_antigravity_cli_command() {
+        // Upstream also matches antigravity-cli / antigravity_cli.
+        let output = "9999\t/opt/homebrew/bin/antigravity-cli status";
+
+        let process = AntigravityProvider::parse_process_info(output)
+            .expect("antigravity-cli command should be detected");
+
+        assert_eq!(process.pid, Some(9999));
+        assert_eq!(process.source, ProcessSource::Cli);
+        assert!(process.csrf_token.is_empty());
+    }
+
+    #[test]
+    fn ide_match_preferred_over_agy_cli_when_both_running() {
+        // When the desktop IDE server and the agy CLI are both running, the
+        // CSRF-protected IDE match wins (mirrors upstream process-kind precedence).
+        let output = "4242\tC:\\Antigravity\\language_server.exe --csrf_token deadbeef-aaaa-bbbb-cccc-dddddddddddd --extension_server_port 54123\n\
+                      7777\tC:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session";
+
+        let process =
+            AntigravityProvider::parse_process_info(output).expect("a process should be detected");
+
+        assert_eq!(process.pid, Some(4242));
+        assert_eq!(process.source, ProcessSource::Ide);
+        assert_eq!(process.csrf_token, "deadbeef-aaaa-bbbb-cccc-dddddddddddd");
+    }
+
+    #[test]
+    fn agy_cli_matches_when_only_cli_running() {
+        // No --csrf_token anywhere: only the agy CLI line should match.
+        let output = "7777\tC:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe";
+
+        let process = AntigravityProvider::parse_process_info(output)
+            .expect("agy CLI should be detected when it is the only match");
+
+        assert_eq!(process.source, ProcessSource::Cli);
+        assert!(process.csrf_token.is_empty());
+    }
+
+    #[test]
+    fn non_antigravity_process_without_csrf_is_not_matched() {
+        // An unrelated tokenless process must not be mistaken for the agy CLI.
+        let output = "1234\tC:\\Windows\\System32\\notepad.exe";
+
+        let process = AntigravityProvider::parse_process_info(output);
+
+        assert!(process.is_none(), "unrelated process must not match");
+    }
+
+    #[test]
+    fn is_agy_cli_command_matches_known_names() {
+        assert!(is_agy_cli_command("agy serve"));
+        assert!(is_agy_cli_command(
+            "C:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session"
+        ));
+        assert!(is_agy_cli_command("/usr/local/bin/antigravity-cli status"));
+        assert!(is_agy_cli_command("/opt/antigravity_cli run"));
+    }
+
+    #[test]
+    fn is_agy_cli_command_rejects_unrelated_names() {
+        // A leading path separator prevents `notantigravity-cli` from matching.
+        assert!(!is_agy_cli_command("notantigravity-cli status"));
+        assert!(!is_agy_cli_command("C:\\Windows\\System32\\notepad.exe"));
+        assert!(!is_agy_cli_command("language_server.exe --csrf_token abc"));
+        assert!(!is_agy_cli_command(""));
     }
 }

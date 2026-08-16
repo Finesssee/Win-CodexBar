@@ -15,12 +15,22 @@
 //! In proof mode the shell immediately transitions to the requested surface
 //! and suppresses blur-dismiss so the window stays visible for automated
 //! screenshot capture.
+//!
+//! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds one synthetic,
+//! bridge-shaped Codex [`ProviderUsageSnapshot`] into the provider cache at
+//! launch (before the first event/WebView read) and pins it against refresh
+//! eviction for the run. Malformed files log a warning and the shell
+//! continues without seeding — proof runs must never crash on the seed.
 
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::commands::{
+    CostSnapshotBridge, NamedRateWindowSnapshot, PaceSnapshot, ProviderUsageSnapshot,
+    RateWindowSnapshot,
+};
 use crate::shell;
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
@@ -242,6 +252,285 @@ pub fn is_proof_mode(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+// ── Provider-usage seed (CODEXBAR_SEED_USAGE_JSON) ───────────────────
+
+/// Environment variable pointing at a JSON file with one synthetic,
+/// bridge-shaped `ProviderUsageSnapshot` for the codex provider.
+pub const SEED_USAGE_ENV_VAR: &str = "CODEXBAR_SEED_USAGE_JSON";
+
+/// Whether a seed path was configured at launch. While set, the provider
+/// cache is pinned fresh so the synthetic snapshot is never evicted by an
+/// automatic refresh during a proof/capture run.
+pub fn seed_usage_json_active() -> bool {
+    std::env::var_os(SEED_USAGE_ENV_VAR).is_some()
+}
+
+/// Read and validate the seed file referenced by `CODEXBAR_SEED_USAGE_JSON`.
+///
+/// Returns `None` (with a warn, never a crash) when the variable is unset,
+/// the file is unreadable, the JSON is malformed, or the snapshot is not
+/// for the `codex` provider.
+pub fn seed_usage_snapshot_from_env() -> Option<ProviderUsageSnapshot> {
+    let path = std::env::var_os(SEED_USAGE_ENV_VAR)?;
+    let path = std::path::PathBuf::from(path);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            tracing::warn!(
+                "{SEED_USAGE_ENV_VAR}: cannot read {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    let seed: SeedProviderUsageSnapshot = match serde_json::from_str(&raw) {
+        Ok(seed) => seed,
+        Err(err) => {
+            tracing::warn!(
+                "{SEED_USAGE_ENV_VAR}: malformed JSON in {}: {err}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    if seed.provider_id != "codex" {
+        tracing::warn!(
+            "{SEED_USAGE_ENV_VAR}: snapshot providerId '{}' is not 'codex', ignoring",
+            seed.provider_id
+        );
+        return None;
+    }
+    Some(seed.into_bridge())
+}
+
+/// Deserializable mirror of the bridge JSON shape (`bridge.ts`
+/// `ProviderUsageSnapshot`, camelCase). Bridge structs are Serialize-only /
+/// reference external crates, so the seed parses into this DTO and maps over.
+/// Everything but `providerId` and `primary` is optional.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedProviderUsageSnapshot {
+    provider_id: String,
+    #[serde(default = "default_seed_display_name")]
+    display_name: String,
+    primary: SeedRateWindow,
+    #[serde(default)]
+    primary_label: Option<String>,
+    #[serde(default)]
+    secondary: Option<SeedRateWindow>,
+    #[serde(default)]
+    secondary_label: Option<String>,
+    #[serde(default)]
+    model_specific: Option<SeedRateWindow>,
+    #[serde(default)]
+    tertiary: Option<SeedRateWindow>,
+    #[serde(default)]
+    tertiary_label: Option<String>,
+    #[serde(default)]
+    extra_rate_windows: Vec<SeedNamedRateWindow>,
+    #[serde(default)]
+    cost: Option<SeedCost>,
+    #[serde(default)]
+    plan_name: Option<String>,
+    #[serde(default)]
+    account_email: Option<String>,
+    #[serde(default = "default_seed_source_label")]
+    source_label: String,
+    /// RFC 3339; defaults to launch time so the card renders as fresh.
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    pace: Option<SeedPace>,
+    #[serde(default)]
+    account_organization: Option<String>,
+    #[serde(default)]
+    tray_status_label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedRateWindow {
+    used_percent: f64,
+    #[serde(default)]
+    remaining_percent: Option<f64>,
+    #[serde(default)]
+    window_minutes: Option<u32>,
+    #[serde(default)]
+    resets_at: Option<String>,
+    #[serde(default)]
+    reset_description: Option<String>,
+    #[serde(default)]
+    is_exhausted: bool,
+    #[serde(default)]
+    is_informational: bool,
+    #[serde(default)]
+    reserve_percent: Option<f64>,
+    #[serde(default)]
+    reserve_description: Option<String>,
+    #[serde(default)]
+    reserve_will_last_to_reset: bool,
+    #[serde(default)]
+    reserve_eta_seconds: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedNamedRateWindow {
+    id: String,
+    title: String,
+    window: SeedRateWindow,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedCost {
+    used: f64,
+    #[serde(default)]
+    limit: Option<f64>,
+    #[serde(default)]
+    remaining: Option<f64>,
+    #[serde(default = "default_seed_currency")]
+    currency_code: String,
+    #[serde(default = "default_seed_period")]
+    period: String,
+    #[serde(default)]
+    resets_at: Option<String>,
+    #[serde(default)]
+    formatted_used: Option<String>,
+    #[serde(default)]
+    formatted_limit: Option<String>,
+    #[serde(default)]
+    balance: Option<f64>,
+    #[serde(default)]
+    formatted_balance: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedPace {
+    stage: String,
+    delta_percent: f64,
+    will_last_to_reset: bool,
+    #[serde(default)]
+    eta_seconds: Option<f64>,
+    #[serde(default)]
+    expected_used_percent: f64,
+    #[serde(default)]
+    actual_used_percent: f64,
+}
+
+fn default_seed_display_name() -> String {
+    "Codex".to_string()
+}
+
+fn default_seed_source_label() -> String {
+    "seed".to_string()
+}
+
+fn default_seed_currency() -> String {
+    "USD".to_string()
+}
+
+fn default_seed_period() -> String {
+    "month".to_string()
+}
+
+impl SeedRateWindow {
+    fn into_bridge(self) -> RateWindowSnapshot {
+        RateWindowSnapshot {
+            used_percent: self.used_percent,
+            remaining_percent: self
+                .remaining_percent
+                .unwrap_or_else(|| 100.0 - self.used_percent.clamp(0.0, 100.0)),
+            window_minutes: self.window_minutes,
+            resets_at: self.resets_at,
+            reset_description: self.reset_description,
+            is_exhausted: self.is_exhausted,
+            is_informational: self.is_informational,
+            reserve_percent: self.reserve_percent,
+            reserve_description: self.reserve_description,
+            reserve_will_last_to_reset: self.reserve_will_last_to_reset,
+            reserve_eta_seconds: self.reserve_eta_seconds,
+        }
+    }
+}
+
+fn pace_stage_from_seed(raw: &str) -> Option<&'static str> {
+    match raw {
+        "on_track" => Some("on_track"),
+        "slightly_ahead" => Some("slightly_ahead"),
+        "ahead" => Some("ahead"),
+        "far_ahead" => Some("far_ahead"),
+        "slightly_behind" => Some("slightly_behind"),
+        "behind" => Some("behind"),
+        "far_behind" => Some("far_behind"),
+        _ => None,
+    }
+}
+
+impl SeedProviderUsageSnapshot {
+    fn into_bridge(self) -> ProviderUsageSnapshot {
+        ProviderUsageSnapshot {
+            provider_id: self.provider_id,
+            display_name: self.display_name,
+            primary: self.primary.into_bridge(),
+            primary_label: self.primary_label,
+            secondary: self.secondary.map(SeedRateWindow::into_bridge),
+            secondary_label: self.secondary_label,
+            model_specific: self.model_specific.map(SeedRateWindow::into_bridge),
+            tertiary: self.tertiary.map(SeedRateWindow::into_bridge),
+            tertiary_label: self.tertiary_label,
+            extra_rate_windows: self
+                .extra_rate_windows
+                .into_iter()
+                .map(|extra| NamedRateWindowSnapshot {
+                    id: extra.id,
+                    title: extra.title,
+                    window: extra.window.into_bridge(),
+                })
+                .collect(),
+            cost: self.cost.map(|cost| CostSnapshotBridge {
+                used: cost.used,
+                limit: cost.limit,
+                remaining: cost.remaining,
+                currency_code: cost.currency_code,
+                period: cost.period,
+                resets_at: cost.resets_at,
+                formatted_used: cost
+                    .formatted_used
+                    .unwrap_or_else(|| format!("${:.2}", cost.used)),
+                formatted_limit: cost.formatted_limit,
+                balance: cost.balance,
+                formatted_balance: cost.formatted_balance,
+            }),
+            plan_name: self.plan_name,
+            account_email: self.account_email,
+            source_label: self.source_label,
+            updated_at: self
+                .updated_at
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            error: self.error,
+            pace: self.pace.and_then(|pace| {
+                pace_stage_from_seed(&pace.stage).map(|stage| PaceSnapshot {
+                    stage,
+                    delta_percent: pace.delta_percent,
+                    will_last_to_reset: pace.will_last_to_reset,
+                    eta_seconds: pace.eta_seconds,
+                    expected_used_percent: pace.expected_used_percent,
+                    actual_used_percent: pace.actual_used_percent,
+                })
+            }),
+            account_organization: self.account_organization,
+            tray_status_label: self.tray_status_label,
+            fetch_duration_ms: None,
+            wayfinder_usage: None,
+            session_equivalent_forecast: None,
+        }
+    }
+}
+
 fn proof_payload_is_supported(surface_mode: SurfaceMode, payload: Option<&str>) -> bool {
     match (surface_mode, payload) {
         (SurfaceMode::Hidden | SurfaceMode::TrayPanel, None) => true,
@@ -401,5 +690,77 @@ mod tests {
             assert_eq!(cfg.surface_mode(), SurfaceMode::PopOut);
             assert_eq!(cfg.surface_target(), SurfaceTarget::Dashboard);
         });
+    }
+
+    #[test]
+    fn state_carries_codex_snapshot_from_seed() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Unique temp file; left behind on purpose (tiny, in %TEMP%).
+        let path = std::env::temp_dir().join(format!(
+            "codexbar-seed-usage-test-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let raw = serde_json::json!({
+            "providerId": "codex",
+            "displayName": "Codex",
+            "primary": {
+                "usedPercent": 61.0,
+                "windowMinutes": 300,
+                "resetsAt": "2099-01-02T03:04:05Z",
+                "resetDescription": "seeded 5h",
+            },
+            "primaryLabel": "Session",
+            "secondary": { "usedPercent": 74.0, "windowMinutes": 10080 },
+            "secondaryLabel": "Weekly",
+            "extraRateWindows": [
+                {
+                    "id": "reset-credits",
+                    "title": "Reset Credits",
+                    "window": {
+                        "usedPercent": 0.0,
+                        "resetsAt": "2099-01-09T00:00:00Z",
+                        "resetDescription": "2 reset credits available",
+                        "isInformational": true,
+                    },
+                },
+            ],
+        });
+        std::fs::write(&path, raw.to_string()).unwrap();
+
+        let prev = std::env::var(SEED_USAGE_ENV_VAR).ok();
+        unsafe { std::env::set_var(SEED_USAGE_ENV_VAR, &path) };
+        let state_seeded = seed_usage_snapshot_from_env().map(|snapshot| {
+            let mut state = AppState::new();
+            state.provider_cache.push(snapshot);
+            state.provider_cache_updated_at = Some(std::time::Instant::now());
+            state.provider_cache
+        });
+        match prev {
+            Some(value) => unsafe { std::env::set_var(SEED_USAGE_ENV_VAR, value) },
+            None => unsafe { std::env::remove_var(SEED_USAGE_ENV_VAR) },
+        }
+
+        let cache = state_seeded.expect("seed parses into a snapshot");
+        assert_eq!(cache.len(), 1);
+        let snapshot = &cache[0];
+        assert_eq!(snapshot.provider_id, "codex");
+        assert_eq!(snapshot.primary.used_percent, 61.0);
+        assert_eq!(
+            snapshot.primary.resets_at.as_deref(),
+            Some("2099-01-02T03:04:05Z")
+        );
+        assert_eq!(snapshot.primary.remaining_percent, 39.0);
+        assert_eq!(snapshot.primary_label.as_deref(), Some("Session"));
+        assert_eq!(
+            snapshot.secondary.as_ref().map(|s| s.used_percent),
+            Some(74.0)
+        );
+        assert_eq!(snapshot.extra_rate_windows.len(), 1);
+        assert_eq!(snapshot.extra_rate_windows[0].id, "reset-credits");
+        assert!(snapshot.extra_rate_windows[0].window.is_informational);
     }
 }

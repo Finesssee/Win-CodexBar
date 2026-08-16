@@ -292,6 +292,12 @@ fn begin_provider_refresh(
 }
 
 fn provider_cache_can_skip_refresh(guard: &AppState, force: bool) -> bool {
+    // Proof-harness seed: pin the synthetic snapshot for the whole run so a
+    // periodic auto-refresh cannot overwrite seeded capture conditions.
+    if !force && crate::proof_harness::seed_usage_json_active() && !guard.provider_cache.is_empty()
+    {
+        return true;
+    }
     !force
         && !guard.provider_cache.is_empty()
         && is_provider_cache_fresh(guard.provider_cache_updated_at, PROVIDER_CACHE_STALE_AFTER)

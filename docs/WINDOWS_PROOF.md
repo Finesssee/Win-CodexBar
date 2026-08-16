@@ -30,6 +30,13 @@ cargo test
 cargo test -p codexbar-desktop-tauri
 cargo clippy -p codexbar-desktop-tauri --all-targets -- -D warnings
 
+# Proof/CUA captures: set `CODEXBAR_PROOF_MODE` (e.g. `trayPanel`) to open a
+# surface with blur-dismiss suppressed; optionally set
+# `CODEXBAR_SEED_USAGE_JSON=<abs-path>` to plant one synthetic bridge-shaped
+# Codex ProviderUsageSnapshot into the provider cache at launch (malformed
+# files are warned about and ignored) — the seeded cache is pinned against
+# refresh eviction for the duration of the run.
+
 # Frontend unit tests + bundle
 cd apps\desktop-tauri
 pnpm install --frozen-lockfile

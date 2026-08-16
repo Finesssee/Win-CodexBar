@@ -18,7 +18,7 @@
 - **Settings**: `%config%/CodexBar/settings.json` via `Settings::load` / `save` and `secure_file` (DPAPI-capable on Windows). Frontend `updateSettings` patch → save → `codexbar:settings-updated` / float-bar config events.
 - **Tray**: `tray_bridge` + `tray_menu`. Icon pixels from shared `codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba}`.
 - **Float bar**: `floatbar/` owns the auxiliary always-on-top window. The builder must pin `.theme(Some(tauri::Theme::Dark))` — WebView2 resolves `prefers-color-scheme` on a shared process profile; an unpinned window flips other webviews under theme `auto`.
-- **Proof harness**: env `CODEXBAR_PROOF_MODE` (e.g. `settings:menu`) opens a target surface and suppresses blur-dismiss for automation / CUA capture.
+- **Proof harness**: env `CODEXBAR_PROOF_MODE` (e.g. `settings:menu`) opens a target surface and suppresses blur-dismiss for automation / CUA capture. `CODEXBAR_SEED_USAGE_JSON=<abs-path>` seeds one synthetic bridge-shaped Codex `ProviderUsageSnapshot` into the provider cache at launch (pinned against refresh eviction; malformed files are warned about and skipped).
 
 ## Key Directories
 

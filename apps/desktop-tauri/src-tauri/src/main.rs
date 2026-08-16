@@ -124,6 +124,18 @@ fn main() {
 
     let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
+    // Proof-harness seed: CODEXBAR_SEED_USAGE_JSON plants one synthetic Codex
+    // ProviderUsageSnapshot before the event loop and any WebView read. The
+    // cache timestamp makes the seeded cache count as fresh so the first
+    // frontend refresh-if-stale call does not evict the synthetic data.
+    if let Some(snapshot) = proof_harness::seed_usage_snapshot_from_env() {
+        tracing::info!(
+            "proof-harness: seeded provider snapshot for '{}'",
+            snapshot.provider_id
+        );
+        initial_state.provider_cache.push(snapshot);
+        initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    }
 
     tauri::Builder::default()
         .manage(Mutex::new(initial_state))

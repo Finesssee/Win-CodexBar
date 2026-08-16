@@ -18,6 +18,7 @@ mod surface_target;
 mod tray_bridge;
 mod tray_menu;
 mod tray_visibility;
+mod usage_metric;
 mod window_positioner;
 
 use std::sync::Mutex;

@@ -17,7 +17,6 @@ import {
   getSettingsSnapshot,
   refreshProvidersIfStale,
 } from "../lib/tauri";
-import { selectSingleMetricUsageWindow } from "../lib/usageWindows";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import type {
@@ -179,7 +178,7 @@ function ProviderPill({
   usedSuffix: string;
   remainingSuffix: string;
 }) {
-  const rateWindow = selectSingleMetricUsageWindow(provider);
+  const rateWindow = provider.selectedMetric;
   const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
@@ -312,8 +311,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     }
     return [...list].sort(
       (a, b) =>
-        selectSingleMetricUsageWindow(b).usedPercent -
-        selectSingleMetricUsageWindow(a).usedPercent,
+        b.selectedMetric.usedPercent - a.selectedMetric.usedPercent,
     );
   }, [providers, settings.enabledProviders, filterIds]);
 

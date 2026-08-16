@@ -59,6 +59,7 @@ describe("ProvidersTab", () => {
       providerId: provider.id,
       displayName: provider.displayName,
       primary: rateWindow(0, true),
+      selectedMetric: rateWindow(42),
       secondary: rateWindow(42),
       modelSpecific: null,
       tertiary: null,

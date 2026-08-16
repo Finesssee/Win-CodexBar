@@ -59,6 +59,7 @@ function provider(
     providerId: "claude",
     displayName: "Claude",
     primary: rateWindow(usedPercent, opts),
+    selectedMetric: rateWindow(usedPercent, opts),
     primaryLabel: "Session",
     secondary: null,
     modelSpecific: null,

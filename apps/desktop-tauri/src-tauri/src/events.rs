@@ -60,11 +60,13 @@ pub fn emit_surface_mode_changed(
 
 pub fn emit_provider_updated(app: &AppHandle, snapshot: &ProviderUsageSnapshot) {
     let mut snapshot = snapshot.clone();
+    let settings = codexbar::settings::Settings::load();
     crate::commands::filter_hidden_codex_spark_rows(
         &mut snapshot,
-        codexbar::settings::Settings::load().codex_spark_usage_visible(),
+        settings.codex_spark_usage_visible(),
     );
-    let _ = app.emit(PROVIDER_UPDATED, snapshot);
+    let presentation = crate::commands::ProviderUsagePresentationSnapshot::new(snapshot, &settings);
+    let _ = app.emit(PROVIDER_UPDATED, presentation);
 }
 
 pub fn emit_refresh_started(app: &AppHandle, provider_ids: Vec<String>) {

@@ -231,7 +231,7 @@ export interface SettingsSnapshot {
   floatBarProviderIds: string[];
   /** When true, render with dark text/glass for light desktops. */
   floatBarDarkText: boolean;
-  /** When true, render the next primary reset inline in each provider pill. */
+  /** When true, render the selected metric's next reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
   /** When true, scan and render local cost summaries. */
   floatBarShowCost: boolean;
@@ -455,6 +455,8 @@ export interface ProviderUsageSnapshot {
   providerId: string;
   displayName: string;
   primary: RateWindowSnapshot;
+  /** Settings-selected metric shared by native and webview presentation surfaces. */
+  selectedMetric: RateWindowSnapshot;
   primaryLabel?: string;
   secondary: RateWindowSnapshot | null;
   secondaryLabel?: string;

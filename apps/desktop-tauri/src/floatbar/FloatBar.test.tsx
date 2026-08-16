@@ -83,15 +83,31 @@ function snapshot(
       resetsAt?: string | null;
       resetDescription?: string | null;
     };
+    selected?: {
+      used: number;
+      exhausted?: boolean;
+      informational?: boolean;
+      resetsAt?: string | null;
+      resetDescription?: string | null;
+    };
   } = {},
 ): ProviderUsageSnapshot {
+  const primary = rateWindow(used, opts);
+  const secondary = opts.secondary
+    ? rateWindow(opts.secondary.used, opts.secondary)
+    : null;
+  const selectedMetric = opts.selected
+    ? rateWindow(opts.selected.used, opts.selected)
+    : primary.isInformational && secondary && !secondary.isInformational
+      ? secondary
+      : primary;
+
   return {
     providerId: id,
     displayName: display,
-    primary: rateWindow(used, opts),
-    secondary: opts.secondary
-      ? rateWindow(opts.secondary.used, opts.secondary)
-      : null,
+    primary,
+    selectedMetric,
+    secondary,
     modelSpecific: null,
     tertiary: null,
     extraRateWindows: [],
@@ -113,7 +129,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     refreshIntervalSecs: 300,
     adaptiveRefresh: false,
     refreshAllProvidersOnMenuOpen: false,
-  lowPowerMode: false,
+    lowPowerMode: false,
     startAtLogin: false,
     startMinimized: false,
     showNotifications: true,
@@ -233,16 +249,42 @@ describe("FloatBar", () => {
     expect(titles[1]).toMatch(/Claude: 20% used/);
   });
 
-  it("keeps a normal primary window when a secondary window is available", async () => {
+  it("uses the selected session window when a weekly window is available", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 20, { secondary: { used: 90 } }),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ providerMetrics: { claude: "session" } }),
+    );
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = renderFloatBar(
+      bootstrap({ providerMetrics: { claude: "session" } }),
+    );
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
         "Claude: 20% used",
+      );
+    });
+  });
+
+  it("uses the selected weekly window in the floating bar", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 0, {
+        informational: true,
+        secondary: { used: 37 },
+        selected: { used: 37 },
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ providerMetrics: { codex: "weekly" } }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ providerMetrics: { codex: "weekly" } }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
+        "Codex: 37% used",
       );
     });
   });
@@ -302,17 +344,21 @@ describe("FloatBar", () => {
     });
   });
 
-  it("sorts providers by their effective rate window", async () => {
+  it("sorts providers by their selected rate window", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 90, {
-        informational: true,
         secondary: { used: 20 },
+        selected: { used: 20 },
       }),
       snapshot("codex", "Codex", 50),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ providerMetrics: { claude: "weekly" } }),
+    );
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = renderFloatBar(
+      bootstrap({ providerMetrics: { claude: "weekly" } }),
+    );
     await waitFor(() => {
       const titles = Array.from(container.querySelectorAll(".floatbar__pill")).map(
         (pill) => pill.getAttribute("title"),

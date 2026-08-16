@@ -66,6 +66,7 @@ export function providerPlaceholder(
     providerId,
     displayName,
     primary: { ...EMPTY_RATE_WINDOW },
+    selectedMetric: { ...EMPTY_RATE_WINDOW },
     primaryLabel: "Usage",
     secondary: null,
     modelSpecific: null,

@@ -126,6 +126,25 @@ pub struct ProviderUsageSnapshot {
     pub session_equivalent_forecast: Option<SessionEquivalentForecastSnapshot>,
 }
 
+/// Provider payload after applying settings-driven cross-surface presentation.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsagePresentationSnapshot {
+    #[serde(flatten)]
+    pub snapshot: ProviderUsageSnapshot,
+    pub selected_metric: RateWindowSnapshot,
+}
+
+impl ProviderUsagePresentationSnapshot {
+    pub(crate) fn new(snapshot: ProviderUsageSnapshot, settings: &Settings) -> Self {
+        let selected_metric = crate::usage_metric::selected_usage_window(&snapshot, settings);
+        Self {
+            snapshot,
+            selected_metric,
+        }
+    }
+}
+
 pub(crate) fn filter_hidden_codex_spark_rows(
     snapshot: &mut ProviderUsageSnapshot,
     spark_usage_visible: bool,

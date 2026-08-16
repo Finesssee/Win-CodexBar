@@ -963,17 +963,21 @@ pub async fn refresh_providers_if_stale(app: tauri::AppHandle) -> Result<(), Str
 #[tauri::command]
 pub fn get_cached_providers(
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Vec<ProviderUsageSnapshot> {
+) -> Vec<ProviderUsagePresentationSnapshot> {
     let mut snapshots = state
         .lock()
         .map(|guard| guard.provider_cache.clone())
         .unwrap_or_default();
-    let spark_usage_visible = Settings::load().codex_spark_usage_visible();
+    let settings = Settings::load();
+    let spark_usage_visible = settings.codex_spark_usage_visible();
     for snapshot in &mut snapshots {
         super::filter_hidden_codex_spark_rows(snapshot, spark_usage_visible);
     }
 
     snapshots
+        .into_iter()
+        .map(|snapshot| ProviderUsagePresentationSnapshot::new(snapshot, &settings))
+        .collect()
 }
 
 #[cfg(test)]

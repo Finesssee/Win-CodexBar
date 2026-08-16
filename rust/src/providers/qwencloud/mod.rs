@@ -352,21 +352,21 @@ impl QwenCloudProvider {
             )
         });
 
-        // Prefer the 5-hour window; fall back to the legacy 30-day envelope; if the
-        // account only exposes the weekly window (e.g. Qwen Cloud individual plans),
-        // promote it to primary instead of failing the whole fetch.
-        let has_five_hour_or_legacy = five_hour.is_some() || legacy.is_some();
-        let primary = five_hour
-            .or(legacy)
-            .or_else(|| weekly.clone())
-            .ok_or_else(|| ProviderError::Parse("Qwen Cloud usage windows missing".into()))?;
+        // Prefer the 5-hour window, then the legacy 30-day envelope. Individual
+        // Qwen Cloud plans expose only the weekly window (`per1WeekPercentage`);
+        // promote it to primary in that case instead of failing the whole fetch.
+        let (primary, secondary) = match (five_hour.or(legacy), weekly) {
+            (Some(primary), secondary) => (primary, secondary),
+            (None, Some(weekly)) => (weekly, None),
+            (None, None) => {
+                return Err(ProviderError::Parse(
+                    "Qwen Cloud usage windows missing".into(),
+                ));
+            }
+        };
         let mut usage = UsageSnapshot::new(primary);
-
-        // The weekly window is secondary only when it was not promoted to primary.
-        if has_five_hour_or_legacy
-            && let Some(weekly) = weekly
-        {
-            usage = usage.with_secondary(weekly);
+        if let Some(secondary) = secondary {
+            usage = usage.with_secondary(secondary);
         }
 
         if let Some(plan) = snapshot.plan_name.filter(|plan| !plan.trim().is_empty()) {

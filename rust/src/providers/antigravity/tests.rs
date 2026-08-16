@@ -38,8 +38,8 @@ fn parses_current_language_server_process() {
 fn parses_language_server_without_extension_server_port() {
     let output = "34564\tC:\\Users\\test\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server.exe --standalone --override_ide_name antigravity --subclient_type hub --override_ide_version 2.0.11 --https_server_port 0 --csrf_token 68dda2fb-6b26-40c0-aeef-b9a628615714 --app_data_dir antigravity";
 
-    let process = AntigravityProvider::parse_process_info(output)
-        .expect("process info should be detected");
+    let process =
+        AntigravityProvider::parse_process_info(output).expect("process info should be detected");
 
     assert_eq!(process.pid, Some(34564));
     assert_eq!(process.extension_port, Some(0));
@@ -51,8 +51,8 @@ fn parses_language_server_without_extension_server_port() {
 fn parses_language_server_without_any_port_arg() {
     let output = "34564\tC:\\Users\\test\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server.exe --standalone --csrf_token aabbccdd-1122-3344-5566-778899001122 --app_data_dir antigravity";
 
-    let process = AntigravityProvider::parse_process_info(output)
-        .expect("process info should be detected");
+    let process =
+        AntigravityProvider::parse_process_info(output).expect("process info should be detected");
 
     assert_eq!(process.pid, Some(34564));
     assert_eq!(process.extension_port, None);
@@ -64,8 +64,8 @@ fn parses_language_server_without_any_port_arg() {
 fn parses_equals_form_args() {
     let output = "34564\tC:\\Users\\test\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server.exe --csrf_token=68dda2fb-6b26-40c0-aeef-b9a628615714 --https_server_port=61999";
 
-    let process = AntigravityProvider::parse_process_info(output)
-        .expect("process info should be detected");
+    let process =
+        AntigravityProvider::parse_process_info(output).expect("process info should be detected");
 
     assert_eq!(process.pid, Some(34564));
     assert_eq!(process.extension_port, Some(61999));
@@ -173,7 +173,8 @@ fn not_running_error_tells_user_how_to_start() {
 #[test]
 fn detects_agy_exe_cli_process_with_empty_csrf() {
     // agy.exe hosts the language server in-process with no --csrf_token.
-    let output = "7777\tC:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session --model gemini-2.5-pro";
+    let output =
+        "7777\tC:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session --model gemini-2.5-pro";
 
     let process = AntigravityProvider::parse_process_info(output)
         .expect("agy CLI process should be detected");

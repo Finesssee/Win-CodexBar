@@ -784,6 +784,8 @@ locale_keys! {
     DetailCostBalance,
     DetailCostResets,
     DetailChartCost,
+    DetailChartTokens,
+    DetailChartRefreshing,
     DetailChartCredits,
     DetailChartUsageBreakdown,
     DetailChartEmpty,

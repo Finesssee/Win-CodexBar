@@ -2683,6 +2683,15 @@ body:has(.tray-panel-reveal) {
   color: var(--provider-row-text-secondary);
 }
 
+/* Tokens chart "Refreshing" marker while local history backfill is
+   incomplete (upstream 0.50.0 #2930). */
+.provider-detail-chart__refreshing {
+  margin-left: 8px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .chart {
   display: flex;
   flex-direction: column;

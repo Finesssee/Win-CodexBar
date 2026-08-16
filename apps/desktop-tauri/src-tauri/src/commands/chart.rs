@@ -6,7 +6,9 @@
 //! reads to the right cached bundle.
 
 use codexbar::core::OpenAIDashboardCacheStore;
-use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history};
+use codexbar::cost_scanner::{
+    CostScanner, CostSummary, get_daily_cost_history, get_daily_token_history,
+};
 use codexbar::locale::{self, LocaleKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -24,6 +26,15 @@ const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 pub struct DailyCostPoint {
     pub date: String,
     pub value: f64,
+}
+
+/// A single (date, tokens) point for the Tokens chart mode (upstream 0.50.0
+/// #2930 — exact local token totals).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyTokenPoint {
+    pub date: String,
+    pub tokens: u64,
 }
 
 /// A single service's usage within a day for the stacked usage breakdown chart.
@@ -65,6 +76,10 @@ pub struct ProviderChartData {
     pub credits_history: Vec<DailyCostPoint>,
     pub usage_breakdown: Vec<DailyUsageBreakdown>,
     pub local_usage: Option<ProviderLocalUsageSummary>,
+    /// Daily exact local token totals for the Tokens mode; incomplete
+    /// backfill keeps the marker true so the UI can show "Refreshing".
+    pub tokens_history: Vec<DailyTokenPoint>,
+    pub tokens_incomplete: bool,
 }
 
 #[tauri::command]
@@ -117,6 +132,12 @@ fn build_provider_chart_data_with_cancel(
         .map(|(date, value)| DailyCostPoint { date, value })
         .collect();
 
+    let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
+    let tokens_history: Vec<DailyTokenPoint> = raw_tokens
+        .into_iter()
+        .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+        .collect();
+
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
     let local_usage = if cancel
@@ -134,6 +155,8 @@ fn build_provider_chart_data_with_cancel(
         credits_history,
         usage_breakdown,
         local_usage,
+        tokens_history,
+        tokens_incomplete,
     }
 }
 
@@ -145,6 +168,8 @@ impl ProviderChartData {
             credits_history: Vec::new(),
             usage_breakdown: Vec::new(),
             local_usage: None,
+            tokens_history: Vec::new(),
+            tokens_incomplete: false,
         }
     }
 }

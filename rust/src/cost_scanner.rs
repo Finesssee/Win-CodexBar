@@ -1008,6 +1008,101 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
     result
 }
 
+/// Daily token totals (input + output) for the Tokens chart mode, plus
+/// whether local history looks incomplete at the old edge of the window
+/// (Codex backfill still in progress → the chart shows a "Refreshing"
+/// marker; upstream 0.50.0 #2930).
+pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>, bool) {
+    let scanner = CostScanner::new(days);
+    let today = Local::now().date_naive();
+    let mut daily_tokens: HashMap<String, u64> = HashMap::new();
+    let mut covered_days: HashSet<String> = HashSet::new();
+
+    // Initialize all days with 0
+    for days_ago in 0..days {
+        let date = today - Duration::days(days_ago as i64);
+        let date_str = date.format("%Y-%m-%d").to_string();
+        daily_tokens.insert(date_str, 0);
+    }
+
+    match provider {
+        "codex" => {
+            // Warm/refresh the disk cache, then read exact local token totals
+            // from packed days through the same summary path the cost chart
+            // uses.
+            let _ = scanner.scan_codex();
+            let cache = JsonlScanner::load_cache(ProviderId::Codex, scanner.cache_root.as_deref());
+            for (day_key, models) in &cache.days {
+                if !daily_tokens.contains_key(day_key) {
+                    continue;
+                }
+                let Some(day) = CostUsageDayRange::parse_day_key(day_key) else {
+                    continue;
+                };
+                let day_range = CostUsageDayRange::new(day, day);
+                let mut one_day = HashMap::new();
+                one_day.insert(day_key.clone(), models.clone());
+                let mut scratch = CostSummary::default();
+                add_codex_days_map_to_summary(&mut scratch, &one_day, &day_range);
+                if let Some(slot) = daily_tokens.get_mut(day_key) {
+                    *slot = scratch.input_tokens + scratch.output_tokens;
+                }
+                covered_days.insert(day_key.clone());
+            }
+        }
+        "claude" => {
+            // Per-day token breakdown from the same de-duplicated record walk
+            // as the cost chart. The full walk is authoritative, so the
+            // Refreshing marker never applies here.
+            let projects_dir = scanner.get_claude_projects_dir();
+            if projects_dir.exists() {
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut seen = HashSet::new();
+                let mut handle_file = |path: &Path| {
+                    for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
+                        add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                    });
+                };
+                scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+            }
+        }
+        _ => {}
+    }
+
+    // Convert to sorted vector
+    let mut result: Vec<(String, u64)> = daily_tokens.into_iter().collect();
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Codex only: the bounded catch-up may not have reached the requested
+    // depth yet. Incomplete = history exists but the oldest quarter of the
+    // window has no scanned day.
+    let incomplete = provider == "codex"
+        && !covered_days.is_empty()
+        && covered_days.len() < days as usize
+        && result[..(result.len() / 4).max(1)]
+            .iter()
+            .any(|(date, _)| !covered_days.contains(date));
+
+    (result, incomplete)
+}
+
+fn add_claude_record_to_daily_tokens(
+    daily_tokens: &mut HashMap<String, u64>,
+    record: &ClaudeUsageRecord,
+) {
+    let Some(timestamp) = record.timestamp else {
+        return;
+    };
+    let date_str = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    if let Some(slot) = daily_tokens.get_mut(&date_str) {
+        *slot += record.input + record.output;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

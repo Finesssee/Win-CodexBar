@@ -5,6 +5,7 @@ import type { ProviderChartData, SettingsSnapshot } from "../../../../../types/b
 import type { useLocale } from "../../../../../hooks/useLocale";
 import { CostHistoryChart } from "./CostHistoryChart";
 import { CreditsHistoryChart } from "./CreditsHistoryChart";
+import { TokensHistoryChart } from "./TokensHistoryChart";
 import { UsageBreakdownChart } from "./UsageBreakdownChart";
 
 type T = ReturnType<typeof useLocale>["t"];
@@ -15,7 +16,7 @@ interface Props {
   t: T;
 }
 
-type TabKey = "cost" | "credits" | "usage";
+type TabKey = "tokens" | "cost" | "credits" | "usage";
 
 /**
  * Charts tabs block for the Settings → Providers detail pane.
@@ -73,18 +74,26 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
   const hasCost = data.costHistory.length > 0;
   const hasCredits = data.creditsHistory.length > 0;
   const hasUsage = data.usageBreakdown.length > 0;
+  // Tokens mode needs at least one day with exact local token data.
+  const hasTokens = data.tokensHistory.some((p) => p.tokens > 0);
 
-  if (!hasCost && !hasCredits && !hasUsage) return null;
+  if (!hasCost && !hasCredits && !hasUsage && !hasTokens) return null;
 
   const available: TabKey[] = [];
   if (hasCost) available.push("cost");
   if (hasCredits) available.push("credits");
   if (hasUsage) available.push("usage");
+  if (hasTokens) available.push("tokens");
 
-  const current: TabKey = active && available.includes(active) ? active : available[0];
+  // Upstream 0.50.0 #2930: Codex defaults to exact local token totals.
+  const defaultTab: TabKey =
+    providerId === "codex" && hasTokens ? "tokens" : available[0];
+  const current: TabKey =
+    active && available.includes(active) ? active : defaultTab;
   const emptyMsg = t("DetailChartEmpty");
 
   const tabLabel = (k: TabKey): string => {
+    if (k === "tokens") return t("DetailChartTokens");
     if (k === "cost") return t("DetailChartCost");
     if (k === "credits") return t("DetailChartCredits");
     return t("DetailChartUsageBreakdown");
@@ -108,6 +117,18 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
         ))}
       </div>
       <div className="provider-detail-charts__body" role="tabpanel">
+        {current === "tokens" && (
+          <TokensHistoryChart
+            data={data.tokensHistory}
+            title={t("DetailChartTokens")}
+            ariaLabel={t("DetailChartTokens")}
+            providerId={providerId}
+            animations={animations}
+            emptyMessage={emptyMsg}
+            incomplete={data.tokensIncomplete}
+            t={t}
+          />
+        )}
         {current === "cost" && (
           <CostHistoryChart
             data={data.costHistory}

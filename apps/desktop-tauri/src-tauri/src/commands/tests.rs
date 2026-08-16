@@ -1010,7 +1010,9 @@ fn non_claude_error_message_is_preserved() {
 
 #[test]
 fn chart_data_serde_roundtrip_preserves_fields() {
-    use super::{DailyCostPoint, DailyUsageBreakdown, ProviderChartData, ServiceUsagePoint};
+    use super::{
+        DailyCostPoint, DailyTokenPoint, DailyUsageBreakdown, ProviderChartData, ServiceUsagePoint,
+    };
 
     let original = ProviderChartData {
         provider_id: "codex".into(),
@@ -1043,6 +1045,11 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             total_credits_used: 13.5,
         }],
         local_usage: None,
+        tokens_history: vec![DailyTokenPoint {
+            date: "2025-01-01".into(),
+            tokens: 123_456,
+        }],
+        tokens_incomplete: true,
     };
 
     let json = serde_json::to_string(&original).expect("serialize");
@@ -1056,6 +1063,9 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert!(json.contains("\"localUsage\":null"));
     assert!(json.contains("\"creditsUsed\":10.0"));
     assert!(json.contains("\"totalCreditsUsed\":13.5"));
+    assert!(json.contains("\"tokensHistory\""));
+    assert!(json.contains("\"tokens\":123456"));
+    assert!(json.contains("\"tokensIncomplete\":true"));
 
     let back: ProviderChartData = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.provider_id, "codex");
@@ -1064,6 +1074,8 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert_eq!(back.credits_history[0].value, 42.0);
     assert_eq!(back.usage_breakdown[0].services.len(), 2);
     assert_eq!(back.usage_breakdown[0].total_credits_used, 13.5);
+    assert_eq!(back.tokens_history[0].tokens, 123_456);
+    assert!(back.tokens_incomplete);
 }
 
 #[test]

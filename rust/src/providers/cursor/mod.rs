@@ -3,6 +3,7 @@
 //! Fetches usage data from Cursor's API using browser cookies
 
 mod api;
+mod app_auth;
 mod token_cost;
 
 use async_trait::async_trait;
@@ -53,18 +54,70 @@ impl CursorProvider {
         let cookie_header = if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
             cookie_header.to_string()
         } else {
+            // Upstream 0.50.0 #2398: Automatic mode prefers the signed-in
+            // Cursor app's read-only local session over browser cookies.
+            // A rejected app session (stale token, account mismatch)
+            // surfaces in the log and falls back to the browser import.
+            if ctx.source_mode == SourceMode::Auto
+                && let Some(app_result) = self.fetch_via_app_session().await
+            {
+                return Ok(app_result);
+            }
             crate::providers::browser_cookie_header(&["cursor.com", "cursor.sh"])?
         };
 
+        self.fetch_usage_and_token_report(&cookie_header).await
+    }
+
+    /// One usage pass with the app's local session; `None` means the app
+    /// session was unavailable or rejected (caller falls back to cookies).
+    async fn fetch_via_app_session(
+        &self,
+    ) -> Option<(
+        api::CursorUsageResult,
+        Option<token_cost::CursorTokenCostReport>,
+    )> {
+        let app_cookie = app_auth::preferred_auto_cookie_header()?;
+        let usage = match self.api.fetch_usage_with_cookie_header(&app_cookie).await {
+            Ok(usage) => usage,
+            Err(err) => {
+                tracing::debug!(
+                    "Cursor app session rejected ({err}); falling back to browser cookies"
+                );
+                return None;
+            }
+        };
+        app_auth::store_validated_app_session(&app_cookie);
+        let token_report = self.fetch_token_report_best_effort(&app_cookie).await;
+        Some((usage, token_report))
+    }
+
+    async fn fetch_usage_and_token_report(
+        &self,
+        cookie_header: &str,
+    ) -> Result<
+        (
+            api::CursorUsageResult,
+            Option<token_cost::CursorTokenCostReport>,
+        ),
+        ProviderError,
+    > {
         let usage = self
             .api
-            .fetch_usage_with_cookie_header(&cookie_header)
+            .fetch_usage_with_cookie_header(cookie_header)
             .await?;
+        let token_report = self.fetch_token_report_best_effort(cookie_header).await;
+        Ok((usage, token_report))
+    }
 
-        // Best-effort token-cost page; never fail the main usage fetch.
-        let token_report = match token_cost::fetch_token_cost_report(
+    /// Best-effort token-cost page; never fail the main usage fetch.
+    async fn fetch_token_report_best_effort(
+        &self,
+        cookie_header: &str,
+    ) -> Option<token_cost::CursorTokenCostReport> {
+        match token_cost::fetch_token_cost_report(
             self.api.client(),
-            &cookie_header,
+            cookie_header,
             Some(token_cost::default_since()),
             Some(chrono::Utc::now()),
         )
@@ -75,9 +128,7 @@ impl CursorProvider {
                 tracing::debug!("Cursor token-cost events unavailable: {err}");
                 None
             }
-        };
-
-        Ok((usage, token_report))
+        }
     }
 
     fn build_usage_snapshot(

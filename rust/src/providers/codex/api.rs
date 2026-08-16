@@ -147,6 +147,16 @@ impl CodexApi {
         let auth_path = self.get_auth_path();
 
         if !auth_path.exists() {
+            // Upstream 0.50.0 #2679: when the CLI targets Amazon Bedrock or
+            // another custom backend without ChatGPT auth, sign-in guidance
+            // is wrong — rate limits simply are not available there.
+            if self.uses_custom_backend() {
+                return Err(ProviderError::NotInstalled(
+                    "Codex uses a custom backend (chatgpt_base_url / model_provider) without \
+                     ChatGPT auth. ChatGPT rate limits are unavailable for this setup."
+                        .to_string(),
+                ));
+            }
             return Err(ProviderError::NotInstalled(
                 "Codex auth.json not found. Run `codex login` in a terminal to sign in."
                     .to_string(),
@@ -269,6 +279,15 @@ impl CodexApi {
         }
 
         DEFAULT_BASE_URL.to_string()
+    }
+
+    /// Whether config.toml points the CLI at a backend that does not
+    /// authenticate against ChatGPT (Bedrock / other custom providers).
+    fn uses_custom_backend(&self) -> bool {
+        let Ok(content) = std::fs::read_to_string(self.codex_dir().join("config.toml")) else {
+            return false;
+        };
+        parse_chatgpt_base_url(&content).is_some() || config_uses_non_chatgpt_provider(&content)
     }
 
     fn build_result_from_json(
@@ -974,6 +993,21 @@ fn format_reset_countdown(reset_at: Option<DateTime<Utc>>) -> Option<String> {
     }
 }
 
+/// Whether config.toml selects a non-ChatGPT model provider (e.g. Bedrock),
+/// meaning the CLI never authenticates against ChatGPT.
+fn config_uses_non_chatgpt_provider(config_content: &str) -> bool {
+    config_content.lines().any(|line| {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            return false;
+        };
+        if !key.trim().eq_ignore_ascii_case("model_provider") {
+            return false;
+        }
+        let provider = value.trim().trim_matches('"').trim_matches('\'');
+        !provider.is_empty() && !provider.eq_ignore_ascii_case("openai")
+    })
+}
+
 fn parse_chatgpt_base_url(config_content: &str) -> Option<String> {
     for line in config_content.lines() {
         // Skip comments
@@ -1034,6 +1068,24 @@ fn capitalize(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn non_chatgpt_model_provider_is_detected_for_guidance() {
+        // Upstream 0.50.0 #2679: Bedrock and other custom backends get
+        // rate-limit guidance instead of login instructions.
+        assert!(config_uses_non_chatgpt_provider(
+            "model_provider = \"bedrock\"\n"
+        ));
+        assert!(config_uses_non_chatgpt_provider(
+            "# relay\nmodel_provider = 'ollama'"
+        ));
+        assert!(!config_uses_non_chatgpt_provider(
+            "model_provider = \"openai\""
+        ));
+        assert!(!config_uses_non_chatgpt_provider(
+            "model = \"gpt-5\"\napproval_policy = \"never\""
+        ));
+    }
 
     #[test]
     fn parses_codex_credentials_without_retaining_refresh_token() {

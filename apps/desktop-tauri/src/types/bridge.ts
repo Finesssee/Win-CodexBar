@@ -593,6 +593,12 @@ export interface DailyCostPoint {
   value: number;
 }
 
+/** Exact local token totals per day (upstream 0.50.0 #2930). */
+export interface DailyTokenPoint {
+  date: string;
+  tokens: number;
+}
+
 export interface ServiceUsagePoint {
   service: string;
   creditsUsed: number;
@@ -620,6 +626,8 @@ export interface ProviderChartData {
   creditsHistory: DailyCostPoint[];
   usageBreakdown: DailyUsageBreakdown[];
   localUsage: ProviderLocalUsageSummary | null;
+  tokensHistory: DailyTokenPoint[];
+  tokensIncomplete: boolean;
 }
 
 // ── Token account types ──────────────────────────────────────────────

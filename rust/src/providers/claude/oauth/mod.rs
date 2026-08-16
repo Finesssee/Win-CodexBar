@@ -502,11 +502,18 @@ impl ClaudeOAuthFetcher {
         credentials: &ClaudeOAuthCredentials,
         show_routines: bool,
     ) -> UsageSnapshot {
-        // Primary: 5-hour session window
-        let primary = response
-            .five_hour
-            .as_ref()
-            .and_then(|w| Self::to_rate_window(w, Some(300)))
+        // Primary: prefer limits[] session over legacy five_hour (mirrors the
+        // weekly lane preferring weekly_all over seven_day). A stale
+        // five_hour.utilization can transiently report 1.0 (100%) right after
+        // a window rollover while the limits[] entry already reflects the
+        // fresh value (#279, same bug class as #210).
+        let primary = super::scoped_weekly::session_window(&response.limits)
+            .or_else(|| {
+                response
+                    .five_hour
+                    .as_ref()
+                    .and_then(|w| Self::to_rate_window(w, Some(300)))
+            })
             .unwrap_or_else(|| RateWindow::new(0.0));
 
         let mut usage = UsageSnapshot::new(primary);
@@ -801,6 +808,82 @@ mod tests {
             .find(|w| w.title.contains("Fable"))
             .expect("Fable only window");
         assert!((fable.window.used_percent - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn issue_279_session_limits_win_over_stale_five_hour_after_rollover() {
+        // Right after a 5h window rollover the legacy five_hour.utilization
+        // can transiently report 1.0 (normalizes to 100%) even though
+        // claude.ai shows only 5% for the fresh window. The limits[] entry
+        // (kind=="session") carries the true value and must win.
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 1.0, "resets_at": "2026-08-13T12:49:59.578826Z"},
+                "seven_day": {"utilization": 0.01, "resets_at": "2026-07-26T22:59:59Z"},
+                "limits": [
+                    {
+                        "kind": "session",
+                        "group": "session",
+                        "percent": 5,
+                        "resets_at": "2026-08-13T12:49:59.578826Z"
+                    },
+                    {
+                        "kind": "weekly_all",
+                        "group": "weekly",
+                        "percent": 1,
+                        "resets_at": "2026-07-26T22:59:59Z"
+                    }
+                ]
+            }"#,
+        )
+        .expect("issue 279 body");
+
+        let credentials = ClaudeOAuthCredentials {
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec![],
+            rate_limit_tier: Some("default_claude_max_5x".to_string()),
+        };
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
+
+        // Primary session must be 5%, not the stale 100%.
+        assert!(
+            (usage.primary.used_percent - 5.0).abs() < f64::EPSILON,
+            "primary was {}, expected 5% (not 100%)",
+            usage.primary.used_percent
+        );
+        assert!((usage.primary.used_percent - 100.0).abs() > 1.0);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert!(usage.primary.resets_at.is_some());
+
+        // Weekly lane is unaffected (still prefers limits weekly_all).
+        let weekly = usage.secondary.expect("weekly");
+        assert!((weekly.used_percent - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn session_falls_back_to_legacy_five_hour_without_limits_entry() {
+        // When no limits[] session entry exists, the legacy five_hour field
+        // is still the source of truth (backwards compatible).
+        let response: OAuthUsageResponse = serde_json::from_str(
+            r#"{
+                "five_hour": {"utilization": 10.0, "resets_at": "2026-08-13T12:49:59Z"}
+            }"#,
+        )
+        .expect("legacy-only body");
+
+        let credentials = ClaudeOAuthCredentials {
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec![],
+            rate_limit_tier: None,
+        };
+        let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
+
+        assert!((usage.primary.used_percent - 10.0).abs() < f64::EPSILON);
+        assert_eq!(usage.primary.window_minutes, Some(300));
     }
 
     #[test]

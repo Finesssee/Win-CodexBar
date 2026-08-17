@@ -8,6 +8,7 @@ use codexbar::core::{
 };
 use codexbar::locale;
 use codexbar::providers::copilot::{CopilotApi, device_flow::CopilotDeviceFlow};
+use codexbar::login::{self, LoginOutcome, LoginPhase};
 use codexbar::secure_file::{self, SecureFileStatus};
 use codexbar::settings::{
     ApiKeys, Language, ManualCookies, MetricPreference, Settings, ThemePreference, TrayIconMode,

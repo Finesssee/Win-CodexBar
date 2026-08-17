@@ -261,16 +261,53 @@ pub async fn trigger_provider_login(
         return run_copilot_device_login(&app).await;
     }
 
-    // TODO(6b): replace fallthrough once LoginPhase events land. The login
-    // runners live in `codexbar::login` but are async-oriented and tightly
-    // coupled to the egui UI's phase callbacks. For the Tauri shell we
-    // currently surface the dashboard URL.
+    if id == ProviderId::Kiro {
+        return run_cli_provider_login(&app, &provider_id, "kiro", 120).await;
+    }
+
+    // For other providers, surface the dashboard URL as the login flow
+    // is not yet wired through the Tauri shell.
     if let Some(url) = dashboard_url_for_provider(&provider_id) {
         return open_url_in_browser(&url);
     }
     Err(format!(
         "Login flow for '{provider_id}' is not yet wired through the Tauri shell"
     ))
+}
+
+/// Run a CLI-based provider login (e.g. Kiro) and emit phase events.
+async fn run_cli_provider_login(
+    app: &tauri::AppHandle,
+    provider_id: &str,
+    display_name: &str,
+    timeout_secs: u64,
+) -> Result<(), String> {
+    let app_handle = app.clone();
+    let provider_id_owned = provider_id.to_string();
+    let result = login::run_kiro_login(timeout_secs, move |phase| {
+        let phase_str = match phase {
+            LoginPhase::Idle => "idle",
+            LoginPhase::Requesting => "requesting",
+            LoginPhase::WaitingBrowser => "waiting-browser",
+            LoginPhase::Complete => "complete",
+        };
+        events::emit_login_phase(&app_handle, &provider_id_owned, phase_str, None);
+    })
+    .await;
+
+    match result.outcome {
+        LoginOutcome::Success => Ok(()),
+        LoginOutcome::MissingBinary => Err(format!(
+            "{display_name} CLI not found. Install it and ensure it is on your PATH."
+        )),
+        LoginOutcome::LaunchFailed(e) => {
+            Err(format!("Failed to launch {display_name} login: {e}"))
+        }
+        LoginOutcome::TimedOut => Err(format!("{display_name} login timed out")),
+        LoginOutcome::Failed { status } => Err(format!(
+            "{display_name} login failed with exit code {status}"
+        )),
+    }
 }
 
 async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> {

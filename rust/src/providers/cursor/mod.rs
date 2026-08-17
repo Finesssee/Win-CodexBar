@@ -28,7 +28,7 @@ impl CursorProvider {
                 id: ProviderId::Cursor,
                 display_name: "Cursor",
                 session_label: "Plan",
-                weekly_label: "Auto",
+                weekly_label: "Cursor",
                 supports_opus: false,
                 // Upstream #2338: Cursor has no account credit balance to advertise.
                 supports_credits: false,

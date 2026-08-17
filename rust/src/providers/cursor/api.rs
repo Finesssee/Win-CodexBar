@@ -290,12 +290,13 @@ fn clamp_percent(value: f64) -> f64 {
 
 /// Period label for plan-included spend from usage-summary (no new network calls).
 fn plan_period_label(billing_cycle_start: Option<&str>) -> String {
+    // Upstream 0.50.1 #2951: match the Cursor dashboard's name for the
+    // included-usage pool (Cursor + third-party models).
     match billing_cycle_start {
-        Some(start) if !start.is_empty() => format!("Plan (since {start})"),
-        _ => "Plan (billing cycle)".to_string(),
+        Some(start) if !start.is_empty() => format!("Cursor and Third Party (since {start})"),
+        _ => "Cursor and Third Party (billing cycle)".to_string(),
     }
 }
-
 impl Default for CursorApi {
     fn default() -> Self {
         Self::new()
@@ -589,7 +590,10 @@ mod tests {
         let cost = cost.expect("plan cost");
         assert!((cost.used - 25.0).abs() < 0.01);
         assert_eq!(cost.limit, Some(50.0));
-        assert_eq!(cost.period, "Plan (since 2026-03-01T00:00:00Z)");
+        assert_eq!(
+            cost.period,
+            "Cursor and Third Party (since 2026-03-01T00:00:00Z)"
+        );
     }
 
     #[test]

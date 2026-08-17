@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     { value: "korean", display: "한국어" },
     { value: "spanish", display: "Español" },
     { value: "russian", display: "Русский" },
+    { value: "turkish", display: "Türkçe" },
   ]),
 }));
 
@@ -98,7 +99,7 @@ describe("GeneralTab language picker", () => {
     expect(select).toBeInTheDocument();
 
     const options = select.querySelectorAll("option");
-    expect(options.length).toBeGreaterThanOrEqual(7);
+    expect(options.length).toBeGreaterThanOrEqual(8);
   });
 
   it("includes spanish as a selectable option", () => {
@@ -113,6 +114,12 @@ describe("GeneralTab language picker", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
 
     expect(screen.getByText("Русский")).toBeInTheDocument();
+  });
+
+  it("includes turkish as a selectable option", () => {
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+
+    expect(screen.getByText("Türkçe")).toBeInTheDocument();
   });
 
   it("includes korean as a selectable option", () => {

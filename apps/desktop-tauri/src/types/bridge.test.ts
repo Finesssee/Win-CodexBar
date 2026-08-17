@@ -14,6 +14,8 @@ describe("Language type", () => {
     expect(langZhTw).toBe("chinesetraditional");
     const langRu: Language = "russian";
     expect(langRu).toBe("russian");
+    const langTr: Language = "turkish";
+    expect(langTr).toBe("turkish");
   });
 
   it("allows 'spanish' in LocaleStrings payload", () => {
@@ -44,6 +46,13 @@ describe("Language type", () => {
     };
     expect(payloadRu.language).toBe("russian");
     expect(payloadRu.entries.TabGeneral).toBe("Общие");
+
+    const payloadTr: LocaleStrings = {
+      language: "turkish",
+      entries: { TabGeneral: "Genel" },
+    };
+    expect(payloadTr.language).toBe("turkish");
+    expect(payloadTr.entries.TabGeneral).toBe("Genel");
   });
 
   it("allows 'spanish' in SettingsSnapshot.uiLanguage", () => {

@@ -23,6 +23,7 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "korean", display: "한국어" },
   { value: "spanish", display: "Español" },
   { value: "russian", display: "Русский" },
+  { value: "turkish", display: "Türkçe" },
 ];
 
 const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [

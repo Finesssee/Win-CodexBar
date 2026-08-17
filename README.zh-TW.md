@@ -1,6 +1,6 @@
 # Win-CodexBar
 
-[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md)
+[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md) | [Türkçe](./README.tr-TR.md)
 
 [CodexBar](https://github.com/steipete/CodexBar) 的 Windows 移植版 —— 一個系統系統匣應用，讓你隨時掌握各個 AI 程式設計工具的用量額度。
 

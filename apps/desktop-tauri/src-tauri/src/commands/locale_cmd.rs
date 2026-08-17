@@ -154,6 +154,17 @@ mod locale_tests {
     }
 
     #[test]
+    fn locale_strings_roundtrip_turkish() {
+        let bundle = locale_strings_for(Language::Turkish);
+        assert_eq!(bundle.language, "turkish");
+        assert_eq!(
+            bundle.entries.get("TabGeneral").map(String::as_str),
+            Some("Genel")
+        );
+        assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
+    }
+
+    #[test]
     fn locale_strings_contains_every_variant() {
         let bundle = locale_strings_for(Language::English);
         for (_, name) in locale::LocaleKey::ALL {
@@ -179,7 +190,8 @@ mod locale_tests {
                 "japanese",
                 "korean",
                 "spanish",
-                "russian"
+                "russian",
+                "turkish"
             ]
         );
         assert_eq!(
@@ -191,7 +203,8 @@ mod locale_tests {
                 "日本語",
                 "한국어",
                 "Español",
-                "Русский"
+                "Русский",
+                "Türkçe"
             ]
         );
     }
@@ -273,6 +286,14 @@ mod locale_tests {
         assert!(matches!(
             parse_locale_language("español"),
             Some(Language::Spanish)
+        ));
+        assert!(matches!(
+            parse_locale_language("tr-TR"),
+            Some(Language::Turkish)
+        ));
+        assert!(matches!(
+            parse_locale_language("Türkçe"),
+            Some(Language::Turkish)
         ));
         assert!(parse_locale_language("klingon").is_none());
     }

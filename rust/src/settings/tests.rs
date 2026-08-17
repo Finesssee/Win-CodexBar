@@ -609,7 +609,7 @@ fn test_language_defaults_to_english() {
 #[test]
 fn test_language_all_variants_available() {
     let languages = Language::all();
-    assert_eq!(languages.len(), 7);
+    assert_eq!(languages.len(), 8);
     assert!(languages.contains(&Language::English));
     assert!(languages.contains(&Language::Chinese));
     assert!(languages.contains(&Language::ChineseTraditional));
@@ -617,6 +617,7 @@ fn test_language_all_variants_available() {
     assert!(languages.contains(&Language::Korean));
     assert!(languages.contains(&Language::Spanish));
     assert!(languages.contains(&Language::Russian));
+    assert!(languages.contains(&Language::Turkish));
 }
 
 #[test]
@@ -626,6 +627,7 @@ fn test_language_display_names() {
     assert_eq!(Language::ChineseTraditional.display_name(), "繁體中文");
     assert_eq!(Language::Japanese.display_name(), "日本語");
     assert_eq!(Language::Russian.display_name(), "Русский");
+    assert_eq!(Language::Turkish.display_name(), "Türkçe");
 }
 
 #[test]
@@ -633,6 +635,14 @@ fn test_language_resolves_russian_aliases() {
     assert_eq!(Language::resolve("russian"), Some(Language::Russian));
     assert_eq!(Language::resolve("ru-RU"), Some(Language::Russian));
     assert_eq!(Language::resolve("Русский"), Some(Language::Russian));
+}
+
+#[test]
+fn test_language_resolves_turkish_aliases() {
+    assert_eq!(Language::resolve("turkish"), Some(Language::Turkish));
+    assert_eq!(Language::resolve("tr-TR"), Some(Language::Turkish));
+    assert_eq!(Language::resolve("Türkçe"), Some(Language::Turkish));
+    assert_eq!(Language::resolve("turkce"), Some(Language::Turkish));
 }
 
 #[test]

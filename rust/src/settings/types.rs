@@ -98,6 +98,8 @@ pub enum Language {
     Spanish,
     /// Russian
     Russian,
+    /// Turkish
+    Turkish,
 }
 
 impl Language {
@@ -111,6 +113,7 @@ impl Language {
             Language::Korean => "한국어",
             Language::Spanish => "Español",
             Language::Russian => "Русский",
+            Language::Turkish => "Türkçe",
         }
     }
 
@@ -124,6 +127,7 @@ impl Language {
             Language::Korean,
             Language::Spanish,
             Language::Russian,
+            Language::Turkish,
         ]
     }
 
@@ -138,6 +142,7 @@ impl Language {
             Language::Korean => "korean",
             Language::Spanish => "spanish",
             Language::Russian => "russian",
+            Language::Turkish => "turkish",
         }
     }
 
@@ -152,6 +157,7 @@ impl Language {
             Language::Korean => &["ko", "ko-kr", "한국어"],
             Language::Spanish => &["es", "es-mx", "español"],
             Language::Russian => &["ru", "ru-ru", "русский"],
+            Language::Turkish => &["tr", "tr-tr", "türkçe", "turkce"],
         }
     }
 

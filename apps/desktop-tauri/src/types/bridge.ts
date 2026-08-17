@@ -52,7 +52,8 @@ export type Language =
   | "japanese"
   | "korean"
   | "spanish"
-  | "russian";
+  | "russian"
+  | "turkish";
 
 /** Language catalog entry from the Rust backend. */
 export type LanguageOption = {

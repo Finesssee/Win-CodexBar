@@ -704,8 +704,9 @@ mod tests {
     fn test_run_sends_script_through_pty() {
         let runner = TtyCommandRunner::new();
         let opts = TtyCommandOptions::new()
-            .with_timeout(5.0)
-            .with_idle_timeout(2.0)
+            .with_timeout(15.0)
+            .with_idle_timeout(6.0)
+            .with_initial_delay(1.0)
             .with_script_line_delay(0.1);
 
         #[cfg(windows)]

@@ -79,9 +79,9 @@ export function SimpleBarChart({
       <div className="mini-chart__axis">
         {visible.length > 0 && (
           <>
-            <span>{visible[0].date.slice(-5)}</span>
-            <span>{fmt(max)}</span>
-            <span>{visible[visible.length - 1].date.slice(-5)}</span>
+            <span style={{ left: `${barWidth / 2}px` }}>{visible[0].date.slice(-5)}</span>
+            <span style={{ left: `${actualWidth / 2}px` }}>{fmt(max)}</span>
+            <span style={{ left: `${actualWidth - barWidth / 2}px` }}>{visible[visible.length - 1].date.slice(-5)}</span>
           </>
         )}
       </div>
@@ -207,9 +207,9 @@ export function StackedBarChart({
       <div className="mini-chart__axis">
         {visible.length > 0 && (
           <>
-            <span>{visible[0].day.slice(-5)}</span>
-            <span>{max.toFixed(1)}</span>
-            <span>{visible[visible.length - 1].day.slice(-5)}</span>
+            <span style={{ left: `${barWidth / 2}px` }}>{visible[0].day.slice(-5)}</span>
+            <span style={{ left: `${actualWidth / 2}px` }}>{max.toFixed(1)}</span>
+            <span style={{ left: `${actualWidth - barWidth / 2}px` }}>{visible[visible.length - 1].day.slice(-5)}</span>
           </>
         )}
       </div>

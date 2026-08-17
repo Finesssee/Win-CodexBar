@@ -1845,13 +1845,17 @@ body:has(.tray-panel-reveal) {
 }
 
 .mini-chart__axis {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  position: relative;
   font-size: 0.68rem;
   color: var(--text-muted);
   font-family: "Cascadia Code", "Fira Code", monospace;
   padding: 0 2px;
+}
+
+.mini-chart__axis > span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .mini-chart__legend {

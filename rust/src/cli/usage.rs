@@ -360,12 +360,34 @@ fn render_json_result(
     result: ProviderFetchResult,
     status: Option<&StatusInfo>,
 ) -> serde_json::Value {
+    let usage = &result.usage;
+    let primary_pace = usage
+        .primary
+        .window_minutes
+        .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
+        .then(|| {
+            UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
+        })
+        .flatten()
+        .map(pace_json);
+    let secondary_pace = usage
+        .secondary
+        .as_ref()
+        .and_then(|w| UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080)))
+        .map(pace_json);
+
     let mut json_result = serde_json::json!({
         "provider": provider_id.cli_name(),
         "source": result.source_label,
         "usage": result.usage,
         "cost": result.cost,
     });
+    if primary_pace.is_some() || secondary_pace.is_some() {
+        json_result["pace"] = serde_json::json!({
+            "primary": primary_pace,
+            "secondary": secondary_pace,
+        });
+    }
 
     if let Some(s) = status {
         json_result["status"] = serde_json::json!({
@@ -375,6 +397,16 @@ fn render_json_result(
     }
 
     json_result
+}
+
+/// Serialize a [`UsagePace`] into a compact JSON object for the `--json` output.
+fn pace_json(pace: UsagePace) -> serde_json::Value {
+    serde_json::json!({
+        "stage": format!("{:?}", pace.stage).to_lowercase(),
+        "deltaPercent": pace.delta_percent,
+        "expectedUsedPercent": pace.expected_used_percent,
+        "willLastToReset": pace.will_last_to_reset,
+    })
 }
 
 fn print_usage_output(output: UsageOutput) -> anyhow::Result<()> {
@@ -489,6 +521,16 @@ fn append_usage_window_lines(
     use_color: bool,
 ) {
     append_window_line(lines, metadata.session_label, &usage.primary, use_color);
+    // Upstream 0.50.1 #2957: pace for the 5-hour session window.
+    if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES) {
+        if let Some(pace) = UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES) {
+            lines.push(format!(
+                "  Pace:    {} {}",
+                pace.stage.emoji(),
+                pace.format_status()
+            ));
+        }
+    }
     append_secondary_window_line(
         lines,
         usage.secondary.as_ref(),

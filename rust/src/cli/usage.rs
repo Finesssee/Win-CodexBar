@@ -522,14 +522,14 @@ fn append_usage_window_lines(
 ) {
     append_window_line(lines, metadata.session_label, &usage.primary, use_color);
     // Upstream 0.50.1 #2957: pace for the 5-hour session window.
-    if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES) {
-        if let Some(pace) = UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES) {
-            lines.push(format!(
-                "  Pace:    {} {}",
-                pace.stage.emoji(),
-                pace.format_status()
-            ));
-        }
+    if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES)
+        && let Some(pace) = UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
+    {
+        lines.push(format!(
+            "  Pace:    {} {}",
+            pace.stage.emoji(),
+            pace.format_status()
+        ));
     }
     append_secondary_window_line(
         lines,

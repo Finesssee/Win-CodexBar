@@ -62,7 +62,7 @@ fn validate_serve_args_accepts_loopback_without_token() {
         refresh_interval: 60,
         dashboard_token: None,
         allow_plain_http: false,
-        identity: "redacted".into(),
+        identity: Some("redacted".into()),
     })
     .unwrap();
     assert_eq!(config.host, "127.0.0.1");
@@ -77,7 +77,7 @@ fn validate_serve_args_rejects_lan_without_token() {
         refresh_interval: 60,
         dashboard_token: None,
         allow_plain_http: true,
-        identity: "redacted".into(),
+        identity: Some("redacted".into()),
     })
     .unwrap_err()
     .to_string();
@@ -92,7 +92,7 @@ fn validate_serve_args_rejects_lan_without_allow_plain_http() {
         refresh_interval: 60,
         dashboard_token: Some("tok".into()),
         allow_plain_http: false,
-        identity: "redacted".into(),
+        identity: Some("redacted".into()),
     })
     .unwrap_err()
     .to_string();
@@ -154,7 +154,7 @@ fn head_test_config(budget: Duration, token: Option<&str>) -> ServeConfig {
         port: 8080,
         token_digest: token.map(|t| sha256_digest(t.as_bytes())),
         head_read_budget: budget,
-        identity: DashboardIdentity::Redacted,
+        identity: Some(DashboardIdentity::Redacted),
         dashboard: None,
     }
 }
@@ -629,7 +629,7 @@ fn stub_state_ok() -> dashboard::DashboardState {
     dashboard::DashboardState::stub(
         stub_build(DashboardIdMode::Redacted, false, Duration::ZERO),
         3600,
-        DashboardIdMode::Redacted,
+        Some(DashboardIdMode::Redacted),
     )
 }
 
@@ -780,7 +780,7 @@ async fn snapshot_identity_modes_redact_or_expose() {
     let state = dashboard::DashboardState::stub(
         stub_build(DashboardIdMode::Redacted, false, Duration::ZERO),
         3600,
-        DashboardIdMode::Redacted,
+        Some(DashboardIdMode::Redacted),
     );
     let config = dashboard_test_config(None, Some(state));
     let redacted = request_roundtrip_dashboard(
@@ -798,7 +798,7 @@ async fn snapshot_identity_modes_redact_or_expose() {
     let state = dashboard::DashboardState::stub(
         stub_build(DashboardIdMode::Full, false, Duration::ZERO),
         3600,
-        DashboardIdMode::Full,
+        Some(DashboardIdMode::Full),
     );
     let config = dashboard_test_config(None, Some(state));
     let full = request_roundtrip_dashboard(
@@ -814,7 +814,7 @@ async fn snapshot_claude_accounts_nest_under_claude_row() {
     let state = dashboard::DashboardState::stub(
         stub_build(DashboardIdMode::Redacted, true, Duration::ZERO),
         3600,
-        DashboardIdMode::Redacted,
+        Some(DashboardIdMode::Redacted),
     );
     let config = dashboard_test_config(None, Some(state));
     let response = request_roundtrip_dashboard(
@@ -835,7 +835,7 @@ async fn snapshot_late_build_is_delivered_not_discarded() {
     let state = dashboard::DashboardState::stub(
         stub_build(DashboardIdMode::Redacted, false, Duration::from_millis(250)),
         3600,
-        DashboardIdMode::Redacted,
+        Some(DashboardIdMode::Redacted),
     );
     let config = dashboard_test_config(None, Some(state));
     let started = std::time::Instant::now();

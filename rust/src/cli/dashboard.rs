@@ -39,7 +39,7 @@ pub async fn run(args: DashboardArgs) -> anyhow::Result<()> {
     };
     let fetch_timeout = parse_timeout(args.timeout)?;
 
-    let producer = SnapshotProducer::new(60, identity).with_fetch_timeout(fetch_timeout);
+    let producer = SnapshotProducer::new(60, Some(identity)).with_fetch_timeout(fetch_timeout);
     let payload = producer.collect().await.map_err(anyhow::Error::msg)?;
 
     let body = if args.pretty {

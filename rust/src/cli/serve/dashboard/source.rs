@@ -39,7 +39,7 @@ const ACCOUNT_FETCH_TIMEOUT: Duration = Duration::from_secs(75);
 #[derive(Clone, Debug)]
 pub struct SnapshotProducer {
     pub refresh_seconds: u32,
-    pub identity: DashboardIdentity,
+    pub identity: Option<DashboardIdentity>,
     pub version: String,
     /// Outer per-provider fetch envelope; `None` relies on provider-internal
     /// `web_timeout` alone (`--timeout 0` in the dashboard command).
@@ -47,7 +47,7 @@ pub struct SnapshotProducer {
 }
 
 impl SnapshotProducer {
-    pub fn new(refresh_seconds: u32, identity: DashboardIdentity) -> Self {
+    pub fn new(refresh_seconds: u32, identity: Option<DashboardIdentity>) -> Self {
         Self {
             refresh_seconds,
             identity,
@@ -68,6 +68,13 @@ impl SnapshotProducer {
 
     async fn collect_inner(&self) -> Result<SnapshotPayload, String> {
         let settings = Settings::load();
+        // Resolve identity: explicit --identity flag wins; otherwise follow
+        // the app's hide_personal_info setting (upstream 0.50.1 #2960).
+        let identity = self.identity.unwrap_or(if settings.hide_personal_info {
+            DashboardIdentity::Redacted
+        } else {
+            DashboardIdentity::Full
+        });
         let provider_ids: Vec<ProviderId> = settings.get_enabled_provider_ids();
 
         // Concurrent, individually bounded provider fetches; order restored by index.
@@ -108,7 +115,7 @@ impl SnapshotProducer {
             providers,
             costs,
             claude_accounts,
-            identity: self.identity,
+            identity,
             generated_at: Utc::now(),
             refresh_seconds: self.refresh_seconds,
             version: Some(self.version.clone()),
@@ -300,9 +307,16 @@ mod tests {
 
     #[test]
     fn producer_defaults_to_redacted_identity() {
-        let producer = SnapshotProducer::new(60, DashboardIdentity::Redacted);
-        assert_eq!(producer.identity, DashboardIdentity::Redacted);
+        let producer = SnapshotProducer::new(60, Some(DashboardIdentity::Redacted));
+        assert_eq!(producer.identity, Some(DashboardIdentity::Redacted));
         assert_eq!(producer.refresh_seconds, 60);
         assert!(!producer.version.is_empty());
+    }
+
+    #[test]
+    fn producer_none_identity_follows_settings() {
+        let producer = SnapshotProducer::new(60, None);
+        assert_eq!(producer.identity, None);
+        assert_eq!(producer.refresh_seconds, 60);
     }
 }

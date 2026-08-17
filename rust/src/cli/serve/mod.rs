@@ -82,10 +82,11 @@ pub struct ServeArgs {
     #[arg(long = "allow-plain-http", default_value_t = false)]
     pub allow_plain_http: bool,
 
-    /// Dashboard snapshot identity detail: redacted (default) or full. `full`
-    /// exposes real account emails to every authorized dashboard client.
-    #[arg(long, value_parser = ["redacted", "full"], default_value = "redacted")]
-    pub identity: String,
+    /// Dashboard snapshot identity detail: redacted or full. When omitted,
+    /// the identity follows the app's "hide personal info" setting per
+    /// request (upstream 0.50.1 #2960).
+    #[arg(long, value_parser = ["redacted", "full"])]
+    pub identity: Option<String>,
 }
 
 /// Normalized serve bind configuration after startup validation.
@@ -98,8 +99,9 @@ struct ServeConfig {
     /// [`HEAD_READ_TIMEOUT`]; tests inject a short budget (upstream 0.48.0
     /// #2684 makes the deadline injectable for exactly this reason).
     head_read_budget: Duration,
-    /// Dashboard snapshot identity mode (`redacted` default, `full` opt-in).
-    identity: DashboardIdentity,
+    /// Dashboard snapshot identity mode. `None` means follow the app's
+    /// `hide_personal_info` setting per request (upstream 0.50.1 #2960).
+    identity: Option<DashboardIdentity>,
     /// Dashboard state (coordinator + producer). Always `Some` from `run`;
     /// `None` only in pure-transport tests, where dashboard routes answer 503.
     dashboard: Option<dashboard::DashboardState>,
@@ -171,10 +173,13 @@ fn validate_serve_args(args: &ServeArgs) -> anyhow::Result<ServeConfig> {
     if args.port == 0 {
         anyhow::bail!("--port must be between 1 and 65535.");
     }
-
     // clap's value_parser already rejects anything but redacted|full.
-    let Some(identity) = DashboardIdentity::parse(&args.identity) else {
-        anyhow::bail!("--identity must be redacted or full.");
+    let identity = match args.identity.as_deref() {
+        Some(raw) => Some(
+            DashboardIdentity::parse(raw)
+                .ok_or_else(|| anyhow::anyhow!("--identity must be redacted or full."))?,
+        ),
+        None => None,
     };
 
     let token = resolve_dashboard_token(args.dashboard_token.as_deref())?;

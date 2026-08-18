@@ -403,6 +403,8 @@ export interface CodexLocalProjectUsageSnapshot {
   indexedFileCount: number;
   skippedFileCount: number;
   total: CodexWorkspacesUsageTotals;
+  /** All indexed conversations in the selected history window. */
+  sessions: CodexWorkspacesSessionUsage[];
   projects: CodexWorkspacesProjectUsage[];
   daily: CodexWorkspacesDailyPoint[];
   sourceStatus: CodexWorkspacesSourceStatus;

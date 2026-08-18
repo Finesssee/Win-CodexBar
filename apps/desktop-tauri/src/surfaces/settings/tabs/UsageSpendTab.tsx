@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { getSettingsSnapshot, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
-import type { CostSummaryDisplayStyle, SettingsSnapshot, UsageSpendSummary } from "../../../types/bridge";
+import { getCodexWorkspacesSnapshot, getSettingsSnapshot, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
+import type { CodexLocalProjectUsageSnapshot, CostSummaryDisplayStyle, SettingsSnapshot, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 
@@ -124,14 +124,21 @@ export default function UsageSpendTab(_props: TabProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<CodexLocalProjectUsageSnapshot | null>(null);
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const tableRef = useRef<HTMLTableElement | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    void getUsageSpendSummary()
-      .then((data) => {
+    void Promise.all([
+      getUsageSpendSummary(),
+      getCodexWorkspacesSnapshot({ historyDays: 30 }),
+    ])
+      .then(([data, workspaceData]) => {
         setSummary(data);
+        setWorkspaces(workspaceData);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -230,7 +237,124 @@ export default function UsageSpendTab(_props: TabProps) {
           </tbody>
         </table>
       )}
+
+      {!error && workspaces && (
+        <ProjectsPanel
+          snapshot={workspaces}
+          showAll={showAllProjects}
+          expanded={expandedProjects}
+          onToggleAll={() => setShowAllProjects((value) => !value)}
+          onToggleProject={(id) => {
+            setExpandedProjects((current) => {
+              const next = new Set(current);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            });
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function ProjectsPanel({
+  snapshot,
+  showAll,
+  expanded,
+  onToggleAll,
+  onToggleProject,
+}: {
+  snapshot: CodexLocalProjectUsageSnapshot;
+  showAll: boolean;
+  expanded: Set<string>;
+  onToggleAll: () => void;
+  onToggleProject: (id: string) => void;
+}) {
+  const projects = showAll ? snapshot.projects : snapshot.projects.slice(0, 8);
+  const partial = snapshot.sourceStatus !== "complete";
+
+  return (
+    <div className="settings-section__group" style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <h4 style={{ margin: 0 }}>Projects</h4>
+          <p className="settings-section__caption" style={{ marginTop: 4 }}>
+            Ranked Codex local project spend for the last {snapshot.historyDays} days
+            {partial ? " · partial history" : ""}.
+          </p>
+        </div>
+        {snapshot.projects.length > 8 && (
+          <button type="button" className="credential-btn credential-btn--secondary" onClick={onToggleAll}>
+            {showAll ? "Show less" : `Show all (${snapshot.projects.length})`}
+          </button>
+        )}
+      </div>
+
+      {projects.length === 0 ? (
+        <p className="settings-section__caption">No indexed Codex projects yet.</p>
+      ) : (
+        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+          {projects.map((project) => {
+            const isExpanded = expanded.has(project.id);
+            const partialCost = project.costEstimate.unknownTokens > 0;
+            return (
+              <div key={project.id} className="provider-detail-section" style={{ padding: "10px 12px" }}>
+                <button
+                  type="button"
+                  onClick={() => onToggleProject(project.id)}
+                  aria-expanded={isExpanded}
+                  style={{
+                    width: "100%",
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                    gap: 12,
+                    alignItems: "center",
+                    border: 0,
+                    padding: 0,
+                    background: "transparent",
+                    color: "inherit",
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ minWidth: 0 }}>
+                    <strong>{project.displayName}</strong>
+                    <span className="settings-section__caption" style={{ display: "block" }}>
+                      {project.sessionCount} conversation{project.sessionCount === 1 ? "" : "s"}
+                      {project.topModel ? ` · ${project.topModel}` : ""}
+                    </span>
+                  </span>
+                  <span>{partialCost ? "~" : ""}${project.costEstimate.knownUsd.toFixed(2)}</span>
+                  <span aria-hidden="true">{isExpanded ? "▾" : "▸"}</span>
+                </button>
+
+                {isExpanded && (
+                  <div style={{ display: "grid", gap: 5, marginTop: 9, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
+                    {snapshot.sessions
+                      .filter((session) => session.projectId === project.id)
+                      .map((session) => (
+                        <div
+                          key={session.id}
+                          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10 }}
+                        >
+                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {session.displayTitle}
+                          </span>
+                          <span>
+                            {session.costEstimate.unknownTokens > 0 ? "~" : ""}
+                            ${session.costEstimate.knownUsd.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

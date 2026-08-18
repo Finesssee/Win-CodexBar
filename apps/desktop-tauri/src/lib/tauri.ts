@@ -242,8 +242,10 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(): Promise<UsageSpendSummary> {
-  return invoke<UsageSpendSummary>("get_usage_spend_summary");
+export function getUsageSpendSummary(options?: { historyDays?: number }): Promise<UsageSpendSummary> {
+  return invoke<UsageSpendSummary>("get_usage_spend_summary", {
+    historyDays: options?.historyDays ?? null,
+  });
 }
 
 export function getCodexWorkspacesSnapshot(options?: {

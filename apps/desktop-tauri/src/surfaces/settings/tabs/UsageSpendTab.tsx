@@ -121,10 +121,12 @@ function downloadDataUrl(dataUrl: string, filename: string) {
 export default function UsageSpendTab(_props: TabProps) {
   const { t } = useLocale();
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
+  const [selectedDays, setSelectedDays] = useState<7 | 30>(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<CodexLocalProjectUsageSnapshot | null>(null);
+  const [showAllModels, setShowAllModels] = useState(false);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -133,8 +135,8 @@ export default function UsageSpendTab(_props: TabProps) {
     setLoading(true);
     setError(null);
     void Promise.all([
-      getUsageSpendSummary(),
-      getCodexWorkspacesSnapshot({ historyDays: 30 }),
+      getUsageSpendSummary({ historyDays: selectedDays }),
+      getCodexWorkspacesSnapshot({ historyDays: selectedDays }),
     ])
       .then(([data, workspaceData]) => {
         setSummary(data);
@@ -145,7 +147,7 @@ export default function UsageSpendTab(_props: TabProps) {
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
-  }, []);
+  }, [selectedDays]);
 
   useEffect(() => {
     load();
@@ -196,6 +198,20 @@ export default function UsageSpendTab(_props: TabProps) {
         </button>
       </div>
 
+      <div className="settings-section__group" style={{ marginBottom: 12, display: "flex", gap: 8 }}>
+        {([7, 30] as const).map((days) => (
+          <button
+            key={days}
+            type="button"
+            className="credential-btn credential-btn--secondary"
+            aria-pressed={selectedDays === days}
+            onClick={() => setSelectedDays(days)}
+          >
+            {days}d
+          </button>
+        ))}
+      </div>
+
       <CostSummaryStyleControl t={t} />
 
       {error && <p className="settings-section__error">{error}</p>}
@@ -238,12 +254,22 @@ export default function UsageSpendTab(_props: TabProps) {
         </table>
       )}
 
+      {!error && summary && (
+        <ModelsPanel
+          models={summary.models ?? []}
+          showAll={showAllModels}
+          onToggleAll={() => setShowAllModels((value) => !value)}
+          t={t}
+        />
+      )}
+
       {!error && workspaces && (
         <ProjectsPanel
           snapshot={workspaces}
           showAll={showAllProjects}
           expanded={expandedProjects}
           onToggleAll={() => setShowAllProjects((value) => !value)}
+          t={t}
           onToggleProject={(id) => {
             setExpandedProjects((current) => {
               const next = new Set(current);
@@ -258,18 +284,68 @@ export default function UsageSpendTab(_props: TabProps) {
   );
 }
 
+
+function ModelsPanel({
+  models,
+  showAll,
+  onToggleAll,
+  t,
+}: {
+  models: UsageSpendSummary["models"];
+  showAll: boolean;
+  onToggleAll: () => void;
+  t: (key: LocaleKey) => string;
+}) {
+  const visible = showAll ? models : models.slice(0, 8);
+  return (
+    <div className="settings-section__group" style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <h4 style={{ margin: 0 }}>{t("UsageSpendModels")}</h4>
+        {models.length > 8 && (
+          <button type="button" className="credential-btn credential-btn--secondary" onClick={onToggleAll}>
+            {showAll ? t("UsageSpendShowLess") : `${t("UsageSpendShowAll")} (${models.length})`}
+          </button>
+        )}
+      </div>
+      {visible.length === 0 ? (
+        <p className="settings-section__caption">{t("UsageSpendNoModels")}</p>
+      ) : (
+        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+          {visible.map((model) => (
+            <div
+              key={`${model.providerId}:${model.modelName}`}
+              className="provider-detail-section"
+              style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}
+            >
+              <span style={{ minWidth: 0 }}>
+                <strong>{model.modelName}</strong>
+                <span className="settings-section__caption" style={{ display: "block" }}>
+                  {model.providerName}{model.totalTokens == null ? "" : ` · ${model.totalTokens.toLocaleString()} tokens`}
+                </span>
+              </span>
+              <span>{model.costUsd == null ? "—" : formatUsd(model.costUsd, "USD")}{model.partial ? " · partial" : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProjectsPanel({
   snapshot,
   showAll,
   expanded,
   onToggleAll,
   onToggleProject,
+  t,
 }: {
   snapshot: CodexLocalProjectUsageSnapshot;
   showAll: boolean;
   expanded: Set<string>;
   onToggleAll: () => void;
   onToggleProject: (id: string) => void;
+  t: (key: LocaleKey) => string;
 }) {
   const projects = showAll ? snapshot.projects : snapshot.projects.slice(0, 8);
   const partial = snapshot.sourceStatus !== "complete";
@@ -278,21 +354,21 @@ function ProjectsPanel({
     <div className="settings-section__group" style={{ marginTop: 20 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <h4 style={{ margin: 0 }}>Projects</h4>
+          <h4 style={{ margin: 0 }}>{t("UsageSpendProjects")}</h4>
           <p className="settings-section__caption" style={{ marginTop: 4 }}>
             Ranked Codex local project spend for the last {snapshot.historyDays} days
-            {partial ? " · partial history" : ""}.
+            {partial ? ` · ${t("UsageSpendPartialHistory")}` : ""}.
           </p>
         </div>
         {snapshot.projects.length > 8 && (
           <button type="button" className="credential-btn credential-btn--secondary" onClick={onToggleAll}>
-            {showAll ? "Show less" : `Show all (${snapshot.projects.length})`}
+            {showAll ? t("UsageSpendShowLess") : `${t("UsageSpendShowAll")} (${snapshot.projects.length})`}
           </button>
         )}
       </div>
 
       {projects.length === 0 ? (
-        <p className="settings-section__caption">No indexed Codex projects yet.</p>
+        <p className="settings-section__caption">{t("UsageSpendNoProjects")}</p>
       ) : (
         <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
           {projects.map((project) => {
@@ -321,7 +397,7 @@ function ProjectsPanel({
                   <span style={{ minWidth: 0 }}>
                     <strong>{project.displayName}</strong>
                     <span className="settings-section__caption" style={{ display: "block" }}>
-                      {project.sessionCount} conversation{project.sessionCount === 1 ? "" : "s"}
+                      {project.sessionCount} {t("UsageSpendConversations")}
                       {project.topModel ? ` · ${project.topModel}` : ""}
                     </span>
                   </span>

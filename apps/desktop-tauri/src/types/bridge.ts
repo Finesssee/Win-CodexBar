@@ -43,6 +43,7 @@ export type MetricPreference =
   | "tertiary"
   | "credits"
   | "extraUsage"
+  | "monthlyPlan"
   | "average";
 
 export type Language =
@@ -68,6 +69,9 @@ export type UpdateChannel = "stable" | "beta";
 export type ThemePreference = "auto" | "light" | "dark";
 
 export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
+
+/** How cost is rendered on provider MenuCards (#2976). */
+export type CostSummaryDisplayStyle = "compact" | "detailed" | "hidden";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 
@@ -244,6 +248,10 @@ export interface SettingsSnapshot {
   alibabaTokenPlanRegion: string;
   /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
   weeklyProgressWorkDays?: number | null;
+  /** How cost is rendered on provider cards (#2976). */
+  costSummaryDisplayStyle: CostSummaryDisplayStyle;
+  /** Per-provider accent color overrides (CLI name → hex color, #2972). */
+  providerAccentColors: Record<string, string>;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -310,6 +318,7 @@ export interface SettingsUpdate {
   claudeDailyRoutinesUsageVisible?: boolean;
   alibabaTokenPlanRegion?: string;
   weeklyProgressWorkDays?: number | null;
+  costSummaryDisplayStyle?: CostSummaryDisplayStyle;
 }
 
 export interface UsageThresholdOverride {
@@ -426,6 +435,8 @@ export interface CostSnapshotBridge {
   limit: number | null;
   remaining: number | null;
   currencyCode: string;
+  /** Optional currency symbol (e.g. "€", "$", "¥") for localized rendering. */
+  currencySymbol?: string | null;
   period: string;
   resetsAt: string | null;
   formattedUsed: string;

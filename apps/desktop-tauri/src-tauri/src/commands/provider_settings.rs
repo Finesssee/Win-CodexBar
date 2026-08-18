@@ -306,6 +306,46 @@ fn gateway_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     (provider_id == "wayfinder").then_some(codexbar::core::ProviderId::Wayfinder)
 }
 
+// ── Per-provider accent color override (#2972) ─────────────────────
+
+fn normalize_hex_accent_color(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    let stripped = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if stripped.len() != 6 || !stripped.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid hex color. Use #RRGGBB format, e.g. #FF5733.".to_string());
+    }
+    Ok(format!("#{}", stripped.to_ascii_uppercase()))
+}
+
+#[tauri::command]
+pub fn set_provider_accent_color(provider_id: String, color: Option<String>) -> Result<(), String> {
+    let id = parse_provider_arg(&provider_id)?;
+    let mut settings = Settings::load();
+    match color.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("") => {
+            settings.set_accent_color(id, None::<&str>);
+        }
+        Some(hex) => {
+            let normalized = normalize_hex_accent_color(hex)?;
+            settings.set_accent_color(id, Some(normalized));
+        }
+    }
+    settings.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_provider_accent_color(provider_id: String) -> Result<Option<String>, String> {
+    let id = parse_provider_arg(&provider_id)?;
+    Ok(Settings::load().accent_color(id).map(|s| s.to_string()))
+}
+
+#[tauri::command]
+pub fn get_provider_effective_accent_color(provider_id: String) -> Result<String, String> {
+    let id = parse_provider_arg(&provider_id)?;
+    Ok(Settings::load().effective_accent_color(id))
+}
+
 #[tauri::command]
 pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Result<(), String> {
     let id = gateway_provider(&provider_id)

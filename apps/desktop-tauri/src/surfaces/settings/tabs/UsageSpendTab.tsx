@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { getUsageSpendSummary } from "../../../lib/tauri";
-import type { UsageSpendSummary } from "../../../types/bridge";
+import { getSettingsSnapshot, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
+import type { CostSummaryDisplayStyle, SettingsSnapshot, UsageSpendSummary } from "../../../types/bridge";
+import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
@@ -188,6 +189,8 @@ export default function UsageSpendTab(_props: TabProps) {
         </button>
       </div>
 
+      <CostSummaryStyleControl t={t} />
+
       {error && <p className="settings-section__error">{error}</p>}
       {shareError && <p className="settings-section__error">{shareError}</p>}
 
@@ -228,5 +231,54 @@ export default function UsageSpendTab(_props: TabProps) {
         </table>
       )}
     </section>
+  );
+}
+
+function CostSummaryStyleControl({ t }: { t: (key: LocaleKey) => string }) {
+  const [style, setStyle] = useState<CostSummaryDisplayStyle>("compact");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void getSettingsSnapshot().then((snap: SettingsSnapshot) => {
+      setStyle(snap.costSummaryDisplayStyle);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const handleChange = useCallback(async (value: CostSummaryDisplayStyle) => {
+    setStyle(value);
+    try {
+      await updateSettings({ costSummaryDisplayStyle: value });
+    } catch {
+      /* best-effort; revert handled by next settings refresh */
+    }
+  }, []);
+
+  const options: { value: CostSummaryDisplayStyle; label: string }[] = [
+    { value: "compact", label: t("CostSummaryStyleCompact") },
+    { value: "detailed", label: t("CostSummaryStyleDetailed") },
+    { value: "hidden", label: t("CostSummaryStyleHidden") },
+  ];
+
+  return (
+    <div className="settings-section__group" style={{ marginBottom: 16 }}>
+      <label className="settings-section__label" htmlFor="cost-summary-style">
+        {t("CostSummaryDisplayStyle")}
+      </label>
+      <p className="settings-section__caption">{t("CostSummaryDisplayStyleHelper")}</p>
+      <select
+        id="cost-summary-style"
+        className="settings-select"
+        value={style}
+        disabled={loading}
+        onChange={(e) => void handleChange(e.target.value as CostSummaryDisplayStyle)}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

@@ -138,6 +138,7 @@ export default function ProvidersTab({
         cookieDomain={selectedEntry?.cookieDomain ?? null}
         resetTimeRelative={settings.resetTimeRelative}
         providerMetrics={settings.providerMetrics}
+        providerAccentColors={settings.providerAccentColors}
         wayfinderGatewayUrl={settings.wayfinderGatewayUrl ?? "http://127.0.0.1:8088"}
         settingsDisabled={saving}
         onSettingsChange={set}

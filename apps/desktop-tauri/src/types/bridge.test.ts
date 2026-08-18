@@ -117,6 +117,8 @@ describe("Language type", () => {
       claudeDailyRoutinesUsageVisible: true,
       alibabaTokenPlanRegion: "cn",
       weeklyProgressWorkDays: null,
+    costSummaryDisplayStyle: "compact",
+    providerAccentColors: {},
     };
     expect(snap.uiLanguage).toBe("spanish");
 

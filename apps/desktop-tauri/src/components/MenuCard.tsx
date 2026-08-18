@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import type {
+  CostSummaryDisplayStyle,
   ProviderChartData,
   ProviderUsageSnapshot,
 } from "../types/bridge";
@@ -47,14 +48,18 @@ export interface MenuCardDisplayOptions {
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
+  costSummaryDisplayStyle?: CostSummaryDisplayStyle;
 }
 
 interface MenuCardProps {
   provider: ProviderUsageSnapshot;
   display: MenuCardDisplayOptions;
   isRefreshing?: boolean;
+  /** Per-provider accent color override (hex); applied as CSS --provider-accent. */
+  accentColor?: string;
   onLayoutChange?: () => void;
 }
+
 
 export function maskEmail(email: string): string {
   const at = email.indexOf("@");
@@ -109,6 +114,7 @@ export default function MenuCard({
   provider,
   display,
   isRefreshing = false,
+  accentColor,
   onLayoutChange,
 }: MenuCardProps) {
   const {
@@ -117,6 +123,7 @@ export default function MenuCard({
     showResetWhenExhausted = false,
     showAsUsed = false,
     compactMetrics = false,
+    costSummaryDisplayStyle,
   } = display;
   const { t } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -206,7 +213,7 @@ export default function MenuCard({
   }
   const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
 
-  const presence = describeCard(provider, chartData, visibleMetrics);
+  const presence = describeCard(provider, chartData, visibleMetrics, costSummaryDisplayStyle);
   const { hasDetails } = presence;
   const cardClassName = [
     "menu-card",
@@ -218,7 +225,11 @@ export default function MenuCard({
     .join(" ");
 
   return (
-    <article className={cardClassName} aria-busy={isRefreshing}>
+    <article
+      className={cardClassName}
+      aria-busy={isRefreshing}
+      style={accentColor ? ({ "--provider-accent": accentColor } as CSSProperties) : undefined}
+    >
       <header className="menu-card__header">
         <div className="menu-card__title-row">
           <div className="menu-card__name-group">
@@ -254,6 +265,7 @@ export default function MenuCard({
             resetTimeRelative,
             showResetWhenExhausted,
             showAsUsed,
+            costSummaryDisplayStyle,
           }}
           metrics={visibleMetrics}
           chartData={chartData}

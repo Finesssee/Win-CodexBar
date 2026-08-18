@@ -56,13 +56,15 @@ const PROVIDER_TOKEN: Record<string, string> = {
 /** CSS color expression for a provider's cost-series bars. */
 export function providerCostColor(providerId: string): string {
   const token = PROVIDER_TOKEN[providerId.toLowerCase()];
-  return token ? `var(${token}, var(--chart-cost))` : "var(--chart-cost)";
+  if (token) return `var(${token}, var(--provider-accent, var(--chart-cost)))`;
+  return "var(--provider-accent, var(--chart-cost))";
 }
 
 /** CSS color expression for a provider's credits-series line. */
 export function providerCreditsColor(providerId: string): string {
   const token = PROVIDER_TOKEN[providerId.toLowerCase()];
-  return token ? `var(${token}, var(--chart-credits))` : "var(--chart-credits)";
+  if (token) return `var(${token}, var(--provider-accent, var(--chart-credits)))`;
+  return "var(--provider-accent, var(--chart-credits))";
 }
 
 /**

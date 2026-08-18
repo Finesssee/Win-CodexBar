@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { getProviderChartData, getSettingsSnapshot } from "../../../../../lib/tauri";
 import { providerSupportsChartData } from "../../../../../lib/providerCharts";
 import type { ProviderChartData, SettingsSnapshot } from "../../../../../types/bridge";
@@ -13,6 +13,8 @@ type T = ReturnType<typeof useLocale>["t"];
 interface Props {
   providerId: string;
   accountEmail: string | null;
+  /** Per-provider accent color override (hex); applied as CSS --provider-accent. */
+  accentColor?: string;
   t: T;
 }
 
@@ -27,7 +29,7 @@ type TabKey = "tokens" | "cost" | "credits" | "usage";
  * Phase 10: fetches the latest settings snapshot so the animation flag feeds
  * through to each chart component.
  */
-export function ChartsSection({ providerId, accountEmail, t }: Props) {
+export function ChartsSection({ providerId, accountEmail, accentColor, t }: Props) {
   const [data, setData] = useState<ProviderChartData | null>(null);
   const [active, setActive] = useState<TabKey | null>(null);
   const [animations, setAnimations] = useState(true);
@@ -98,9 +100,12 @@ export function ChartsSection({ providerId, accountEmail, t }: Props) {
     if (k === "credits") return t("DetailChartCredits");
     return t("DetailChartUsageBreakdown");
   };
-
   return (
-    <section className="provider-detail-section provider-detail-charts">
+
+    <section
+      className="provider-detail-section provider-detail-charts"
+      style={accentColor ? ({ "--provider-accent": accentColor } as CSSProperties) : undefined}
+    >
       <div className="provider-detail-charts__tabs" role="tablist">
         {available.map((k) => (
           <button

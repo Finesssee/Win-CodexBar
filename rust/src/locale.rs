@@ -1043,6 +1043,23 @@ locale_keys! {
     PromoteTrayIconLabel,
     PromoteTrayIconHelper,
     PromoteTrayIconUnsupportedHint,
+
+    // Mistral PAYG monthly spend (#2821, #2947)
+    MistralMonthlySpend,
+    MistralMonthlySpendHelper,
+
+    // Menu cost-summary display style (#2976)
+    CostSummaryDisplayStyle,
+    CostSummaryDisplayStyleHelper,
+    CostSummaryStyleCompact,
+    CostSummaryStyleDetailed,
+    CostSummaryStyleHidden,
+
+    // Per-provider accent color override (#2972)
+    ProviderAccentColor,
+    ProviderAccentColorHelper,
+    ProviderAccentColorReset,
+    ProviderAccentColorInvalid,
 }
 
 #[cfg(test)]

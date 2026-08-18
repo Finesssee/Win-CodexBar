@@ -218,6 +218,12 @@ pub struct CostSnapshot {
     /// Currency code (e.g., "USD")
     pub currency_code: String,
 
+    /// Optional currency symbol (e.g. "€", "$", "¥"). When present,
+    /// surfaces carry it to the UI for localized currency rendering instead
+    /// of deriving the symbol from the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency_symbol: Option<String>,
+
     /// Period description (e.g., "Monthly", "Daily")
     pub period: String,
 
@@ -240,6 +246,7 @@ impl CostSnapshot {
             used: finite_amount(used).unwrap_or(0.0),
             limit: None,
             currency_code: currency_code.into(),
+            currency_symbol: None,
             period: period.into(),
             resets_at: None,
             updated_at: Utc::now(),
@@ -256,6 +263,12 @@ impl CostSnapshot {
     /// Builder pattern: set remaining prepaid balance (finite, ≥ 0 only)
     pub fn with_balance(mut self, balance: f64) -> Self {
         self.balance = finite_amount(balance);
+        self
+    }
+
+    /// Builder pattern: set currency symbol for localized rendering.
+    pub fn with_currency_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.currency_symbol = Some(symbol.into());
         self
     }
 

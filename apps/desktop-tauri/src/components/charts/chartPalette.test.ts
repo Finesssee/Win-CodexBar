@@ -8,29 +8,31 @@ import {
 describe("chartPalette.providerColor", () => {
   it("returns a CSS var() expression referencing a provider token for known ids", () => {
     expect(providerCostColor("claude")).toBe(
-      "var(--chart-claude, var(--chart-cost))",
+      "var(--chart-claude, var(--provider-accent, var(--chart-cost)))",
     );
     expect(providerCreditsColor("codex")).toBe(
-      "var(--chart-codex, var(--chart-credits))",
+      "var(--chart-codex, var(--provider-accent, var(--chart-credits)))",
     );
   });
 
   it("is case-insensitive and handles spaced aliases", () => {
     expect(providerCostColor("CURSOR")).toBe(
-      "var(--chart-cursor, var(--chart-cost))",
+      "var(--chart-cursor, var(--provider-accent, var(--chart-cost)))",
     );
     expect(providerCostColor("Kimi K2")).toBe(
-      "var(--chart-kimik2, var(--chart-cost))",
+      "var(--chart-kimik2, var(--provider-accent, var(--chart-cost)))",
     );
     expect(providerCostColor("Vertex AI")).toBe(
-      "var(--chart-vertexai, var(--chart-cost))",
+      "var(--chart-vertexai, var(--provider-accent, var(--chart-cost)))",
     );
   });
 
   it("falls back to the generic cost/credits token for unknown providers", () => {
-    expect(providerCostColor("unknown-provider-xyz")).toBe("var(--chart-cost)");
+    expect(providerCostColor("unknown-provider-xyz")).toBe(
+      "var(--provider-accent, var(--chart-cost))",
+    );
     expect(providerCreditsColor("another-ghost")).toBe(
-      "var(--chart-credits)",
+      "var(--provider-accent, var(--chart-credits))",
     );
   });
 });

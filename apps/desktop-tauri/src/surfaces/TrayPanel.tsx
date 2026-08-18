@@ -126,7 +126,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             showResetWhenExhausted: settings.showResetWhenExhausted,
             showAsUsed: settings.showAsUsed,
             compactMetrics: selectedProviderId === null,
+            costSummaryDisplayStyle: settings.costSummaryDisplayStyle,
           }}
+          accentColor={settings.providerAccentColors[p.providerId]}
           onLayoutChange={requestLayout}
         />
       </div>

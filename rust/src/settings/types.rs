@@ -280,6 +280,9 @@ pub enum MetricPreference {
     Credits,
     #[serde(rename = "extraUsage", alias = "extrausage")]
     ExtraUsage,
+    /// Current-month plan spend for PAYG providers (e.g. Mistral) that have
+    /// cost data but no rate-limit window (#2821, #2947).
+    MonthlyPlan,
     Average,
 }
 
@@ -294,6 +297,7 @@ impl MetricPreference {
             MetricPreference::Tertiary,
             MetricPreference::Credits,
             MetricPreference::ExtraUsage,
+            MetricPreference::MonthlyPlan,
             MetricPreference::Average,
         ]
     }
@@ -308,6 +312,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary",
             MetricPreference::Credits => "Credits",
             MetricPreference::ExtraUsage => "Extra usage",
+            MetricPreference::MonthlyPlan => "Monthly plan spend",
             MetricPreference::Average => "Average",
         }
     }
@@ -322,8 +327,29 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary usage limit",
             MetricPreference::Credits => "Credit balance",
             MetricPreference::ExtraUsage => "On-demand or extra usage budget",
+            MetricPreference::MonthlyPlan => "Current-month plan spend (PAYG)",
             MetricPreference::Average => "Average across metrics",
         }
+    }
+}
+
+/// How cost is rendered on provider MenuCards (#2976).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CostSummaryDisplayStyle {
+    #[default]
+    Compact,
+    Detailed,
+    Hidden,
+}
+
+impl CostSummaryDisplayStyle {
+    pub fn all() -> &'static [CostSummaryDisplayStyle] {
+        &[
+            CostSummaryDisplayStyle::Compact,
+            CostSummaryDisplayStyle::Detailed,
+            CostSummaryDisplayStyle::Hidden,
+        ]
     }
 }
 
@@ -365,4 +391,8 @@ pub struct ProviderConfig {
     /// Claude-only: avoid keychain prompts when reading credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_keychain_prompts: bool,
+    /// Per-provider accent color override (hex, e.g. "#FF5733"). `None`
+    /// means the shipped brand color is used (#2972).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_color: Option<String>,
 }

@@ -787,6 +787,23 @@ export const ALL_LOCALE_KEYS = [
   "PromoteTrayIconLabel",
   "PromoteTrayIconHelper",
   "PromoteTrayIconUnsupportedHint",
+
+  // Mistral PAYG monthly spend (#2821, #2947)
+  "MistralMonthlySpend",
+  "MistralMonthlySpendHelper",
+
+  // Menu cost-summary display style (#2976)
+  "CostSummaryDisplayStyle",
+  "CostSummaryDisplayStyleHelper",
+  "CostSummaryStyleCompact",
+  "CostSummaryStyleDetailed",
+  "CostSummaryStyleHidden",
+
+  // Per-provider accent color override (#2972)
+  "ProviderAccentColor",
+  "ProviderAccentColorHelper",
+  "ProviderAccentColorReset",
+  "ProviderAccentColorInvalid",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

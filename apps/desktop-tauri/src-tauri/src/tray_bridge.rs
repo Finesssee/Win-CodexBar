@@ -563,6 +563,25 @@ fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     lang: codexbar::settings::Language,
 ) -> (String, String) {
+    // MonthlyPlan metric (PAYG spend, e.g. Mistral): show formatted cost.
+    let provider = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id);
+    let preference = provider
+        .map(|id| Settings::load().get_provider_metric(id))
+        .unwrap_or_default();
+    if preference == MetricPreference::MonthlyPlan
+        && let Some(cost) = snapshot.cost.as_ref()
+    {
+        let amount = if !cost.formatted_used.is_empty() {
+            cost.formatted_used.clone()
+        } else {
+            crate::commands::format_cost_amount(cost)
+        };
+        return (
+            snapshot.provider_id.clone(),
+            format!("{} {}", snapshot.display_name, amount),
+        );
+    }
+
     // F5 (upstream 0.48.0): for Codex, prefer the first non-informational lane so
     // a monthly-only plan shows the monthly window with its reset countdown
     // instead of the informational "No active 5h session" placeholder.
@@ -1041,6 +1060,7 @@ mod tests {
                 limit: Some(limit),
                 remaining: Some((limit - used).max(0.0)),
                 currency_code: "USD".to_string(),
+                currency_symbol: None,
                 period: "monthly".to_string(),
                 resets_at: None,
                 formatted_used: format!("${used:.2}"),

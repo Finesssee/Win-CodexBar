@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type {
+  CostSummaryDisplayStyle,
   DailyCostPoint,
   PaceSnapshot,
   ProviderChartData,
@@ -270,11 +271,11 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
 
   return { kind: "none" };
 }
-
 type MetricRowDisplay = {
   resetTimeRelative: boolean;
   showResetWhenExhausted?: boolean;
   showAsUsed?: boolean;
+  costSummaryDisplayStyle?: CostSummaryDisplayStyle;
 };
 
 /**
@@ -433,6 +434,7 @@ export function describeCard(
   provider: ProviderUsageSnapshot,
   chartData: ProviderChartData | null,
   visibleMetrics: MetricEntry[],
+  costSummaryDisplayStyle: CostSummaryDisplayStyle = "detailed",
 ): MenuCardPresence {
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
@@ -445,7 +447,7 @@ export function describeCard(
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
   const hasMetrics = visibleMetrics.length > 0;
-  const hasCost = !!provider.cost;
+  const hasCost = !!provider.cost && costSummaryDisplayStyle !== "hidden";
   const hasPace = !!provider.pace;
   const hasDetails =
     !provider.error &&
@@ -481,6 +483,7 @@ export default function MenuCardDetails({
     display.resetTimeRelative,
   );
   const localCostHistory = chartData?.costHistory ?? [];
+  const costStyle = display.costSummaryDisplayStyle ?? "detailed";
 
   const {
     hasMetrics,
@@ -529,9 +532,9 @@ export default function MenuCardDetails({
         />
       )}
 
-      {hasMetrics && hasCost && <div className="menu-card__divider" />}
+      {hasMetrics && hasCost && costStyle !== "hidden" && <div className="menu-card__divider" />}
 
-      {provider.cost && (
+      {provider.cost && costStyle !== "hidden" && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
             {provider.cost.balance != null && provider.cost.limit == null
@@ -566,7 +569,7 @@ export default function MenuCardDetails({
                   </>
                 )}
               </div>
-              {provider.cost.balance != null && (
+              {costStyle === "detailed" && provider.cost.balance != null && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostBalance")}:{" "}
                   {provider.cost.formattedBalance ||
@@ -576,7 +579,7 @@ export default function MenuCardDetails({
                     )}
                 </div>
               )}
-              {provider.cost.remaining != null && (
+              {costStyle === "detailed" && provider.cost.remaining != null && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostRemaining")}:{" "}
                   {formatCurrency(
@@ -585,12 +588,20 @@ export default function MenuCardDetails({
                   )}
                 </div>
               )}
-              {formattedCostReset && (
+              {costStyle === "detailed" && formattedCostReset && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostResets")}: {formattedCostReset}
                 </div>
               )}
             </>
+          )}
+          {provider.providerId === "mistral" && provider.cost && (
+            <div className="menu-card__cost-line menu-card__monthly-spend">
+              {t("MistralMonthlySpend")}:{" "}
+              {provider.cost.currencySymbol
+                ? `${provider.cost.currencySymbol}${provider.cost.used.toFixed(2)}`
+                : provider.cost.formattedUsed}
+            </div>
           )}
         </section>
       )}
@@ -649,7 +660,7 @@ export default function MenuCardDetails({
             <SimpleBarChart
               points={chartData!.costHistory}
               label={t("DetailChartCost")}
-              color="var(--accent)"
+              color="var(--provider-accent, var(--accent))"
               formatValue={(v) => `$${v.toFixed(2)}`}
               t={t}
             />

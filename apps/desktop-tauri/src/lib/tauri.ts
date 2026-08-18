@@ -376,6 +376,25 @@ export function setProviderGatewayUrl(
   return invoke<void>("set_provider_gateway_url", { providerId, gatewayUrl });
 }
 
+export function setProviderAccentColor(
+  providerId: string,
+  color: string | null,
+): Promise<void> {
+  return invoke<void>("set_provider_accent_color", { providerId, color });
+}
+
+export function getProviderAccentColor(
+  providerId: string,
+): Promise<string | null> {
+  return invoke<string | null>("get_provider_accent_color", { providerId });
+}
+
+export function getProviderEffectiveAccentColor(
+  providerId: string,
+): Promise<string> {
+  return invoke<string>("get_provider_effective_accent_color", { providerId });
+}
+
 // ── Phase 6d — credential detection ──────────────────────────────────
 
 export function openPath(path: string): Promise<void> {

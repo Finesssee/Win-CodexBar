@@ -4252,7 +4252,7 @@ html:has(.menu-surface--tray) {
 .menu-metric__bar-fill {
   height: 100%;
   border-radius: 3px;
-  background: var(--usage-bar-normal);
+  background: var(--provider-accent, var(--usage-bar-normal));
   transition: width 0.3s ease;
 }
 
@@ -5915,4 +5915,69 @@ html:has(.menu-surface--tray) {
 
 .agent-sessions__error {
   color: var(--provider-status-error);
+}
+
+/* ── Per-provider accent color override (#2972) ─────────────────── */
+.provider-detail-accent-color {
+  margin-top: 16px;
+}
+
+.accent-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.accent-color-picker {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  background: none;
+}
+
+.accent-color-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  background: var(--surface-elevated);
+  color: inherit;
+}
+
+.accent-color-swatch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.accent-color-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.accent-color-swatch-label {
+  color: var(--text-secondary);
+}
+
+.accent-color-swatch-value {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+}
+
+/* ── Mistral monthly spend row (#2821, #2947) ──────────────────── */
+.menu-card__monthly-spend {
+  margin-top: 4px;
+  font-weight: 500;
 }

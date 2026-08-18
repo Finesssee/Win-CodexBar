@@ -70,6 +70,7 @@ pub struct SettingsUpdate {
     pub claude_daily_routines_usage_visible: Option<bool>,
     pub alibaba_token_plan_region: Option<String>,
     pub weekly_progress_work_days: Option<u8>,
+    pub cost_summary_display_style: Option<String>,
 }
 
 impl SettingsUpdate {
@@ -325,6 +326,13 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.weekly_progress_work_days {
             settings.weekly_progress_work_days = if (2..=6).contains(&v) { Some(v) } else { None };
+        }
+        if let Some(v) = self
+            .cost_summary_display_style
+            .as_deref()
+            .and_then(crate::commands::bridge::parse_cost_summary_display_style)
+        {
+            settings.cost_summary_display_style = v;
         }
         self
     }

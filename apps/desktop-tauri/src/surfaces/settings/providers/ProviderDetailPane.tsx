@@ -35,6 +35,7 @@ import { TokenAccountsPanel } from "../tokens/TokenAccountsPanel";
 import { ApiKeySection } from "./ApiKeySection";
 import { CookieSection } from "./CookieSection";
 import { MenuBarMetricSection } from "./sections/MenuBarMetricSection";
+import { AccentColorSection } from "./sections/AccentColorSection";
 import { ProviderIssueNotice } from "./sections/ProviderIssueNotice";
 import { CredentialStorageSection } from "./sections/CredentialStorageSection";
 import { CredentialsDispatcher } from "./sections/CredentialsDispatcher";
@@ -45,6 +46,8 @@ interface Props {
   cookieDomain?: string | null;
   resetTimeRelative: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
+  /** Per-provider accent color overrides (CLI name → hex color). */
+  providerAccentColors: SettingsSnapshot["providerAccentColors"];
   wayfinderGatewayUrl: string;
   settingsDisabled: boolean;
   onSettingsChange: (patch: SettingsUpdate) => void;
@@ -62,6 +65,7 @@ export function ProviderDetailPane({
   cookieDomain = null,
   resetTimeRelative,
   providerMetrics,
+  providerAccentColors,
   wayfinderGatewayUrl,
   settingsDisabled,
   onSettingsChange,
@@ -298,6 +302,7 @@ export function ProviderDetailPane({
         t={t}
         onChange={onSettingsChange}
       />
+      <AccentColorSection providerId={detail.id} t={t} />
       <PaceSection pace={detail.pace} t={t} />
       <CostSection cost={detail.cost} t={t} />
 
@@ -340,6 +345,7 @@ export function ProviderDetailPane({
       <ChartsSection
         providerId={detail.id}
         accountEmail={detail.email}
+        accentColor={providerAccentColors[detail.id]}
         t={t}
       />
 

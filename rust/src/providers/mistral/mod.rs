@@ -257,6 +257,7 @@ impl MistralProvider {
         }
 
         let mut cost = CostSnapshot::new(summary.total_cost, summary.currency, "Monthly");
+        cost = cost.with_currency_symbol(summary.currency_symbol);
         if let Some(reset) = reset_date {
             cost = cost.with_resets_at(reset);
         }

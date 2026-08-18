@@ -111,7 +111,10 @@ impl LocalUsageSnapshot {
             Some(monthly_reset),
             None,
         ));
-        ProviderFetchResult::new(snap, "local")
+        // Upstream 0.51 (#2982): local SQLite quota reconstruction is useful
+        // but it is not server-confirmed authority. Keep that distinction in
+        // the data contract so CLI/React can present it without guessing.
+        ProviderFetchResult::new(snap, "local estimate")
     }
 }
 

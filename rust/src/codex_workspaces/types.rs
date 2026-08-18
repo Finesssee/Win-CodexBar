@@ -157,6 +157,9 @@ pub struct CodexLocalProjectUsageSnapshot {
     pub indexed_file_count: u32,
     pub skipped_file_count: u32,
     pub total: UsageTotals,
+    /// All indexed conversations in the selected history window.
+    #[serde(default)]
+    pub sessions: Vec<SessionUsage>,
     pub projects: Vec<ProjectUsage>,
     pub daily: Vec<DailyPoint>,
     pub source_status: SourceStatus,
@@ -166,6 +169,10 @@ impl CodexLocalProjectUsageSnapshot {
     /// Strip paths/titles for presentation when hide-personal-info is on.
     /// Does not rewrite the sidecar.
     pub fn redact_for_privacy(&mut self) {
+        for session in &mut self.sessions {
+            session.display_title = "Local Codex chat".to_string();
+            session.cwd = None;
+        }
         for project in &mut self.projects {
             if project.id == crate::codex_workspaces::CHATS_PROJECT_ID {
                 project.display_name = crate::codex_workspaces::CHATS_DISPLAY_NAME.to_string();

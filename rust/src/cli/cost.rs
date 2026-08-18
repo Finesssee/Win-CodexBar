@@ -45,6 +45,25 @@ pub struct CostArgs {
     /// observable effect in the current environment.
     #[arg(long = "provider-native-only")]
     pub provider_native_only: bool,
+
+    /// Group text output by Codex local conversation/session.
+    #[arg(long = "group-by", value_parser = ["session"])]
+    pub group_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CostGroupBy {
+    None,
+    Session,
+}
+
+impl CostGroupBy {
+    fn from_arg(raw: Option<&str>) -> Self {
+        match raw {
+            Some("session") => Self::Session,
+            _ => Self::None,
+        }
+    }
 }
 
 /// Run the cost command
@@ -56,6 +75,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     };
 
     let providers = ProviderSelection::from_arg(args.provider.as_deref())?;
+    let group_by = CostGroupBy::from_arg(args.group_by.as_deref());
     let use_color = !args.no_color && is_terminal();
     let mut scan_options = CostScanOptions::app_driven();
     scan_options.include_pi_sessions = !args.provider_native_only;
@@ -105,7 +125,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
 
     match format {
         OutputFormat::Text => {
-            print_text_output(&results, use_color, args.days);
+            print_text_output(&results, use_color, args.days, group_by);
         }
         OutputFormat::Json => {
             print_json_output(&results, args.pretty, args.days)?;
@@ -124,7 +144,7 @@ struct CostResult {
 }
 
 /// Print text output
-fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
+fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_by: CostGroupBy) {
     for (i, result) in results.iter().enumerate() {
         if use_color {
             println!(
@@ -135,7 +155,11 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             println!("{} Cost (last {} days)", result.display_name, days);
         }
 
-        if !result.supported {
+        if group_by == CostGroupBy::Session && result.provider == "codex" {
+            print_codex_session_output(result, days);
+        } else if group_by == CostGroupBy::Session {
+            println!("  Session grouping is only available for Codex local conversations");
+        } else if !result.supported {
             println!("  Local cost scanning not available for this provider");
             println!("  (Only Codex and Claude have local logs)");
         } else if result.summary.sessions_count == 0 {
@@ -213,6 +237,69 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             println!();
         }
     }
+}
+
+
+fn print_codex_session_output(result: &CostResult, days: u32) {
+    let index = crate::codex_workspaces::CodexWorkspacesIndex::new(days);
+    let snapshot = match index.load_snapshot(false, |_| {}) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            println!("  Conversation history unavailable: {err}");
+            return;
+        }
+    };
+
+    println!("  Conversations (last {} days):", snapshot.history_days);
+    if snapshot.source_status.is_partial() {
+        println!("  Conversation history is incomplete while local indexing catches up.");
+    }
+
+    if snapshot.sessions.is_empty() {
+        println!("  —");
+    } else {
+        for session in &snapshot.sessions {
+            let id = short_session_id(&session.id);
+            let cost = if session.cost_estimate.unknown_tokens > 0 {
+                format!("~${:.2} partial", session.cost_estimate.known_usd)
+            } else {
+                format!("${:.2}", session.cost_estimate.known_usd)
+            };
+            let model = session.top_model.as_deref().unwrap_or("unknown model");
+            println!(
+                "  Session {id}: {cost} · {} tokens · {model}",
+                format_number(session.totals.total_tokens)
+            );
+            if let Some(activity) = session.latest_activity {
+                println!(
+                    "    {}",
+                    activity.with_timezone(&chrono::Local).format("%b %d, %H:%M")
+                );
+            }
+        }
+    }
+
+    if !result.summary.history_coverage_established {
+        println!("  Coverage: partial (cost history catch-up in progress)");
+    }
+    println!("  Not a subscription bill or plan value · local usage × public API prices");
+}
+
+fn short_session_id(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= 12 {
+        return trimmed.to_string();
+    }
+    let prefix: String = trimmed.chars().take(4).collect();
+    let suffix: String = trimmed
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
 }
 
 /// Print JSON output
@@ -399,5 +486,17 @@ mod tests {
         // Default CostArgs has provider_native_only = false (backward compat).
         let args = CostArgs::default();
         assert!(!args.provider_native_only);
+    }
+
+    #[test]
+    fn group_by_defaults_none_and_accepts_session() {
+        assert_eq!(CostGroupBy::from_arg(None), CostGroupBy::None);
+        assert_eq!(CostGroupBy::from_arg(Some("session")), CostGroupBy::Session);
+    }
+
+    #[test]
+    fn short_session_id_is_privacy_conscious() {
+        assert_eq!(short_session_id("abc"), "abc");
+        assert_eq!(short_session_id("1234567890abcdef"), "1234...90abcdef");
     }
 }

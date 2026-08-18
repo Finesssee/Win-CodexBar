@@ -230,6 +230,14 @@ impl CodexWorkspacesIndex {
             .collect();
         daily.sort_by(|a, b| a.day.cmp(&b.day));
 
+        let mut sessions: Vec<SessionUsage> =
+            session_buckets.values().map(SessionBucket::to_session_usage).collect();
+        sessions.sort_by(|a, b| {
+            b.latest_activity
+                .cmp(&a.latest_activity)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
         let snapshot = CodexLocalProjectUsageSnapshot {
             updated_at: Utc::now(),
             history_days: self.history_days,
@@ -237,6 +245,7 @@ impl CodexWorkspacesIndex {
             indexed_file_count: indexed,
             skipped_file_count: skipped,
             total,
+            sessions,
             projects,
             daily,
             source_status,
@@ -851,6 +860,17 @@ mod tests {
             indexed_file_count: 1,
             skipped_file_count: 0,
             total: UsageTotals::from_parts(10, 0, 5),
+            sessions: vec![SessionUsage {
+                id: "s1".into(),
+                project_id: "project-abc".into(),
+                display_title: "do not leak".into(),
+                cwd: Some("/Users/me/secret-repo".into()),
+                started_at: None,
+                latest_activity: None,
+                totals: UsageTotals::from_parts(10, 0, 5),
+                cost_estimate: CostEstimate::default(),
+                top_model: Some("gpt-5".into()),
+            }],
             projects: vec![ProjectUsage {
                 id: "project-abc".into(),
                 display_name: "secret-repo".into(),

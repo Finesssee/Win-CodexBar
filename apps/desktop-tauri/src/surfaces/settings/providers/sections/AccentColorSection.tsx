@@ -1,65 +1,38 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { LocaleKey } from "../../../../i18n/keys";
-import {
-  getProviderAccentColor,
-  setProviderAccentColor,
-} from "../../../../lib/tauri";
+import type { SettingsUpdate } from "../../../../types/bridge";
 import { getProviderIcon } from "../../../../components/providers/providerIcons";
 
 interface Props {
   providerId: string;
+  accentColor: string | null;
   t: (key: LocaleKey) => string;
+  onChange: (patch: SettingsUpdate) => void;
 }
 
 /**
  * Per-provider accent color override (#2972): hex input, native color
  * picker, and a reset-to-shipped-color button. The override is persisted
- * via the `set_provider_accent_color` Tauri command and applied at runtime
- * through the `--provider-accent` CSS custom property.
+ * via the standard settings-update flow (onSettingsChange).
  */
-export function AccentColorSection({ providerId, t }: Props) {
-  const [savedColor, setSavedColor] = useState<string | null>(null);
-  const [input, setInput] = useState("");
+export function AccentColorSection({
+  providerId,
+  accentColor,
+  t,
+  onChange,
+}: Props) {
+  const [input, setInput] = useState(accentColor ?? "");
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const brandColor = getProviderIcon(providerId).brandColor;
+  const effective = accentColor ?? brandColor;
 
-  useEffect(() => {
-    let cancelled = false;
-    void getProviderAccentColor(providerId)
-      .then((color) => {
-        if (cancelled) return;
-        setSavedColor(color);
-        setInput(color ?? "");
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSavedColor(null);
-        setInput("");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [providerId]);
-
-  const effective = savedColor ?? brandColor;
-
-
-  const handleSave = async (raw: string) => {
+  const handleSave = (raw: string) => {
     setError(null);
     const trimmed = raw.trim();
     if (trimmed === "") {
-      setSaving(true);
-      try {
-        await setProviderAccentColor(providerId, null);
-        setSavedColor(null);
-        setInput("");
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setSaving(false);
-      }
+      onChange({ providerAccentColors: { [providerId]: null } });
+      setInput("");
       return;
     }
     const trimmedHex = trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
@@ -68,30 +41,14 @@ export function AccentColorSection({ providerId, t }: Props) {
       return;
     }
     const normalized = `#${trimmedHex.toUpperCase()}`;
-    setSaving(true);
-    try {
-      await setProviderAccentColor(providerId, normalized);
-      setSavedColor(normalized);
-      setInput(normalized);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
+    onChange({ providerAccentColors: { [providerId]: normalized } });
+    setInput(normalized);
   };
 
-  const handleReset = async () => {
+  const handleReset = () => {
     setError(null);
-    setSaving(true);
-    try {
-      await setProviderAccentColor(providerId, null);
-      setSavedColor(null);
-      setInput("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
+    onChange({ providerAccentColors: { [providerId]: null } });
+    setInput("");
   };
 
   return (
@@ -106,11 +63,10 @@ export function AccentColorSection({ providerId, t }: Props) {
           className="accent-color-picker"
           value={effective}
           aria-label={t("ProviderAccentColor")}
-          disabled={saving}
           onChange={(e) => {
             const value = e.target.value.toUpperCase();
             setInput(value);
-            void handleSave(value);
+            handleSave(value);
           }}
         />
         <input
@@ -120,20 +76,19 @@ export function AccentColorSection({ providerId, t }: Props) {
           placeholder={brandColor}
           maxLength={7}
           spellCheck={false}
-          disabled={saving}
           onChange={(e) => setInput(e.target.value)}
-          onBlur={() => void handleSave(input)}
+          onBlur={() => handleSave(input)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              void handleSave(input);
+              handleSave(input);
             }
           }}
         />
         <button
           type="button"
           className="credential-btn credential-btn--secondary"
-          disabled={saving || savedColor === null}
-          onClick={() => void handleReset()}
+          disabled={accentColor === null}
+          onClick={handleReset}
           title={t("ProviderAccentColorReset")}
         >
           {t("ProviderAccentColorReset")}

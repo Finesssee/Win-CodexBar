@@ -1,3 +1,4 @@
+use super::codex_routed_pricing;
 use super::*;
 
 #[test]
@@ -305,30 +306,30 @@ fn test_codex_fast_cost_usd_base_model_unsuffixed() {
 #[test]
 fn codex_routed_provider_detects_known_routes() {
     assert_eq!(
-        CostUsagePricing::codex_routed_provider("deepseek/deepseek-chat"),
+        codex_routed_pricing::codex_routed_provider("deepseek/deepseek-chat"),
         Some("deepseek")
     );
     assert_eq!(
-        CostUsagePricing::codex_routed_provider("kimi/kimi-k2"),
+        codex_routed_pricing::codex_routed_provider("kimi/kimi-k2"),
         Some("kimi")
     );
     assert_eq!(
-        CostUsagePricing::codex_routed_provider("opencode/gpt-5"),
+        codex_routed_pricing::codex_routed_provider("opencode/gpt-5"),
         Some("opencode")
     );
     // Case-insensitive prefix.
     assert_eq!(
-        CostUsagePricing::codex_routed_provider("DeepSeek/deepseek-chat"),
+        codex_routed_pricing::codex_routed_provider("DeepSeek/deepseek-chat"),
         Some("deepseek")
     );
 }
 
 #[test]
 fn codex_routed_provider_returns_none_for_unknown_and_unrouted() {
-    assert!(CostUsagePricing::codex_routed_provider("acme/model-x").is_none());
-    assert!(CostUsagePricing::codex_routed_provider("gpt-5").is_none());
-    assert!(CostUsagePricing::codex_routed_provider("deepseek-chat").is_none());
-    assert!(CostUsagePricing::codex_routed_provider("openai/gpt-5").is_none());
+    assert!(codex_routed_pricing::codex_routed_provider("acme/model-x").is_none());
+    assert!(codex_routed_pricing::codex_routed_provider("gpt-5").is_none());
+    assert!(codex_routed_pricing::codex_routed_provider("deepseek-chat").is_none());
+    assert!(codex_routed_pricing::codex_routed_provider("openai/gpt-5").is_none());
 }
 
 #[test]

@@ -1,14 +1,9 @@
-//! Cost Usage Pricing
-//!
-//! Model-specific token pricing for Codex (OpenAI) and Claude (Anthropic) models.
-//! Supports tiered pricing for models with token thresholds.
+//! Cost usage pricing — model-specific token pricing for Codex (OpenAI) and Claude (Anthropic).
 
-#![allow(dead_code)]
-
+use super::codex_routed_pricing;
 use super::models_dev_pricing;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-
 /// Whole-request Codex rates for input above the model context threshold.
 #[derive(Debug, Clone, Copy)]
 pub struct CodexLongContextRates {
@@ -16,7 +11,6 @@ pub struct CodexLongContextRates {
     pub output_cost_per_token: f64,
     pub cache_read_input_cost_per_token: f64,
 }
-
 /// Codex (OpenAI) model pricing
 #[derive(Debug, Clone, Copy)]
 pub struct CodexPricing {
@@ -31,7 +25,6 @@ pub struct CodexPricing {
     /// Whole-request rates above the Codex long-context threshold.
     pub long_context: Option<CodexLongContextRates>,
 }
-
 /// Claude (Anthropic) model pricing with optional tiered pricing
 #[derive(Debug, Clone, Copy)]
 pub struct ClaudePricing {
@@ -54,7 +47,6 @@ pub struct ClaudePricing {
     /// Cost per cache read input token above threshold
     pub cache_read_input_cost_per_token_above_threshold: Option<f64>,
 }
-
 /// Codex model pricing table
 static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::new(|| {
     let mut m = HashMap::new();
@@ -345,7 +337,6 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
 });
 
 const CODEX_LONG_CONTEXT_THRESHOLD: u64 = 272_000;
-
 /// Claude model pricing table
 static CLAUDE_PRICING: LazyLock<HashMap<&'static str, ClaudePricing>> = LazyLock::new(|| {
     let mut m = HashMap::new();
@@ -597,7 +588,6 @@ fn codex_cost_from_rates(
         + (cached as f64) * cache_read_rate
         + (output_tokens as f64) * output_rate
 }
-
 /// Cost usage pricing utilities
 pub struct CostUsagePricing;
 
@@ -607,7 +597,6 @@ impl CostUsagePricing {
     /// Usage remains visible under this key but is never priced as a real model
     /// (including catalog collisions with a generic "unknown" entry).
     pub const CODEX_UNATTRIBUTED_MODEL: &'static str = "unknown";
-
     /// True when `model` is the unattributed / model-less sentinel.
     pub fn is_codex_unattributed_model(model: &str) -> bool {
         Self::normalize_codex_model(model) == Self::CODEX_UNATTRIBUTED_MODEL
@@ -651,44 +640,10 @@ impl CostUsagePricing {
         trimmed
     }
 
-    /// Detect a provider-qualified route prefix on a Codex model name and
-    /// return the matching models.dev provider id (upstream 0.50.1 #2946).
-    ///
-    /// Codex rollouts routed through a non-OpenAI backend (DeepSeek, Kimi,
-    /// OpenCode) carry the provider as a `provider/model` prefix. This returns
-    /// the models.dev provider id so the cost lookup prices against the right
-    /// catalog instead of falling back to OpenAI.
-    ///
-    /// Known routes: `deepseek/` → "deepseek", `kimi/` → "kimi",
-    /// `opencode/` → "opencode". The `openai/` prefix is stripped by
-    /// [`normalize_codex_model`] and priced against the OpenAI catalog as
-    /// before. Unknown `provider/` prefixes return `None` here so the caller
-    /// leaves them unpriced rather than guessing.
+    /// Detect a provider-qualified route prefix on a Codex model name.
+    /// Delegates to [`codex_routed_pricing::codex_routed_provider`].
     pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
-        let trimmed = model.trim();
-        let (prefix, _rest) = trimmed.split_once('/')?;
-        match prefix.to_ascii_lowercase().as_str() {
-            "deepseek" => Some("deepseek"),
-            "kimi" => Some("kimi"),
-            "opencode" => Some("opencode"),
-            _ => None,
-        }
-    }
-
-    /// Strip a known route prefix, returning the model id for a models.dev
-    /// lookup. Unknown prefixes are left intact (the caller leaves them
-    /// unpriced). `openai/` is also stripped here for the routed path.
-    fn strip_route_prefix(model: &str) -> &str {
-        let trimmed = model.trim();
-        if let Some(rest) = trimmed.strip_prefix("openai/") {
-            return rest;
-        }
-        if Self::codex_routed_provider(trimmed).is_some()
-            && let Some((_prefix, rest)) = trimmed.split_once('/')
-        {
-            return rest;
-        }
-        trimmed
+        codex_routed_pricing::codex_routed_provider(model)
     }
 
     /// Get the display label for a Codex model (e.g. "Research Preview")
@@ -835,8 +790,8 @@ impl CostUsagePricing {
         // Upstream 0.50.1 #2946: provider-qualified routed models are priced
         // against the matching models.dev provider, not OpenAI. Unknown
         // `provider/` prefixes are left unpriced (not guessed as OpenAI).
-        let (provider_id, lookup_model) = match Self::codex_routed_provider(model) {
-            Some(routed) => (routed, Self::strip_route_prefix(model)),
+        let (provider_id, lookup_model) = match codex_routed_pricing::codex_routed_provider(model) {
+            Some(routed) => (routed, codex_routed_pricing::strip_route_prefix(model)),
             None if model.trim().contains('/') && !model.trim().starts_with("openai/") => {
                 // Unknown route prefix — do not guess. Leave unpriced.
                 return None;

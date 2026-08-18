@@ -319,6 +319,7 @@ export interface SettingsUpdate {
   alibabaTokenPlanRegion?: string;
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  providerAccentColors?: Record<string, string | null>;
 }
 
 export interface UsageThresholdOverride {

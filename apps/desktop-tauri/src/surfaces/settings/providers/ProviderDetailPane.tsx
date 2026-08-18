@@ -302,7 +302,12 @@ export function ProviderDetailPane({
         t={t}
         onChange={onSettingsChange}
       />
-      <AccentColorSection providerId={detail.id} t={t} />
+      <AccentColorSection
+        providerId={detail.id}
+        accentColor={providerAccentColors[detail.id] ?? null}
+        t={t}
+        onChange={onSettingsChange}
+      />
       <PaceSection pace={detail.pace} t={t} />
       <CostSection cost={detail.cost} t={t} />
 

@@ -3,9 +3,10 @@
 use std::sync::Mutex;
 
 use crate::commands::ProviderCatalogEntry;
-use codexbar::settings::{Settings, TrayIconMode};
 #[cfg(test)]
-use codexbar::{core::ProviderId, settings::MetricPreference};
+use codexbar::core::ProviderId;
+use codexbar::settings::MetricPreference;
+use codexbar::settings::{Settings, TrayIconMode};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

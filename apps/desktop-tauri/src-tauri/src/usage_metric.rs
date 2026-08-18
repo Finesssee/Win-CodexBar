@@ -49,6 +49,7 @@ fn preferred_window(
             extra_usage_window(snapshot).or_else(|| cost_window(snapshot))
         }
         MetricPreference::Average => average_window(snapshot),
+        MetricPreference::MonthlyPlan => cost_window(snapshot),
     }
 }
 

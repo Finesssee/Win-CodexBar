@@ -324,6 +324,14 @@ HooksEnableHelper = Master switch. hooks.json must also set enabled=true and lis
 HooksConfigPathHint = Config path: %APPDATA%\CodexBar\hooks.json (same folder as settings.json). Events: quota_low, quota_reached, quota_reset. No shell; env is limited to PATH/HOME/USER/TEMP plus CODEXBAR_*.
 UsageSpendTitle = Usage & Spend
 UsageSpendCaption = Local estimated cost history for Codex and Claude (JSONL logs), plus period cost snapshots from other providers when available.
+UsageSpendModels = Models
+UsageSpendProjects = Projects
+UsageSpendShowAll = Show all
+UsageSpendShowLess = Show less
+UsageSpendConversations = conversations
+UsageSpendPartialHistory = partial history
+UsageSpendNoModels = No model-level history yet.
+UsageSpendNoProjects = No indexed Codex projects yet.
 UsageSpendRefresh = Refresh
 UsageSpendLoading = Scanning…
 UsageSpendRefreshing = Refreshing…

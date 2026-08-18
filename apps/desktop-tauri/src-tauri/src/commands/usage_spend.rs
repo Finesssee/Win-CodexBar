@@ -31,24 +31,42 @@ pub struct UsageSpendRow {
 #[serde(rename_all = "camelCase")]
 pub struct UsageSpendSummary {
     pub rows: Vec<UsageSpendRow>,
+    pub models: Vec<UsageSpendModelRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSpendModelRow {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model_name: String,
+    pub cost_usd: Option<f64>,
+    pub total_tokens: Option<u64>,
+    pub partial: bool,
 }
 
 #[tauri::command]
 pub async fn get_usage_spend_summary(
     state: State<'_, Mutex<AppState>>,
+    history_days: Option<u32>,
 ) -> Result<UsageSpendSummary, String> {
     let cached = {
         let guard = state.lock().map_err(|e| e.to_string())?;
         guard.provider_cache.clone()
     };
 
-    tauri::async_runtime::spawn_blocking(move || build_usage_spend_summary(&cached))
+    let detail_days = match history_days.unwrap_or(30) {
+        1..=7 => 7,
+        _ => 30,
+    };
+    tauri::async_runtime::spawn_blocking(move || build_usage_spend_summary(&cached, detail_days))
         .await
         .map_err(|e| format!("usage spend worker failed: {e}"))
 }
 
-fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot]) -> UsageSpendSummary {
+fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot], detail_days: u32) -> UsageSpendSummary {
     let mut rows = Vec::new();
+    let mut models = Vec::new();
 
     // F8 (upstream 0.48.0): check codex cache staleness before scanning. When the
     // debounce has expired, the scan below will rebuild the cache — mark the row
@@ -67,7 +85,10 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot]) -> UsageSpendSumm
 
     // Local JSONL scanners for Codex / Claude (primary spend sources).
     let codex_7 = CostScanner::new(7).scan_codex().total_cost_usd;
-    let codex_30 = CostScanner::new(30).scan_codex().total_cost_usd;
+    let codex_30_summary = CostScanner::new(30).scan_codex();
+    let codex_30 = codex_30_summary.total_cost_usd;
+    let codex_detail = if detail_days == 30 { codex_30_summary.clone() } else { CostScanner::new(detail_days).scan_codex() };
+    extend_model_rows(&mut models, "codex", "Codex", &codex_detail);
     rows.push(UsageSpendRow {
         provider_id: "codex".into(),
         display_name: "Codex".into(),
@@ -80,7 +101,10 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot]) -> UsageSpendSumm
     });
 
     let claude_7 = CostScanner::new(7).scan_claude().total_cost_usd;
-    let claude_30 = CostScanner::new(30).scan_claude().total_cost_usd;
+    let claude_30_summary = CostScanner::new(30).scan_claude();
+    let claude_30 = claude_30_summary.total_cost_usd;
+    let claude_detail = if detail_days == 30 { claude_30_summary.clone() } else { CostScanner::new(detail_days).scan_claude() };
+    extend_model_rows(&mut models, "claude", "Claude", &claude_detail);
     rows.push(UsageSpendRow {
         provider_id: "claude".into(),
         display_name: "Claude".into(),
@@ -117,5 +141,47 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot]) -> UsageSpendSumm
         });
     }
 
-    UsageSpendSummary { rows }
+    models.sort_by(|left, right| match (left.cost_usd, right.cost_usd) {
+        (Some(a), Some(b)) => b
+            .partial_cmp(&a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.model_name.cmp(&right.model_name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.model_name.cmp(&right.model_name),
+    });
+
+    UsageSpendSummary { rows, models }
+}
+
+fn extend_model_rows(
+    rows: &mut Vec<UsageSpendModelRow>,
+    provider_id: &str,
+    provider_name: &str,
+    summary: &codexbar::cost_scanner::CostSummary,
+) {
+    let mut names: std::collections::HashSet<String> = summary.by_model.keys().cloned().collect();
+    names.extend(summary.by_model_tokens.keys().cloned());
+    names.extend(summary.unknown_models.iter().cloned());
+
+    for model_name in names {
+        let partial = summary.unknown_models.contains(&model_name);
+        let total_tokens = summary
+            .by_model_tokens
+            .get(&model_name)
+            .map(|tokens| tokens.total());
+        let cost_usd = if partial {
+            None
+        } else {
+            summary.by_model.get(&model_name).copied()
+        };
+        rows.push(UsageSpendModelRow {
+            provider_id: provider_id.to_string(),
+            provider_name: provider_name.to_string(),
+            model_name,
+            cost_usd,
+            total_tokens,
+            partial,
+        });
+    }
 }

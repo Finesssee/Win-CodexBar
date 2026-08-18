@@ -111,12 +111,20 @@ impl GrokProvider {
         let billing = self
             .fetch_billing(None, Some(cookie_header.to_string()))
             .await?;
+        // Upstream 0.52 (#2991): the browser billing response does not carry
+        // the paid SuperGrok tier. If the local Grok principal is available,
+        // use its settings endpoint only as identity enrichment, never as a
+        // replacement for the validated browser usage result.
+        let plan = match Self::load_credentials() {
+            Ok(credentials) => self.fetch_cli_subscription_tier(&credentials).await,
+            Err(_) => None,
+        };
         Ok(result_from_billing(
             billing,
             "grok-browser",
             None,
             None,
-            None,
+            plan,
         ))
     }
 

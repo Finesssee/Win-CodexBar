@@ -10,6 +10,7 @@ import type {
   NotificationSoundEvent,
   NotificationSoundPaths,
   NotificationSoundTheme,
+  ThemePreference,
   UsageThresholdOverride,
 } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
@@ -98,6 +99,13 @@ const NOTIFICATION_SOUND_EVENTS: {
 
 const NOTIFICATION_SOUND_THEME_SELECT_MIN_WIDTH = 180;
 const NOTIFICATION_SOUND_PREVIEW_DURATION_MS = 1500;
+
+
+const THEME_OPTIONS: { value: ThemePreference; labelKey: LocaleKey }[] = [
+  { value: "auto", labelKey: "ThemeAutoOption" },
+  { value: "light", labelKey: "ThemeLightOption" },
+  { value: "dark", labelKey: "ThemeDarkOption" },
+]
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -261,6 +269,23 @@ export default function GeneralTab({
         </div>
       </section>}
 
+      {mode === "general" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionTheme")}</h3>
+        <div className="settings-section__group">
+          <Field label={t("ThemeLabel")} description={t("ThemeHelper")}>
+            <Select
+              value={settings.theme}
+              disabled={saving}
+              ariaLabel={t("ThemeLabel")}
+              options={THEME_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+              onChange={(value) => set({ theme: value as ThemePreference })}
+            />
+          </Field>
+        </div>
+      </section>}
       {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("StartupSettings")}</h3>
         <div className="settings-section__group">

@@ -299,3 +299,33 @@ describe("GeneralTab language picker", () => {
     expect(set).toHaveBeenLastCalledWith({ providerUsageThresholds: {} });
   });
 });
+
+
+  it("renders the theme picker with auto/light/dark options in general mode", () => {
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+
+    const select = screen.getByRole("combobox", { name: "ThemeLabel" });
+    expect(select).toBeInTheDocument();
+    expect(select.querySelectorAll("option")).toHaveLength(3);
+    expect(select.querySelector('option[value="light"]')).not.toBeNull();
+    expect(select.querySelector('option[value="dark"]')).not.toBeNull();
+    expect(select.querySelector('option[value="auto"]')).not.toBeNull();
+  });
+
+  it("persists a light theme choice via updateSettings", () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
+
+    const select = screen.getByRole("combobox", { name: "ThemeLabel" });
+    fireEvent.change(select, { target: { value: "light" } });
+
+    expect(set).toHaveBeenCalledWith({ theme: "light" });
+  });
+
+  it("does not render the theme picker in notifications mode", () => {
+    render(
+      <GeneralTab mode="notifications" settings={settings} set={vi.fn()} saving={false} />,
+    );
+
+    expect(screen.queryByRole("combobox", { name: "ThemeLabel" })).toBeNull();
+  });

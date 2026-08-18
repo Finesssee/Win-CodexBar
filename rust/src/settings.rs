@@ -282,6 +282,18 @@ pub struct Settings {
     /// Alibaba Token Plan API region: "cn" | "intl" | "cn-personal" | "intl-personal".
     #[serde(default = "default_alibaba_token_plan_region")]
     pub alibaba_token_plan_region: String,
+
+    /// Opt-in: allow Codex usage reads from external (non-CLI-owned) OAuth
+    /// credential sources. Default OFF — when disabled, stale external OAuth
+    /// credential files fail closed instead of being used silently (upstream
+    /// 0.50.1 #2944). The CLI-owned `auth.json` is always read read-only; this
+    /// gate only controls whether stale external OAuth tokens are trusted.
+    #[serde(default)]
+    pub codex_external_oauth_sources_allowed: bool,
+
+    /// How cost is rendered on provider MenuCards (#2976).
+    #[serde(default)]
+    pub cost_summary_display_style: CostSummaryDisplayStyle,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -483,6 +495,8 @@ impl Default for Settings {
             claude_daily_routines_usage_visible: true,
             weekly_progress_work_days: None,
             alibaba_token_plan_region: default_alibaba_token_plan_region(),
+            codex_external_oauth_sources_allowed: false,
+            cost_summary_display_style: CostSummaryDisplayStyle::default(),
         }
     }
 }
@@ -1115,5 +1129,34 @@ impl Settings {
     }
     pub fn set_claude_avoid_keychain_prompts(&mut self, v: bool) {
         self.set_avoid_keychain_prompts(ProviderId::Claude, v)
+    }
+
+    // ── Per-provider accent color override (#2972) ──────────────────
+
+    /// The user-overridden accent color for `id`, or `None` to use the
+    /// shipped brand color.
+    pub fn accent_color(&self, id: ProviderId) -> Option<&str> {
+        self.provider_configs
+            .get(&id)
+            .and_then(|c| c.accent_color.as_deref())
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    /// Set the accent color override for `id`. Pass an empty string or
+    /// `None` to clear the override and revert to the shipped brand color.
+    pub fn set_accent_color(&mut self, id: ProviderId, color: Option<impl Into<String>>) {
+        let entry = self.provider_config_mut(id);
+        entry.accent_color = color
+            .map(Into::into)
+            .filter(|s: &String| !s.trim().is_empty());
+    }
+
+    /// Resolve the effective accent color for `id`: the user override if
+    /// set, otherwise the shipped brand color from the provider registry.
+    pub fn effective_accent_color(&self, id: ProviderId) -> String {
+        if let Some(override_color) = self.accent_color(id) {
+            return override_color.trim().to_string();
+        }
+        crate::core::brand_color(id).to_string()
     }
 }

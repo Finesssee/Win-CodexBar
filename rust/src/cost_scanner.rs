@@ -86,6 +86,11 @@ pub struct CostSummary {
     /// debounce window) or the scan just completed; `false` when the cache is stale
     /// or empty and a re-scan would be required (upstream 0.48.0 A16).
     pub history_coverage_established: bool,
+    /// True when the scan completed with zero results — a *known* zero, not a
+    /// missing scan. Set only when `history_coverage_established` is true and
+    /// the scan found no sessions/tokens (upstream 0.50.1 #2932). Never
+    /// fabricated on incomplete scans.
+    pub known_zero: bool,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
@@ -399,6 +404,10 @@ impl CostScanner {
                     &mut seen_pi,
                 );
             }
+            // Upstream 0.50.1 #2932: debounce cache hit with coverage
+            // established but zero sessions in-range is a known-zero.
+            summary.known_zero =
+                summary.history_coverage_established && summary.sessions_count == 0;
             return (summary, stats);
         }
 
@@ -434,6 +443,10 @@ impl CostScanner {
         // A16 (upstream 0.48.0): after a completed scan, coverage IS established
         // unless cache pruning during save marked a catch-up pending.
         summary.history_coverage_established = cache.previous_report.is_none();
+        // Upstream 0.50.1 #2932: a completed scan with zero results is a
+        // *known* zero. Only set when coverage is established; an incomplete
+        // scan must NOT fabricate a zero.
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
 
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
@@ -1660,5 +1673,43 @@ mod tests {
             cache.previous_report.is_none(),
             "full scan clears previous_report"
         );
+    }
+
+    // ── Upstream 0.50.1 #2932: known-zero history ────────────────────────────
+
+    #[test]
+    fn known_zero_is_set_when_scan_completes_with_no_sessions() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        let (summary, _) = scanner.scan_codex_detailed(None);
+        assert!(summary.history_coverage_established, "scan completed");
+        assert_eq!(summary.sessions_count, 0, "no sessions");
+        assert!(summary.known_zero, "completed scan with zero = known-zero");
+    }
+
+    #[test]
+    fn known_zero_is_not_set_when_scan_has_results() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        write_codex_session_fixture(&sessions, "a.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        let (summary, _) = scanner.scan_codex_detailed(None);
+        assert!(summary.history_coverage_established);
+        assert_eq!(summary.sessions_count, 1);
+        assert!(!summary.known_zero, "scan with results is not known-zero");
     }
 }

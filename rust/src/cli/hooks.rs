@@ -376,9 +376,10 @@ fn map_status_level(level: StatusLevel) -> HookProviderStatus {
 /// Coarse, non-secret category for a refresh failure. Never forwards raw errors.
 fn hook_refresh_failure_status(error: &ProviderError) -> String {
     match error {
-        ProviderError::AuthRequired | ProviderError::NoCookies | ProviderError::OAuth(_) => {
-            "auth_required".into()
-        }
+        ProviderError::AuthRequired
+        | ProviderError::NoCookies
+        | ProviderError::OAuth(_)
+        | ProviderError::OAuthRevoked(_) => "auth_required".into(),
         ProviderError::Timeout => "timeout".into(),
         ProviderError::Network(err) => {
             if err.is_timeout() {

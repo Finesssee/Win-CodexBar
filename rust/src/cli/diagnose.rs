@@ -370,7 +370,10 @@ fn source_mode_name(mode: SourceMode) -> &'static str {
 
 fn error_category(err: &ProviderError) -> &'static str {
     match err {
-        ProviderError::AuthRequired | ProviderError::OAuth(_) | ProviderError::NoCookies => "auth",
+        ProviderError::AuthRequired
+        | ProviderError::OAuth(_)
+        | ProviderError::OAuthRevoked(_)
+        | ProviderError::NoCookies => "auth",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
         ProviderError::NotInstalled(_) | ProviderError::UnsupportedSource(_) => "config",
         ProviderError::Parse(_) => "parse",

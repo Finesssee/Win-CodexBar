@@ -271,3 +271,35 @@ fn is_agy_cli_command_rejects_unrelated_names() {
     assert!(!is_agy_cli_command("language_server.exe --csrf_token abc"));
     assert!(!is_agy_cli_command(""));
 }
+
+// ── Upstream 0.50.1 #2963: one lane per quota bucket ──────────────────────
+
+#[test]
+fn multiple_models_in_same_quota_bucket_collapse_to_one_lane() {
+    // Two Claude variants sharing the same remaining fraction (same 5h
+    // session bucket) should produce one extra rate window, not two.
+    let resp = make_response(vec![
+        ("Claude 3.5 Sonnet", 0.8),
+        ("Claude 4 Sonnet", 0.8),
+        ("Gemini 2.5 Pro Low", 0.5),
+    ]);
+    let provider = AntigravityProvider::new();
+    let snap = provider.parse_user_status(resp).unwrap();
+    assert_eq!(
+        snap.extra_rate_windows.len(),
+        2,
+        "models sharing a quota bucket collapse to one lane"
+    );
+}
+
+#[test]
+fn models_in_distinct_quota_buckets_keep_separate_lanes() {
+    let resp = make_response(vec![
+        ("Claude 3.5 Sonnet", 0.8),
+        ("Claude 4 Sonnet", 0.7),
+        ("Gemini 2.5 Pro Low", 0.5),
+    ]);
+    let provider = AntigravityProvider::new();
+    let snap = provider.parse_user_status(resp).unwrap();
+    assert_eq!(snap.extra_rate_windows.len(), 3);
+}

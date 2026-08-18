@@ -13,6 +13,9 @@ use regex_lite::Regex;
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 use std::process::{Command as StdCommand, Stdio};
+use std::sync::LazyLock;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::cli::tty_runner::{TtyCommandOptions, TtyCommandRunner};
 use crate::core::{
@@ -27,6 +30,52 @@ use cli_reset::{
     extract_cli_scoped_weekly_limits, normalized_for_label_search, parse_claude_reset_date,
     parse_percent_line, starts_next_usage_section,
 };
+
+// ── Upstream 0.50.1 #2516: CLI usage-result cache ────────────────────────────
+//
+// When token rotation revokes OAuth access, the auto path falls back to the
+// CLI. To avoid hammering the CLI probe on every poll, cache the last
+// successful CLI result for 15 minutes. The cache is only consulted when
+// OAuth returned `OAuthRevoked` (revoked, not merely expired) so normal
+// refresh cycles are unaffected.
+const CLI_RESULT_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+
+struct CachedCliResult {
+    result: ProviderFetchResult,
+    cached_at: Instant,
+}
+
+static CLI_RESULT_CACHE: LazyLock<Mutex<Option<CachedCliResult>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Store a successful CLI fetch result in the 15-minute cache.
+fn cache_cli_result(result: ProviderFetchResult) {
+    if let Ok(mut guard) = CLI_RESULT_CACHE.lock() {
+        *guard = Some(CachedCliResult {
+            result,
+            cached_at: Instant::now(),
+        });
+    }
+}
+
+/// Return a cached CLI result if it is still within the TTL. Used when
+/// revoked OAuth prevents a live fetch and the CLI should not be re-probed.
+fn cached_cli_result() -> Option<ProviderFetchResult> {
+    let Ok(guard) = CLI_RESULT_CACHE.lock() else {
+        return None;
+    };
+    guard
+        .as_ref()
+        .filter(|entry| entry.cached_at.elapsed() <= CLI_RESULT_CACHE_TTL)
+        .map(|entry| entry.result.clone())
+}
+
+/// Whether the OAuth source failed with a revocation (not just expiry).
+/// Revoked tokens should reuse the working CLI fallback; expired/missing
+/// tokens should NOT block the normal refresh path.
+fn is_oauth_revoked_error(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::OAuthRevoked(_))
+}
 pub use oauth::ClaudeOAuthFetcher;
 pub use web_api::ClaudeWebApiFetcher;
 
@@ -396,16 +445,39 @@ impl ClaudeProvider {
             return Ok(result);
         }
 
-        if let Some(result) =
-            record_auto_source(&mut failures, "OAuth", self.fetch_via_oauth(ctx).await)
-        {
+        // Upstream 0.50.1 #2516: track whether OAuth failed with a revocation.
+        let oauth_result = self.fetch_via_oauth(ctx).await;
+        let oauth_revoked = oauth_result
+            .as_ref()
+            .err()
+            .is_some_and(is_oauth_revoked_error);
+        if let Some(result) = record_auto_source(&mut failures, "OAuth", oauth_result) {
             return Ok(result);
+        }
+
+        // When OAuth was revoked (not just expired), reuse a cached CLI result
+        // if still within the 15-minute TTL to avoid re-probing the CLI.
+        if oauth_revoked && let Some(cached) = cached_cli_result() {
+            tracing::debug!("Claude OAuth revoked; returning cached CLI result (15-min cache)");
+            return Ok(cached);
         }
 
         if let Some(result) =
             record_auto_source(&mut failures, "CLI", self.fetch_via_cli(ctx).await)
         {
+            // Cache the CLI result when OAuth was revoked so subsequent polls
+            // within the TTL reuse it without re-probing.
+            if oauth_revoked {
+                cache_cli_result(result.clone());
+            }
             return Ok(result);
+        }
+
+        // Upstream 0.50.1 #2516: when all live sources fail, keep the
+        // last-known quota visible (stale) instead of blanking the UI.
+        if let Some(cached) = cached_cli_result() {
+            tracing::debug!("All Claude live sources failed; returning stale cached CLI result");
+            return Ok(cached);
         }
 
         Err(claude_auto_fetch_error(failures))
@@ -1411,5 +1483,27 @@ Active days: 2/10              Longest streak: 1 day
             .expect_err("should reject ANSI-spaced local activity stats");
 
         assert!(matches!(err, ProviderError::Other(_)));
+    }
+
+    // ── Upstream 0.50.1 #2516: revoked vs missing OAuth ────────────────────────
+
+    #[test]
+    fn oauth_revoked_error_is_detected() {
+        assert!(is_oauth_revoked_error(&ProviderError::OAuthRevoked(
+            "revoked".to_string()
+        )));
+        assert!(!is_oauth_revoked_error(&ProviderError::OAuth(
+            "expired".to_string()
+        )));
+        assert!(!is_oauth_revoked_error(&ProviderError::AuthRequired));
+    }
+
+    #[test]
+    fn cli_result_cache_round_trips() {
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(42.0)), "cli");
+        cache_cli_result(result.clone());
+        let cached = cached_cli_result().expect("cached result within TTL");
+        assert!((cached.usage.primary.used_percent - 42.0).abs() < 0.01);
+        assert_eq!(cached.source_label, "cli");
     }
 }

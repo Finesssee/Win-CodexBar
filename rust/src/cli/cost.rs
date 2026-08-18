@@ -139,8 +139,12 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             println!("  Local cost scanning not available for this provider");
             println!("  (Only Codex and Claude have local logs)");
         } else if result.summary.sessions_count == 0 {
-            println!("  No usage data found");
-            println!("  Check that you have used {} locally", result.display_name);
+            if result.summary.known_zero {
+                println!("  No usage in the last {} days (scan complete)", days);
+            } else {
+                println!("  No usage data found");
+                println!("  Check that you have used {} locally", result.display_name);
+            }
         } else {
             // Total cost
             if use_color {
@@ -244,6 +248,13 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     } else {
                         serde_json::Value::Null
                     },
+                    // Upstream 0.50.1 #2932: known-zero flag — scan completed
+                    // with zero results. null for non-Codex; true/false for Codex.
+                    "knownZero": if r.provider == "codex" {
+                        serde_json::Value::Bool(r.summary.known_zero)
+                    } else {
+                        serde_json::Value::Null
+                    },
                     // F18 (upstream 0.48.0): pricing completeness. "complete" or
                     // {"partial": {"unpriced_models": [...]}}.
                     "modelPricingCompleteness": match &r.summary.model_pricing_completeness {
@@ -339,6 +350,7 @@ mod tests {
             "tokens": { "input": 0, "output": 0, "cached": 0 },
             "sessions_count": 1,
             "historyCoverageIsEstablished": true,
+            "knownZero": false,
             "modelPricingCompleteness": {
                 "partial": { "unpriced_models": ["codex-auto-review"] }
             },

@@ -555,6 +555,9 @@ pub enum ProviderError {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    #[error("OAuth token revoked: {0}")]
+    OAuthRevoked(String),
+
     #[error("Parse error: {0}")]
     Parse(String),
 
@@ -739,6 +742,84 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("notion-ai", ProviderId::Notion);
     map.insert("notionai", ProviderId::Notion);
     map
+}
+
+/// The shipped brand color (hex) for a provider, mirroring the frontend
+/// `PROVIDER_ICON_REGISTRY` in `providerIcons.ts`. Used as the default
+/// accent color before any per-provider override (#2972).
+pub fn brand_color(id: ProviderId) -> &'static str {
+    match id {
+        ProviderId::Codex => "#49A3B0",
+        ProviderId::Claude => "#CC7C5E",
+        ProviderId::Cursor => "#00BFA5",
+        ProviderId::Factory => "#FF6B35",
+        ProviderId::Gemini => "#AB87EA",
+        ProviderId::Antigravity => "#60BA7E",
+        ProviderId::Copilot => "#A855F7",
+        ProviderId::Zai => "#E85A6A",
+        ProviderId::MiniMax => "#FE603C",
+        ProviderId::Kiro => "#FF9900",
+        ProviderId::VertexAI => "#4285F4",
+        ProviderId::Augment => "#6366F1",
+        ProviderId::OpenCode => "#3B82F6",
+        ProviderId::Kimi => "#FE603C",
+        ProviderId::KimiK2 => "#4C00FF",
+        ProviderId::Amp => "#DC2626",
+        ProviderId::Warp => "#6366F1",
+        ProviderId::Ollama => "#8B95B0",
+        ProviderId::AzureOpenAI => "#0078D4",
+        ProviderId::T3Chat => "#8B5CF6",
+        ProviderId::OpenRouter => "#6B7280",
+        ProviderId::JetBrains => "#FF3399",
+        ProviderId::Alibaba => "#FF6A00",
+        ProviderId::AlibabaTokenPlan => "#FF6A00",
+        ProviderId::NanoGPT => "#687FA1",
+        ProviderId::Infini => "#687FA1",
+        ProviderId::Perplexity => "#1FB8CD",
+        ProviderId::Abacus => "#7C3AED",
+        ProviderId::Mistral => "#FF500F",
+        ProviderId::OpenCodeGo => "#3B82F6",
+        ProviderId::Kilo => "#5D87FF",
+        ProviderId::Bedrock => "#FF9900",
+        ProviderId::Codebuff => "#44FF00",
+        ProviderId::DeepSeek => "#527DF0",
+        ProviderId::DeepInfra => "#2A3275",
+        ProviderId::AiAnd => "#E25C2B",
+        ProviderId::Windsurf => "#22C55E",
+        ProviderId::Manus => "#34322D",
+        ProviderId::MiMo => "#FF6900",
+        ProviderId::Doubao => "#2563EB",
+        ProviderId::CommandCode => "#44FF00",
+        ProviderId::Crof => "#7C3AED",
+        ProviderId::StepFun => "#999999",
+        ProviderId::Venice => "#111827",
+        ProviderId::OpenAIApi => "#10A37F",
+        ProviderId::Grok => "#111827",
+        ProviderId::ElevenLabs => "#111827",
+        ProviderId::Deepgram => "#13EF93",
+        ProviderId::Groq => "#F55036",
+        ProviderId::LLMProxy => "#4F46E5",
+        ProviderId::Chutes => "#FF5C35",
+        ProviderId::LiteLLM => "#0EA5E9",
+        ProviderId::Poe => "#5D5FEF",
+        ProviderId::Devin => "#111827",
+        ProviderId::Zed => "#084CCF",
+        ProviderId::CrossModel => "#C084FC",
+        ProviderId::Qoder => "#2563EB",
+        ProviderId::CodeBuddy => "#0052D9",
+        ProviderId::Sakana => "#0EA5E9",
+        ProviderId::Sub2Api => "#2DC6D8",
+        ProviderId::Wayfinder => "#14B8A6",
+        ProviderId::ZenMux => "#6C5CE7",
+        ProviderId::ClinePass => "#61A3FA",
+        ProviderId::LongCat => "#FFD100",
+        ProviderId::Neuralwatt => "#38D98C",
+        ProviderId::ZoomMate => "#0B5CFF",
+        ProviderId::QwenCloud => "#615CED",
+        ProviderId::Notion => "#337EA9",
+        ProviderId::Xai => "#8E8E93",
+        ProviderId::Fireworks => "#F25B1C",
+    }
 }
 
 #[cfg(test)]

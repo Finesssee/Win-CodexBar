@@ -299,3 +299,54 @@ fn test_codex_fast_cost_usd_base_model_unsuffixed() {
         "my-custom-model"
     );
 }
+
+// ── Upstream 0.50.1 #2946: provider-qualified routed model pricing ──────────
+
+#[test]
+fn codex_routed_provider_detects_known_routes() {
+    assert_eq!(
+        CostUsagePricing::codex_routed_provider("deepseek/deepseek-chat"),
+        Some("deepseek")
+    );
+    assert_eq!(
+        CostUsagePricing::codex_routed_provider("kimi/kimi-k2"),
+        Some("kimi")
+    );
+    assert_eq!(
+        CostUsagePricing::codex_routed_provider("opencode/gpt-5"),
+        Some("opencode")
+    );
+    // Case-insensitive prefix.
+    assert_eq!(
+        CostUsagePricing::codex_routed_provider("DeepSeek/deepseek-chat"),
+        Some("deepseek")
+    );
+}
+
+#[test]
+fn codex_routed_provider_returns_none_for_unknown_and_unrouted() {
+    assert!(CostUsagePricing::codex_routed_provider("acme/model-x").is_none());
+    assert!(CostUsagePricing::codex_routed_provider("gpt-5").is_none());
+    assert!(CostUsagePricing::codex_routed_provider("deepseek-chat").is_none());
+    assert!(CostUsagePricing::codex_routed_provider("openai/gpt-5").is_none());
+}
+
+#[test]
+fn codex_routed_model_with_unknown_prefix_stays_unpriced() {
+    // An unknown provider/ prefix must NOT fall back to the OpenAI catalog
+    // (upstream 0.50.1 #2946: unknown prefixes are left unpriced, not guessed).
+    assert!(CostUsagePricing::codex_cost_usd("acme/secret-model", 1_000, 0, 500).is_none());
+}
+
+#[test]
+fn codex_routed_model_strips_prefix_for_lookup() {
+    // A known route prefix produces a clean model id for models.dev lookup.
+    // A nonexistent sub-model returns None (cleanly unpriced) rather than
+    // falling back to the OpenAI catalog.
+    assert!(
+        CostUsagePricing::codex_cost_usd("deepseek/nonexistent-model-xyz", 1_000, 0, 500).is_none()
+    );
+    assert!(
+        CostUsagePricing::codex_cost_usd("kimi/nonexistent-model-xyz", 1_000, 0, 500).is_none()
+    );
+}

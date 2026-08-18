@@ -651,6 +651,46 @@ impl CostUsagePricing {
         trimmed
     }
 
+    /// Detect a provider-qualified route prefix on a Codex model name and
+    /// return the matching models.dev provider id (upstream 0.50.1 #2946).
+    ///
+    /// Codex rollouts routed through a non-OpenAI backend (DeepSeek, Kimi,
+    /// OpenCode) carry the provider as a `provider/model` prefix. This returns
+    /// the models.dev provider id so the cost lookup prices against the right
+    /// catalog instead of falling back to OpenAI.
+    ///
+    /// Known routes: `deepseek/` → "deepseek", `kimi/` → "kimi",
+    /// `opencode/` → "opencode". The `openai/` prefix is stripped by
+    /// [`normalize_codex_model`] and priced against the OpenAI catalog as
+    /// before. Unknown `provider/` prefixes return `None` here so the caller
+    /// leaves them unpriced rather than guessing.
+    pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
+        let trimmed = model.trim();
+        let (prefix, _rest) = trimmed.split_once('/')?;
+        match prefix.to_ascii_lowercase().as_str() {
+            "deepseek" => Some("deepseek"),
+            "kimi" => Some("kimi"),
+            "opencode" => Some("opencode"),
+            _ => None,
+        }
+    }
+
+    /// Strip a known route prefix, returning the model id for a models.dev
+    /// lookup. Unknown prefixes are left intact (the caller leaves them
+    /// unpriced). `openai/` is also stripped here for the routed path.
+    fn strip_route_prefix(model: &str) -> &str {
+        let trimmed = model.trim();
+        if let Some(rest) = trimmed.strip_prefix("openai/") {
+            return rest;
+        }
+        if Self::codex_routed_provider(trimmed).is_some()
+            && let Some((_prefix, rest)) = trimmed.split_once('/')
+        {
+            return rest;
+        }
+        trimmed
+    }
+
     /// Get the display label for a Codex model (e.g. "Research Preview")
     pub fn codex_display_label(model: &str) -> Option<&'static str> {
         let key = Self::normalize_codex_model(model);
@@ -792,7 +832,18 @@ impl CostUsagePricing {
             ));
         }
 
-        let pricing = models_dev_pricing::lookup("openai", model)?;
+        // Upstream 0.50.1 #2946: provider-qualified routed models are priced
+        // against the matching models.dev provider, not OpenAI. Unknown
+        // `provider/` prefixes are left unpriced (not guessed as OpenAI).
+        let (provider_id, lookup_model) = match Self::codex_routed_provider(model) {
+            Some(routed) => (routed, Self::strip_route_prefix(model)),
+            None if model.trim().contains('/') && !model.trim().starts_with("openai/") => {
+                // Unknown route prefix — do not guess. Leave unpriced.
+                return None;
+            }
+            None => ("openai", model),
+        };
+        let pricing = models_dev_pricing::lookup(provider_id, lookup_model)?;
         let use_tier = pricing
             .threshold_tokens
             .is_some_and(|threshold| input_tokens > threshold);

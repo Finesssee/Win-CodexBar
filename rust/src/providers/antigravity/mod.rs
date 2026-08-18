@@ -448,10 +448,21 @@ impl AntigravityProvider {
             snapshot = snapshot.with_model_specific(ter);
         }
 
+        // Upstream 0.50.1 #2963: one lane per quota bucket. When Antigravity
+        // emits multiple model configs that map to the same quota bucket
+        // (e.g. multiple Claude variants in the same 5h session), show one
+        // lane per quota bucket, not one per model. Dedup by (remaining,
+        // reset_time) — models sharing the same quota state collapse.
+        let mut seen_buckets: Vec<(Option<f64>, Option<String>)> = Vec::new();
         for config in quota_configs {
             let Some(quota) = &config.quota_info else {
                 continue;
             };
+            let bucket = (quota.remaining_fraction, quota.reset_time.clone());
+            if seen_buckets.contains(&bucket) {
+                continue;
+            }
+            seen_buckets.push(bucket);
             let title = clean_model_label(model_label(config));
             if title.is_empty() {
                 continue;

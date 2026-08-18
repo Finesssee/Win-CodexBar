@@ -396,6 +396,22 @@ impl ClaudeOAuthFetcher {
             let retry_after = Self::retry_after_duration(response.headers().get(RETRY_AFTER));
             let body = response.text().await.unwrap_or_default();
 
+            // Upstream 0.50.1 #2516: distinguish revoked tokens (keyring ACL
+            // revocation, token rotation) from merely expired/invalid ones.
+            // A revoked token exists but the API rejects it with a
+            // revocation indicator — the CLI fallback should still work.
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                let lower = body.to_ascii_lowercase();
+                if lower.contains("revoked")
+                    || lower.contains("invalid_grant")
+                    || lower.contains("token_revoked")
+                {
+                    return Err(ProviderError::OAuthRevoked(
+                        "OAuth token was revoked. The CLI fallback will be used.".to_string(),
+                    ));
+                }
+            }
+
             if status.as_u16() == 401 {
                 return Err(ProviderError::OAuth(
                     "OAuth token invalid or expired. Run `claude` to re-authenticate.".to_string(),

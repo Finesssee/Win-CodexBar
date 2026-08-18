@@ -77,9 +77,9 @@ pub struct CostSnapshotBridge {
     pub remaining: Option<f64>,
     #[serde(default = "default_currency")]
     pub currency_code: String,
-    #[serde(default = "default_cost_period")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency_symbol: Option<String>,
+    #[serde(default = "default_cost_period")]
     pub period: String,
     #[serde(default)]
     pub resets_at: Option<String>,

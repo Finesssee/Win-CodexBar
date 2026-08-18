@@ -300,9 +300,7 @@ async fn run_cli_provider_login(
         LoginOutcome::MissingBinary => Err(format!(
             "{display_name} CLI not found. Install it and ensure it is on your PATH."
         )),
-        LoginOutcome::LaunchFailed(e) => {
-            Err(format!("Failed to launch {display_name} login: {e}"))
-        }
+        LoginOutcome::LaunchFailed(e) => Err(format!("Failed to launch {display_name} login: {e}")),
         LoginOutcome::TimedOut => Err(format!("{display_name} login timed out")),
         LoginOutcome::Failed { status } => Err(format!(
             "{display_name} login failed with exit code {status}"

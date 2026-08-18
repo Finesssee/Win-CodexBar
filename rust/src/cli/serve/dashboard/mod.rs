@@ -64,7 +64,6 @@ impl DashboardState {
             refresh_seconds: 60,
         }
     }
-
 }
 
 /// `GET /` — the embedded web dashboard shell. Static per config; no account

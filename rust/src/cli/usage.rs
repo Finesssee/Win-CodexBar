@@ -365,9 +365,7 @@ fn render_json_result(
         .primary
         .window_minutes
         .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
-        .then(|| {
-            UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
-        })
+        .then(|| UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES))
         .flatten()
         .map(pace_json);
     let secondary_pace = usage
@@ -523,7 +521,8 @@ fn append_usage_window_lines(
     append_window_line(lines, metadata.session_label, &usage.primary, use_color);
     // Upstream 0.50.1 #2957: pace for the 5-hour session window.
     if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES)
-        && let Some(pace) = UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
+        && let Some(pace) =
+            UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
     {
         lines.push(format!(
             "  Pace:    {} {}",

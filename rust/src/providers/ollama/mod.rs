@@ -272,7 +272,6 @@ impl OllamaProvider {
         }
     }
 
-
     /// Resolve cookies from manual cookies, validated cache, or browser import.
     ///
     /// Upstream #2404: reuse the last validated browser session cookie header
@@ -763,9 +762,7 @@ mod tests {
         // Upstream 0.50.1 #2949: a copied `Cookie:` label after another
         // cookie, and cURL `-H`/`-b` wrappers with quotes.
         assert_eq!(
-            OllamaProvider::normalize_cookie_header(
-                "aid=device; Cookie: __Secure-session=abc123"
-            ),
+            OllamaProvider::normalize_cookie_header("aid=device; Cookie: __Secure-session=abc123"),
             Some("aid=device; __Secure-session=abc123".to_string())
         );
         assert_eq!(

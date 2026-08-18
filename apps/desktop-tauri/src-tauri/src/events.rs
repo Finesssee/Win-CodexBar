@@ -111,12 +111,7 @@ pub fn emit_settings_changed(app: &AppHandle) {
     let _ = app.emit(SETTINGS_CHANGED, ());
 }
 
-pub fn emit_login_phase(
-    app: &AppHandle,
-    provider_id: &str,
-    phase: &str,
-    auth_link: Option<&str>,
-) {
+pub fn emit_login_phase(app: &AppHandle, provider_id: &str, phase: &str, auth_link: Option<&str>) {
     let _ = app.emit(
         LOGIN_PHASE,
         LoginPhasePayload {

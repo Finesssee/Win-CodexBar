@@ -18,6 +18,7 @@ use crate::core::{
 };
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const CLI_SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 
 pub struct GrokProvider {
     metadata: ProviderMetadata,
@@ -71,13 +72,36 @@ impl GrokProvider {
         let billing = self
             .fetch_billing(Some(format!("Bearer {}", credentials.access_token)), None)
             .await?;
+        let plan = self
+            .fetch_cli_subscription_tier(credentials)
+            .await
+            .or_else(|| credentials.login_method());
         Ok(result_from_billing(
             billing,
             "grok-web",
             credentials.email.clone(),
             credentials.team_id.clone(),
-            credentials.login_method(),
+            plan,
         ))
+    }
+
+    async fn fetch_cli_subscription_tier(&self, credentials: &GrokCredentials) -> Option<String> {
+        let response = self
+            .client
+            .get(CLI_SETTINGS_ENDPOINT)
+            .timeout(std::time::Duration::from_secs(2))
+            .header("Authorization", format!("Bearer {}", credentials.access_token))
+            .header("x-xai-token-auth", "xai-grok-cli")
+            .header("Accept", "application/json")
+            .header("User-Agent", "CodexBar")
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let value: Value = response.json().await.ok()?;
+        grok_plan_display_name(value.get("subscription_tier_display").and_then(Value::as_str))
     }
 
     async fn fetch_with_cookie(
@@ -299,6 +323,23 @@ impl GrokCredentials {
             None => None,
         }
     }
+}
+
+fn grok_plan_display_name(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let compact: String = trimmed
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    Some(match compact.as_str() {
+        "supergrokheavy" | "heavy" => "SuperGrok Heavy".to_string(),
+        "supergrok" => "SuperGrok".to_string(),
+        _ => trimmed.to_string(),
+    })
 }
 
 fn text_field(value: &Value, key: &str) -> Option<String> {
@@ -566,6 +607,14 @@ fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grok_plan_prefers_subscription_tier_display_names() {
+        assert_eq!(grok_plan_display_name(Some("SuperGrok Heavy")), Some("SuperGrok Heavy".to_string()));
+        assert_eq!(grok_plan_display_name(Some("heavy")), Some("SuperGrok Heavy".to_string()));
+        assert_eq!(grok_plan_display_name(Some("SuperGrok")), Some("SuperGrok".to_string()));
+        assert_eq!(grok_plan_display_name(Some(" custom ")), Some("custom".to_string()));
+    }
 
     #[test]
     fn parses_auth_file_prefer_oidc() {

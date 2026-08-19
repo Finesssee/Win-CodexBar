@@ -348,16 +348,7 @@ export interface UsageSpendRow {
 
 export interface UsageSpendSummary {
   rows: UsageSpendRow[];
-  models: UsageSpendModelRow[];
-}
-
-export interface UsageSpendModelRow {
-  providerId: string;
-  providerName: string;
-  modelName: string;
-  costUsd: number | null;
-  totalTokens: number | null;
-  partial: boolean;
+  contract: SpendContract;
 }
 
 export type CostProvenance = "listPriceEstimate" | "vendorMetered" | "mixed" | "unknown";

@@ -56,29 +56,31 @@ impl GrokProvider {
         dirs::home_dir().map(|home| home.join(".grok").join("auth.json"))
     }
 
-    fn load_credentials() -> Result<GrokCredentials, ProviderError> {
+    fn load_credentials(kind: GrokAuthKind) -> Result<GrokCredentials, ProviderError> {
         let path = Self::auth_file_path()
             .ok_or_else(|| ProviderError::NotInstalled("Grok auth path not found".to_string()))?;
         let text = std::fs::read_to_string(&path).map_err(|_| {
             ProviderError::NotInstalled("Grok auth.json not found. Run `grok login`.".to_string())
         })?;
-        GrokCredentials::parse(&text)
+        GrokCredentials::parse_for_kind(&text, kind)
     }
 
     async fn fetch_with_auth(
         &self,
         credentials: &GrokCredentials,
+        kind: GrokAuthKind,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let billing = self
             .fetch_billing(Some(format!("Bearer {}", credentials.access_token)), None)
             .await?;
-        let plan = self
-            .fetch_cli_subscription_tier(credentials)
-            .await
-            .or_else(|| credentials.login_method());
+        let plan = if kind == GrokAuthKind::Cli {
+            self.fetch_cli_subscription_tier(credentials).await
+        } else {
+            None
+        }.or_else(|| credentials.login_method());
         Ok(result_from_billing(
             billing,
-            "grok-web",
+            if kind == GrokAuthKind::Cli { "grok-cli" } else { "grok-oauth" },
             credentials.email.clone(),
             credentials.team_id.clone(),
             plan,
@@ -115,7 +117,7 @@ impl GrokProvider {
         // the paid SuperGrok tier. If the local Grok principal is available,
         // use its settings endpoint only as identity enrichment, never as a
         // replacement for the validated browser usage result.
-        let plan = match Self::load_credentials() {
+        let plan = match Self::load_credentials(GrokAuthKind::Cli) {
             Ok(credentials) => self.fetch_cli_subscription_tier(&credentials).await,
             Err(_) => None,
         };
@@ -235,18 +237,21 @@ impl Provider for GrokProvider {
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
             SourceMode::Auto => {
-                // Upstream 0.53: prefer the explicit Grok login principal before
-                // trying browser cookies. Authentication failures may continue
-                // through Auto, while explicit source modes surface them.
-                if let Ok(credentials) = Self::load_credentials() {
-                    match self.fetch_with_auth(&credentials).await {
-                        Ok(result) => return Ok(result),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(error) => tracing::debug!("Grok login path failed in Auto: {error}"),
-                    }
+                if let Some(token) = ctx.api_key.as_deref() {
+                    let credentials = GrokCredentials::from_bearer(token);
+                    return self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await;
                 }
                 if let Some(cookie_header) = &ctx.manual_cookie_header {
                     return self.fetch_with_cookie(cookie_header).await;
+                }
+                for kind in [GrokAuthKind::Cli, GrokAuthKind::OAuth] {
+                    if let Ok(credentials) = Self::load_credentials(kind) {
+                        match self.fetch_with_auth(&credentials, kind).await {
+                            Ok(result) => return Ok(result),
+                            Err(ProviderError::AuthRequired) => {}
+                            Err(error) => tracing::debug!("Grok login path failed in Auto: {error}"),
+                        }
+                    }
                 }
                 self.fetch_with_cookie_refresh().await
             }
@@ -256,9 +261,17 @@ impl Provider for GrokProvider {
                 }
                 self.fetch_with_cookie_refresh().await
             }
-            SourceMode::Cli | SourceMode::OAuth => {
-                let credentials = Self::load_credentials()?;
-                self.fetch_with_auth(&credentials).await
+            SourceMode::Cli => {
+                let credentials = Self::load_credentials(GrokAuthKind::Cli)?;
+                self.fetch_with_auth(&credentials, GrokAuthKind::Cli).await
+            }
+            SourceMode::OAuth => {
+                let credentials = if let Some(token) = ctx.api_key.as_deref() {
+                    GrokCredentials::from_bearer(token)
+                } else {
+                    Self::load_credentials(GrokAuthKind::OAuth)?
+                };
+                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await
             }
         }
     }
@@ -271,10 +284,17 @@ impl Provider for GrokProvider {
         true
     }
 
+    fn supports_cli(&self) -> bool {
+        true
+    }
+
     fn detect_version(&self) -> Option<String> {
         Self::detect_cli_version()
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrokAuthKind { Cli, OAuth }
 
 #[derive(Debug, Clone)]
 struct GrokCredentials {
@@ -286,50 +306,26 @@ struct GrokCredentials {
 }
 
 impl GrokCredentials {
-    fn parse(text: &str) -> Result<Self, ProviderError> {
+    fn from_bearer(token: &str) -> Self {
+        Self { access_token: token.trim().to_string(), auth_mode: Some("oidc".into()), email: None, team_id: None, expires_at: None }
+    }
+
+    fn parse_for_kind(text: &str, kind: GrokAuthKind) -> Result<Self, ProviderError> {
         let root: Value = serde_json::from_str(text)
             .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
-        let map = root
-            .as_object()
-            .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
-        let mut selected: Option<(&String, &Value)> = None;
-        for (scope, entry) in map {
-            if entry
-                .get("key")
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty())
-                && (scope.starts_with("https://auth.x.ai::")
-                    || selected.is_none()
-                    || scope.contains("/sign-in"))
-            {
-                selected = Some((scope, entry));
-                if scope.starts_with("https://auth.x.ai::") {
-                    break;
-                }
-            }
-        }
+        let map = root.as_object().ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
+        let selected = map.iter().find(|(scope, entry)| {
+            let has_key = entry.get("key").and_then(Value::as_str).is_some_and(|value| !value.is_empty());
+            if !has_key { return false; }
+            let is_oauth = scope.starts_with("https://auth.x.ai::")
+                || entry.get("auth_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("oidc"));
+            match kind { GrokAuthKind::Cli => !is_oauth, GrokAuthKind::OAuth => is_oauth }
+        });
         let (_, entry) = selected.ok_or(ProviderError::AuthRequired)?;
-        let access_token = entry
-            .get("key")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .ok_or(ProviderError::AuthRequired)?
-            .to_string();
-        let expires_at = entry
-            .get("expires_at")
-            .and_then(Value::as_str)
-            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        if expires_at.is_some_and(|dt| dt <= Utc::now()) {
-            return Err(ProviderError::AuthRequired);
-        }
-        Ok(Self {
-            access_token,
-            auth_mode: text_field(entry, "auth_mode"),
-            email: text_field(entry, "email"),
-            team_id: text_field(entry, "team_id"),
-            expires_at,
-        })
+        let access_token = entry.get("key").and_then(Value::as_str).filter(|value| !value.is_empty()).ok_or(ProviderError::AuthRequired)?.to_string();
+        let expires_at = entry.get("expires_at").and_then(Value::as_str).and_then(|raw| DateTime::parse_from_rfc3339(raw).ok()).map(|dt| dt.with_timezone(&Utc));
+        if expires_at.is_some_and(|dt| dt <= Utc::now()) { return Err(ProviderError::AuthRequired); }
+        Ok(Self { access_token, auth_mode: text_field(entry, "auth_mode"), email: text_field(entry, "email"), team_id: text_field(entry, "team_id"), expires_at })
     }
 
     fn login_method(&self) -> Option<String> {
@@ -640,9 +636,19 @@ mod tests {
           "https://accounts.x.ai/sign-in": {"key": "legacy"},
           "https://auth.x.ai::abc": {"key": "oidc", "auth_mode": "oidc", "email": "u@example.com"}
         }"#;
-        let parsed = GrokCredentials::parse(auth).unwrap();
+        let parsed = GrokCredentials::parse_for_kind(auth, GrokAuthKind::OAuth).unwrap();
         assert_eq!(parsed.access_token, "oidc");
         assert_eq!(parsed.login_method().as_deref(), Some("SuperGrok"));
+    }
+
+    #[test]
+    fn cli_and_oauth_select_distinct_auth_entries() {
+        let auth = r#"{
+          "https://accounts.x.ai/sign-in": {"key": "cli-token", "auth_mode": "session"},
+          "https://auth.x.ai::abc": {"key": "oauth-token", "auth_mode": "oidc"}
+        }"#;
+        assert_eq!(GrokCredentials::parse_for_kind(auth, GrokAuthKind::Cli).unwrap().access_token, "cli-token");
+        assert_eq!(GrokCredentials::parse_for_kind(auth, GrokAuthKind::OAuth).unwrap().access_token, "oauth-token");
     }
     #[test]
     fn splits_grpc_web_data_frames() {

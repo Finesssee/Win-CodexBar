@@ -273,6 +273,14 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: false,
                 cookie_name: None,
             }),
+            ProviderId::Grok => Some(TokenAccountSupport {
+                title: "Grok credentials",
+                subtitle: "Store SuperGrok bearer tokens or grok.com Cookie headers.",
+                placeholder: "Bearer token or Cookie: ...",
+                injection: TokenInjection::CookieHeader,
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             ProviderId::Xai => Some(TokenAccountSupport {
                 title: "Management API keys",
                 subtitle: "Store multiple xAI Management API keys. Team ID is set separately under provider settings.",
@@ -330,7 +338,6 @@ impl TokenAccountSupport {
             | ProviderId::StepFun
             | ProviderId::Venice
             | ProviderId::OpenAIApi
-            | ProviderId::Grok
             | ProviderId::ElevenLabs
             | ProviderId::Deepgram
             | ProviderId::Groq
@@ -356,6 +363,13 @@ impl TokenAccountSupport {
     /// Get environment override for a token
     pub fn env_override(provider: ProviderId, token: &str) -> Option<HashMap<String, String>> {
         let support = Self::for_provider(provider)?;
+        if provider == ProviderId::Grok
+            && let Some(token) = Self::normalized_grok_oauth_token(token)
+        {
+            let mut map = HashMap::new();
+            map.insert("CODEXBAR_GROK_OAUTH_TOKEN".to_string(), token);
+            return Some(map);
+        }
         match &support.injection {
             TokenInjection::Environment { key } => {
                 let mut map = HashMap::new();
@@ -394,6 +408,17 @@ impl TokenAccountSupport {
         }
 
         format!("{}={}", cookie_name, trimmed)
+    }
+
+    fn normalized_grok_oauth_token(token: &str) -> Option<String> {
+        let mut value = token.trim();
+        if value.len() >= 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+            value = value[7..].trim();
+        }
+        if value.is_empty() || value.contains('=') || value.to_ascii_lowercase().starts_with("cookie:") || value.to_ascii_lowercase().starts_with("xai-") {
+            return None;
+        }
+        Some(value.to_string())
     }
 
     /// Check if a token is a Claude OAuth token
@@ -734,8 +759,17 @@ mod tests {
         assert!(TokenAccountSupport::is_supported(ProviderId::Cursor));
         assert!(TokenAccountSupport::is_supported(ProviderId::Copilot));
         assert!(TokenAccountSupport::is_supported(ProviderId::OpenRouter));
+        assert!(TokenAccountSupport::is_supported(ProviderId::Grok));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Codex));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Gemini));
+    }
+
+    #[test]
+    fn grok_token_accounts_route_bearer_and_cookie_credentials() {
+        let bearer = TokenAccountSupport::env_override(ProviderId::Grok, "Bearer oauth-token").unwrap();
+        assert_eq!(bearer.get("CODEXBAR_GROK_OAUTH_TOKEN").map(String::as_str), Some("oauth-token"));
+        assert!(TokenAccountSupport::env_override(ProviderId::Grok, "Cookie: sso=abc").is_none());
+        assert_eq!(TokenAccountSupport::normalized_cookie_header(ProviderId::Grok, "Cookie: sso=abc"), "Cookie: sso=abc");
     }
 
     #[test]

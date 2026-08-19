@@ -171,6 +171,8 @@ pub(super) struct RawSettings {
     codex_external_oauth_sources_allowed: bool,
     #[serde(default)]
     cost_summary_display_style: CostSummaryDisplayStyle,
+    #[serde(default)]
+    open_codex_usage_logs_enabled: bool,
 }
 
 impl Default for RawSettings {
@@ -271,6 +273,7 @@ impl Default for RawSettings {
             alibaba_token_plan_region: s.alibaba_token_plan_region,
             codex_external_oauth_sources_allowed: s.codex_external_oauth_sources_allowed,
             cost_summary_display_style: s.cost_summary_display_style,
+            open_codex_usage_logs_enabled: s.open_codex_usage_logs_enabled,
         }
     }
 }
@@ -565,6 +568,7 @@ impl From<RawSettings> for Settings {
                 }
             },
             cost_summary_display_style: raw.cost_summary_display_style,
+            open_codex_usage_logs_enabled: raw.open_codex_usage_logs_enabled,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
         }
     }

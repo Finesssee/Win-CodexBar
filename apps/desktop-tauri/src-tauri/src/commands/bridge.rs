@@ -701,6 +701,7 @@ pub struct SettingsSnapshot {
     alibaba_token_plan_region: String,
     weekly_progress_work_days: Option<u8>,
     cost_summary_display_style: &'static str,
+    open_codex_usage_logs_enabled: bool,
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
@@ -810,6 +811,7 @@ impl From<Settings> for SettingsSnapshot {
             cost_summary_display_style: cost_summary_display_style_label(
                 settings.cost_summary_display_style,
             ),
+            open_codex_usage_logs_enabled: settings.open_codex_usage_logs_enabled,
             provider_accent_colors: settings
                 .provider_configs
                 .iter()

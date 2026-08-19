@@ -133,6 +133,14 @@ export default function UsageSpendTab(_props: TabProps) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const tableRef = useRef<HTMLTableElement | null>(null);
 
+  useEffect(() => {
+    void getSettingsSnapshot()
+      .then((settings) => setIncludeOpenCodex(settings.openCodexUsageLogsEnabled ?? false))
+      .catch(() => {
+        // Keep the safe default (off) if settings cannot be loaded.
+      });
+  }, []);
+
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -219,7 +227,14 @@ export default function UsageSpendTab(_props: TabProps) {
           <input
             type="checkbox"
             checked={includeOpenCodex}
-            onChange={(event) => setIncludeOpenCodex(event.target.checked)}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              setIncludeOpenCodex(enabled);
+              void updateSettings({ openCodexUsageLogsEnabled: enabled }).catch((err: unknown) => {
+                setIncludeOpenCodex(!enabled);
+                setError(err instanceof Error ? err.message : String(err));
+              });
+            }}
           />
           OpenCodex import
         </label>

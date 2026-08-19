@@ -250,6 +250,8 @@ export interface SettingsSnapshot {
   weeklyProgressWorkDays?: number | null;
   /** How cost is rendered on provider cards (#2976). */
   costSummaryDisplayStyle: CostSummaryDisplayStyle;
+  /** Opt-in read-only OpenCodex usage.jsonl import. */
+  openCodexUsageLogsEnabled?: boolean;
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
@@ -319,6 +321,7 @@ export interface SettingsUpdate {
   alibabaTokenPlanRegion?: string;
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  openCodexUsageLogsEnabled?: boolean;
   providerAccentColors?: Record<string, string | null>;
 }
 

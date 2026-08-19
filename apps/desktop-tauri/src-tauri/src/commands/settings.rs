@@ -71,6 +71,7 @@ pub struct SettingsUpdate {
     pub alibaba_token_plan_region: Option<String>,
     pub weekly_progress_work_days: Option<u8>,
     pub cost_summary_display_style: Option<String>,
+    pub open_codex_usage_logs_enabled: Option<bool>,
 }
 
 impl SettingsUpdate {
@@ -147,6 +148,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
+        }
+        if let Some(v) = self.open_codex_usage_logs_enabled {
+            settings.open_codex_usage_logs_enabled = v;
         }
         if let Some(v) = self.low_power_mode {
             settings.low_power_mode = v;

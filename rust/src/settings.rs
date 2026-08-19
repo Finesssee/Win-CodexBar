@@ -302,6 +302,10 @@ pub struct Settings {
     /// How cost is rendered on provider MenuCards (#2976).
     #[serde(default)]
     pub cost_summary_display_style: CostSummaryDisplayStyle,
+
+    /// Opt-in read-only import of OpenCodex usage.jsonl into Usage & Spend / CLI cost output.
+    #[serde(default)]
+    pub open_codex_usage_logs_enabled: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -506,6 +510,7 @@ impl Default for Settings {
             alibaba_token_plan_region: default_alibaba_token_plan_region(),
             codex_external_oauth_sources_allowed: false,
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
+            open_codex_usage_logs_enabled: false,
         }
     }
 }

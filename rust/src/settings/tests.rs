@@ -43,6 +43,23 @@ fn low_power_mode_defaults_false_and_round_trips() {
 }
 
 #[test]
+fn open_codex_usage_logs_default_off_and_round_trip() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing open_codex_usage_logs_enabled defaults false");
+    assert!(!defaulted.open_codex_usage_logs_enabled);
+
+    let enabled = Settings {
+        open_codex_usage_logs_enabled: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize OpenCodex usage opt-in");
+    assert!(json.contains(r#""open_codex_usage_logs_enabled":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize OpenCodex usage opt-in");
+    assert!(loaded.open_codex_usage_logs_enabled);
+}
+
+#[test]
 fn notification_sound_paths_round_trip_and_default_for_existing_settings() {
     let settings = Settings {
         notification_sound_theme: NotificationSoundTheme::CodexBar,

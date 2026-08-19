@@ -1,0 +1,458 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::core::CostUsagePricing;
+
+use super::{
+    CostCoverageCounts, CustomPricing, ImportedSpendSource, SpendActivityCell, SpendDailyPoint,
+    SpendModelRow, SpendTokenMix
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodexEntry {
+    request_id: String,
+    timestamp: DateTime<Utc>,
+    provider: String,
+    model: String,
+    usage_status: String,
+    conversation_id: Option<String>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_creation_tokens: Option<u64>,
+    reasoning_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CacheFile {
+    source_path: String,
+    source_len: u64,
+    source_modified_ms: u64,
+    entries: Vec<OpenCodexEntry>,
+}
+
+#[derive(Default)]
+struct ModelAccumulator {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+    total: u64,
+    saw_total: bool,
+    cost: f64,
+    saw_cost: bool,
+    custom_pricing: bool,
+}
+
+#[derive(Default)]
+struct DailyAccumulator {
+    cost: f64,
+    saw_cost: bool,
+    total_tokens: u64,
+    saw_tokens: bool,
+}
+
+pub(super) fn load(history_days: u32, custom: &CustomPricing) -> Option<ImportedSpendSource> {
+    let source_path = usage_path()?;
+    let entries = load_entries(&source_path)?;
+    aggregate(entries, Utc::now(), history_days.clamp(1, 365), custom)
+}
+
+fn aggregate(
+    entries: Vec<OpenCodexEntry>,
+    now: DateTime<Utc>,
+    history_days: u32,
+    custom: &CustomPricing,
+) -> Option<ImportedSpendSource> {
+    let first_day = now.with_timezone(&Local).date_naive()
+        - Duration::days(i64::from(history_days.saturating_sub(1)));
+
+    // requestId is authoritative: a later row replaces an earlier row with the same id.
+    let mut unique: HashMap<String, OpenCodexEntry> = HashMap::new();
+    for entry in entries {
+        unique.insert(entry.request_id.clone(), entry);
+    }
+    let mut entries: Vec<_> = unique
+        .into_values()
+        .filter(|entry| {
+            entry.timestamp <= now
+                && entry.timestamp.with_timezone(&Local).date_naive() >= first_day
+        })
+        .collect();
+    entries.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.request_id.cmp(&right.request_id))
+    });
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut conversations = HashSet::new();
+    let mut token_mix = SpendTokenMix::default();
+    let mut coverage = CostCoverageCounts::default();
+    let mut activity: BTreeMap<(u8, u8), u32> = BTreeMap::new();
+    let mut models: HashMap<String, ModelAccumulator> = HashMap::new();
+    let mut daily: BTreeMap<String, DailyAccumulator> = BTreeMap::new();
+    let mut known_cost = 0.0;
+    let mut saw_known_cost = false;
+
+    for entry in &entries {
+        if let Some(conversation) = entry.conversation_id.as_ref() {
+            conversations.insert(conversation.clone());
+        }
+        token_mix.input_tokens = add_optional(token_mix.input_tokens, entry.input_tokens);
+        token_mix.output_tokens = add_optional(token_mix.output_tokens, entry.output_tokens);
+        token_mix.cache_read_tokens =
+            add_optional(token_mix.cache_read_tokens, entry.cache_read_tokens);
+        token_mix.cache_creation_tokens =
+            add_optional(token_mix.cache_creation_tokens, entry.cache_creation_tokens);
+        token_mix.reasoning_tokens =
+            add_optional(token_mix.reasoning_tokens, entry.reasoning_tokens);
+
+        let cost = entry_cost(entry, custom);
+        match entry.usage_status.as_str() {
+            "reported" if cost.is_some() => {
+                coverage.priced = coverage.priced.saturating_add(1)
+            }
+            "estimated" if cost.is_some() => {
+                coverage.estimated = coverage.estimated.saturating_add(1)
+            }
+            "unsupported" => coverage.unmetered = coverage.unmetered.saturating_add(1),
+            _ => coverage.unpriced = coverage.unpriced.saturating_add(1),
+        }
+        if let Some(cost) = cost {
+            known_cost += cost;
+            saw_known_cost = true;
+        }
+
+        let local = entry.timestamp.with_timezone(&Local);
+        let key = (
+            local.weekday().num_days_from_monday() as u8,
+            local.hour() as u8,
+        );
+        activity.insert(
+            key,
+            activity.get(&key).copied().unwrap_or(0).saturating_add(1),
+        );
+
+        let day = daily
+            .entry(local.date_naive().format("%Y-%m-%d").to_string())
+            .or_default();
+        if let Some(cost) = cost {
+            day.cost += cost;
+            day.saw_cost = true;
+        }
+        if let Some(total) = entry.resolved_total_tokens() {
+            day.total_tokens = day.total_tokens.saturating_add(total);
+            day.saw_tokens = true;
+        }
+
+        let model = models.entry(entry.model.clone()).or_default();
+        model.input = model.input.saturating_add(entry.input_tokens.unwrap_or(0));
+        model.output = model.output.saturating_add(entry.output_tokens.unwrap_or(0));
+        model.cache_read = model
+            .cache_read
+            .saturating_add(entry.cache_read_tokens.unwrap_or(0));
+        model.cache_creation = model
+            .cache_creation
+            .saturating_add(entry.cache_creation_tokens.unwrap_or(0));
+        if let Some(total) = entry.resolved_total_tokens() {
+            model.total = model.total.saturating_add(total);
+            model.saw_total = true;
+        }
+        if let Some(cost) = cost {
+            model.cost += cost;
+            model.saw_cost = true;
+        }
+        model.custom_pricing |= custom.rates(&entry.provider, &entry.model).is_some();
+    }
+
+    let mut model_rows: Vec<_> = models
+        .into_iter()
+        .map(|(model, acc)| SpendModelRow {
+            model,
+            cost_usd: acc.saw_cost.then_some(acc.cost),
+            input_tokens: acc.input,
+            output_tokens: acc.output,
+            cache_read_tokens: acc.cache_read,
+            total_tokens: if acc.saw_total {
+                acc.total
+            } else {
+                acc.input
+                    .saturating_add(acc.output)
+                    .saturating_add(acc.cache_creation)
+            },
+            custom_pricing: acc.custom_pricing,
+        })
+        .collect();
+    model_rows.sort_by(|left, right| match (left.cost_usd, right.cost_usd) {
+        (Some(a), Some(b)) => b
+            .partial_cmp(&a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.model.cmp(&right.model)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.model.cmp(&right.model),
+    });
+
+    Some(ImportedSpendSource {
+        source_id: "opencodex".to_string(),
+        display_name: "OpenCodex".to_string(),
+        request_count: entries.len().min(u32::MAX as usize) as u32,
+        conversation_count: conversations.len().min(u32::MAX as usize) as u32,
+        known_cost_usd: saw_known_cost.then_some(known_cost),
+        token_mix,
+        coverage,
+        models: model_rows,
+        daily: daily
+            .into_iter()
+            .map(|(day, acc)| SpendDailyPoint {
+                day,
+                cost_usd: acc.saw_cost.then_some(acc.cost),
+                total_tokens: acc.saw_tokens.then_some(acc.total_tokens),
+            })
+            .collect(),
+        hourly_activity: activity
+            .into_iter()
+            .map(|((weekday, hour), conversations)| SpendActivityCell {
+                weekday,
+                hour,
+                conversations,
+            })
+            .collect(),
+    })
+}
+
+fn entry_cost(entry: &OpenCodexEntry, custom: &CustomPricing) -> Option<f64> {
+    if !matches!(entry.usage_status.as_str(), "reported" | "estimated") {
+        return None;
+    }
+    let has_usage = entry.total_tokens.is_some()
+        || entry.input_tokens.is_some()
+        || entry.output_tokens.is_some()
+        || entry.cache_read_tokens.is_some()
+        || entry.cache_creation_tokens.is_some();
+    if !has_usage {
+        return None;
+    }
+    let input = entry.input_tokens.unwrap_or(0);
+    let output = entry.output_tokens.unwrap_or(0);
+    let cache_read = entry.cache_read_tokens.unwrap_or(0);
+    let cache_write = entry.cache_creation_tokens.unwrap_or(0);
+    if let Some(rates) = custom.rates(&entry.provider, &entry.model) {
+        return rates.cost_parts(input, output, cache_read, cache_write);
+    }
+    CostUsagePricing::codex_cost_usd(&entry.model, input, cache_read, output)
+}
+
+fn load_entries(source_path: &Path) -> Option<Vec<OpenCodexEntry>> {
+    let metadata = fs::metadata(source_path).ok()?;
+    let source_len = metadata.len();
+    let source_modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0);
+    let source_path_text = source_path.to_string_lossy().to_string();
+
+    if let Some(cache) = read_cache() {
+        if cache.source_path == source_path_text
+            && cache.source_len == source_len
+            && cache.source_modified_ms == source_modified_ms
+        {
+            return Some(cache.entries);
+        }
+    }
+
+    let text = fs::read_to_string(source_path).ok()?;
+    let entries: Vec<_> = text.lines().filter_map(parse_line).collect();
+    write_cache(&CacheFile {
+        source_path: source_path_text,
+        source_len,
+        source_modified_ms,
+        entries: entries.clone(),
+    });
+    Some(entries)
+}
+
+fn cache_path() -> Option<PathBuf> {
+    dirs::cache_dir().map(|root| {
+        root.join("openCodexBar")
+            .join("opencodex")
+            .join("usage-cache.json")
+    })
+}
+
+fn read_cache() -> Option<CacheFile> {
+    let bytes = fs::read(cache_path()?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_cache(cache: &CacheFile) {
+    let Some(path) = cache_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err () {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(cache) else {
+        return;
+    };
+    let _ = fs::write(path, bytes);
+}
+
+fn usage_path() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("OPENCODEX_HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed).join("usage.jsonl"));
+        }
+    }
+    dirs::home_dir().map(|home| home.join(".opencodex").join("usage.jsonl"))
+}
+
+fn parse_line(line: &str) -> Option<OpenCodexEntry> {
+    let value: Value = serde_json::from_str(line.trim()).ok()?;
+    let request_id = value.get("requestId")?.as_str()?.trim().to_string();
+    let model = value.get("model")?.as_str()?.trim().to_string();
+    if request_id.is_empty() || model.is_empty() {
+        return None;
+    }
+    let provider = value
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("openai")
+        .to_string();
+    let timestamp = parse_timestamp(value.get("timestamp")?)?;
+    let usage = value.get("usage").and_then(Value::as_object);
+    Some(OpenCodexEntry {
+        request_id,
+        timestamp,
+        provider,
+        model,
+        usage_status: value
+            .get("usageStatus")
+            .and_then(Value::as_str)
+            .unwrap_or("unreported")
+            .trim()
+            .to_ascii_lowercase(),
+        conversation_id: value
+            .get("conversationId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        input_tokens: usage.and_then(|object| nonnegative_u64(object.get("inputTokens"))),
+        output_tokens: usage.and_then(|object| nonnegative_u64(object.get("outputTokens"))),
+        cache_read_tokens: usage.and_then(|object| {
+            nonnegative_u64(object.get("cacheReadInputTokens"))
+                .or_else(|| nonnegative_u64(object.get("cachedInputTokens")))
+        }),
+        cache_creation_tokens: usage
+            .and_then(|object| nonnegative_u64(object.get("cacheCreationInputTokens"))),
+        reasoning_tokens: usage
+            .and_then(|object| nonnegative_u64(object.get("reasoningOutputTokens"))),
+        total_tokens: value
+            .get("totalTokens")
+            .and_then(|value| nonnegative_u64(Some(value))),
+    })
+}
+
+impl OpenCodexEntry {
+    fn resolved_total_tokens(&self) -> Option<u64> {
+        self.total_tokens.or_else(|| {
+            let mut saw = false;
+            let mut total = 0u64;
+            for value in [
+                self.input_tokens,
+                self.output_tokens,
+                self.cache_creation_tokens,
+            ] {
+                if let Some(value) = value {
+                    saw = true;
+                    total = total.saturating_add(value);
+                }
+            }
+            saw.then_some(total)
+        })
+    }
+}
+
+fn parse_timestamp(value: &Value) -> Option<DateTime<Utc>> {
+    if let Some(raw) = value.as_str() {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(raw.trim()) {
+            return Some(parsed.with_timezone(&Utc));
+        }
+        if let Ok(number) = raw.trim().parse::<f64>() {
+            return timestamp_from_epoch(number);
+        }
+    }
+    value.as_f64().and_then(timestamp_from_epoch)
+}
+
+fn timestamp_from_epoch(value: f64) -> Option<DateTime<Utc>> {
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    let seconds = if value >= 1_000_000_000_000.0 {
+        value / 1000.0
+    } else {
+        value
+    };
+    let whole = seconds.trunc() as i64;
+    let nanos = (seconds.fract().abs() * 1_000_000_000.0) as u32;
+    Utc.timestamp_opt(whole, nanos).single()
+}
+
+fn nonnegative_u64(value: Option<&Value>) -> Option<u64> {
+    let value = value?;
+    if let Some(number) = value.as_u64() {
+        return Some(number);
+    }
+    let number = value.as_f64()?;
+    (number.is_finite() && number >= 0.0 && number <= u64::MAX as f64)
+        .then_some(number as u64)
+}
+
+fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => left.checked_add(right),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_keeps_reported_token_classes() {
+        let value = serde_json::json!({
+            "requestId": "r1", "timestamp": "2026-08-18T10:00:00Z", "provider": "openai",
+            "model": "gpt-test", "usageStatus": "reported", "conversationId": "c1",
+            "usage": {"inputTokens": 10, "outputTokens": 4, "cachedInputTokens": 3, "reasoningOutputTokens": 2}
+        });
+        let entry = parse_line(&value.to_string()).expect("entry");
+        assert_eq!(entry.model, "gpt-test");
+        assert_eq!(entry.input_tokens, Some(10));
+        assert_eq!(entry.output_tokens, Some(4));
+        assert_eq!(entry.cache_read_tokens, Some(3));
+        assert_eq!(entry.reasoning_tokens, Some(2));
+    }
+}

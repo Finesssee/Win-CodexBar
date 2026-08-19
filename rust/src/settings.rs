@@ -32,6 +32,42 @@ pub use types::*;
 mod tests;
 
 /// Application settings
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LowPowerModePreference {
+    #[default]
+    Off,
+    On,
+    Automatic,
+}
+
+impl LowPowerModePreference {
+    pub fn resolve(self, system_battery_saver_enabled: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::On => true,
+            Self::Automatic => system_battery_saver_enabled,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Automatic => "automatic",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            "automatic" => Some(Self::Automatic),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "RawSettings", default)]
 pub struct Settings {
@@ -54,6 +90,10 @@ pub struct Settings {
     /// Manual refresh stays immediate.
     #[serde(default)]
     pub low_power_mode: bool,
+
+    /// Off/On/Automatic background-work power preference (upstream 0.53).
+    #[serde(default)]
+    pub low_power_mode_preference: LowPowerModePreference,
 
     /// Whether to start minimized
     pub start_minimized: bool,
@@ -450,6 +490,7 @@ impl Default for Settings {
             adaptive_refresh: false,
             refresh_all_providers_on_menu_open: false,
             low_power_mode: false,
+            low_power_mode_preference: LowPowerModePreference::Off,
             start_minimized: false,
             start_at_login: false,
             show_notifications: true,

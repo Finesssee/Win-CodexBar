@@ -176,6 +176,7 @@ export interface SettingsSnapshot {
   adaptiveRefresh: boolean;
   refreshAllProvidersOnMenuOpen: boolean;
   lowPowerMode: boolean;
+  lowPowerModePreference?: "off" | "on" | "automatic";
   startAtLogin: boolean;
   startMinimized: boolean;
   showNotifications: boolean;
@@ -263,6 +264,7 @@ export interface SettingsUpdate {
   adaptiveRefresh?: boolean;
   refreshAllProvidersOnMenuOpen?: boolean;
   lowPowerMode?: boolean;
+  lowPowerModePreference?: "off" | "on" | "automatic";
   startAtLogin?: boolean;
   startMinimized?: boolean;
   showNotifications?: boolean;

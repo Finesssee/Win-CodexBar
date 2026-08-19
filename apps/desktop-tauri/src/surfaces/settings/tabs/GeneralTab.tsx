@@ -551,13 +551,18 @@ export default function GeneralTab({
           <Field
             label={t("LowPowerMode")}
             description={t("LowPowerModeHelper")}
-            leading
           >
-            <Toggle
-              checked={settings.lowPowerMode}
+            <Select
+              value={settings.lowPowerModePreference ?? (settings.lowPowerMode ? "on" : "off")}
               disabled={saving}
-              ariaLabel={t("LowPowerMode")}
-              onChange={(v) => set({ lowPowerMode: v })}
+              options={[
+                { value: "off", label: t("LowPowerModeOff") },
+                { value: "on", label: t("LowPowerModeOn") },
+                { value: "automatic", label: t("LowPowerModeAutomatic") },
+              ]}
+              onChange={(v) => set({
+                lowPowerModePreference: v as "off" | "on" | "automatic",
+              })}
             />
           </Field>
         </div>

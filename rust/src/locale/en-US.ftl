@@ -425,7 +425,10 @@ RefreshIntervalHelper = Seconds between automatic provider refreshes (0 = manual
 RefreshAllProvidersOnMenuOpen = Refresh on menu open
 RefreshAllProvidersOnMenuOpenHelper = Force-refresh enabled providers whenever the tray menu opens.
 LowPowerMode = Low Power Mode
-LowPowerModeHelper = Limit automatic background refresh to once every 30 minutes. Manual refresh stays immediate.
+LowPowerModeHelper = When on, limit automatic background refresh to once every 30 minutes. Manual refresh stays immediate. Automatic follows Windows Battery Saver.
+LowPowerModeOff = Off
+LowPowerModeOn = On
+LowPowerModeAutomatic = Automatic
 HighUsageWarningHelper = Show a warning when usage exceeds this percentage.
 CriticalUsageWarningHelper = Show a critical alert when usage exceeds this percentage.
 GlobalShortcutFieldLabel = Global shortcut

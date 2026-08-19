@@ -98,19 +98,23 @@ pub(crate) fn automatic_interval(
 }
 
 fn resolve_refresh_interval(settings: &Settings) -> Option<Duration> {
+    let effective_low_power = settings.low_power_mode
+        || settings
+            .low_power_mode_preference
+            .resolve(system_battery_saver_enabled());
     let requested = if settings.adaptive_refresh {
-        Some(adaptive_delay_now())
+        Some(adaptive_delay_now(effective_low_power))
     } else {
         refresh_interval(settings.refresh_interval_secs)
     };
-    automatic_interval(requested, settings.low_power_mode)
+    automatic_interval(requested, effective_low_power)
 }
 
-fn adaptive_delay_now() -> Duration {
+fn adaptive_delay_now(low_power_mode_enabled: bool) -> Duration {
     let decision = adaptive_next_delay(AdaptiveRefreshInput {
         last_menu_open_age: age_since(&LAST_MENU_OPEN),
         last_coding_activity_age: age_since(&LAST_CODING_ACTIVITY),
-        low_power_mode_enabled: low_power_mode_enabled(),
+        low_power_mode_enabled,
         thermal_pressure: ThermalPressure::Nominal,
     });
     tracing::debug!(
@@ -122,13 +126,13 @@ fn adaptive_delay_now() -> Duration {
     decision.delay
 }
 
-/// Best-effort Windows battery/AC check. Returns false when unknown.
-fn low_power_mode_enabled() -> bool {
+/// Best-effort Windows Battery Saver check. Returns false when unknown.
+fn system_battery_saver_enabled() -> bool {
     #[cfg(windows)]
     {
-        // SYSTEM_POWER_STATUS via kernel32. ACLineStatus: 0 = offline (battery).
-        // BatteryFlag bit 0x08 = charging; BatteryLifePercent 0-100 or 255 unknown.
-        // Treat "on battery and < 20% remaining" as low-power; skip on failure.
+        // SYSTEM_POWER_STATUS via kernel32. SystemStatusFlag bit 0x01 is
+        // the Windows 10+ Battery Saver state. Automatic follows that explicit
+        // system preference only; battery percentage alone is not equivalent.
         #[repr(C)]
         struct SystemPowerStatus {
             ac_line_status: u8,
@@ -154,11 +158,7 @@ fn low_power_mode_enabled() -> bool {
         if !ok {
             return false;
         }
-        let on_battery = status.ac_line_status == 0;
-        let low_pct = status.battery_life_percent <= 20;
-        // system_status_flag bit 0x01 = Battery Saver is on (Win10+)
-        let battery_saver = status.system_status_flag & 0x01 != 0;
-        on_battery && (low_pct || battery_saver)
+        status.system_status_flag & 0x01 != 0
     }
     #[cfg(not(windows))]
     {

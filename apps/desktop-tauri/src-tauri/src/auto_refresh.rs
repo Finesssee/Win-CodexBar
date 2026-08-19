@@ -98,10 +98,9 @@ pub(crate) fn automatic_interval(
 }
 
 fn resolve_refresh_interval(settings: &Settings) -> Option<Duration> {
-    let effective_low_power = settings.low_power_mode
-        || settings
-            .low_power_mode_preference
-            .resolve(system_battery_saver_enabled());
+    let effective_low_power = settings
+        .low_power_mode_preference
+        .resolve(system_battery_saver_enabled());
     let requested = if settings.adaptive_refresh {
         Some(adaptive_delay_now(effective_low_power))
     } else {
@@ -261,7 +260,7 @@ mod tests {
         assert_eq!(automatic_interval(None, true), None);
 
         let settings = Settings {
-            low_power_mode: true,
+            low_power_mode_preference: codexbar::settings::LowPowerModePreference::On,
             adaptive_refresh: false,
             refresh_interval_secs: 300,
             ..Default::default()

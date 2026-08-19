@@ -155,7 +155,6 @@ impl SettingsUpdate {
             settings.open_codex_usage_logs_enabled = v;
         }
         if let Some(v) = self.low_power_mode {
-            settings.low_power_mode = v;
             settings.low_power_mode_preference = if v {
                 codexbar::settings::LowPowerModePreference::On
             } else {
@@ -166,7 +165,6 @@ impl SettingsUpdate {
             && let Some(preference) = codexbar::settings::LowPowerModePreference::parse(value)
         {
             settings.low_power_mode_preference = preference;
-            settings.low_power_mode = preference == codexbar::settings::LowPowerModePreference::On;
         }
         if let Some(ref s) = self.tray_icon_mode
             && let Some(mode) = parse_tray_icon_mode(s)

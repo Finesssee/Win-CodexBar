@@ -31,6 +31,7 @@ const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
   getDeepSeekPricingStatus: vi.fn().mockResolvedValue(null),
+  getUsageSpendSummary: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -206,6 +207,7 @@ describe("TrayPanel provider grid", () => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
     tauriMocks.getDeepSeekPricingStatus.mockResolvedValue(null);
+    tauriMocks.getUsageSpendSummary.mockResolvedValue({ rows: [], models: [] });
     tauriMocks.flyoutStoredSize.mockResolvedValue(null);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);

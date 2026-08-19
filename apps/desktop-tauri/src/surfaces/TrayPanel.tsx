@@ -1,7 +1,7 @@
-import { Fragment, type CSSProperties } from "react";
+import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
-import { beginFlyoutGesture, openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
+import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
+import { beginFlyoutGesture, getUsageSpendSummary, openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import {
   TRAY_SCALE_MAX,
   TRAY_SCALE_MIN,
@@ -185,6 +185,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           onGestureEnd={handleGestureEnd}
         />
         <div className="provider-grid__divider" />
+        {selectedProviderId === null && (
+          <OverviewSpendSummary providerIds={sorted.map((provider) => provider.providerId)} />
+        )}
         <div className="menu-stack">
           {useWideColumns
             ? wideColumns.map((column) => (
@@ -295,5 +298,38 @@ function TrayResizeHandles() {
         }}
       />
     </>
+  );
+}
+
+function OverviewSpendSummary({ providerIds }: { providerIds: string[] }) {
+  const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getUsageSpendSummary({ historyDays: 30 })
+      .then((value) => { if (!cancelled) setSummary(value); })
+      .catch(() => { if (!cancelled) setSummary(null); });
+    return () => { cancelled = true; };
+  }, [providerIds.join("|")]);
+
+  if (!summary || providerIds.length === 0) return null;
+  const wanted = new Set(providerIds);
+  const rows = summary.rows.filter((row) => wanted.has(row.providerId));
+  const known = rows.filter((row) => row.thirtyDay != null && Number.isFinite(row.thirtyDay));
+  if (known.length === 0) return null;
+  const total = known.reduce((sum, row) => sum + (row.thirtyDay ?? 0), 0);
+  const partial = known.length < providerIds.length;
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+
+  return (
+    <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+        <strong>Usage & Spend · 30d</strong>
+        <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
+      </div>
+      <div className="settings-section__caption" style={{ marginTop: 4 }}>
+        {known.length} of {providerIds.length} providers have spend · local/provider estimates
+      </div>
+    </div>
   );
 }

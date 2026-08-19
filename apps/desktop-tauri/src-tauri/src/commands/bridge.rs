@@ -703,6 +703,7 @@ pub struct SettingsSnapshot {
     weekly_progress_work_days: Option<u8>,
     cost_summary_display_style: &'static str,
     open_codex_usage_logs_enabled: bool,
+    hide_native_codex_cost_when_open_codex_present: bool,
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
@@ -814,6 +815,7 @@ impl From<Settings> for SettingsSnapshot {
                 settings.cost_summary_display_style,
             ),
             open_codex_usage_logs_enabled: settings.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: settings.hide_native_codex_cost_when_open_codex_present,
             provider_accent_colors: settings
                 .provider_configs
                 .iter()

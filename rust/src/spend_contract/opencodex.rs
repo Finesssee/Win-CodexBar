@@ -442,6 +442,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn aggregate_deduplicates_requests_and_applies_history_window() {
+        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z").unwrap().with_timezone(&Utc);
+        let make = |request_id: &str, timestamp: &str, input: u64| OpenCodexEntry {
+            request_id: request_id.into(),
+            timestamp: DateTime::parse_from_rfc3339(timestamp).unwrap().with_timezone(&Utc),
+            provider: "openai".into(), model: "gpt-5".into(), usage_status: "reported".into(),
+            conversation_id: Some(request_id.into()), input_tokens: Some(input), output_tokens: Some(1),
+            cache_read_tokens: Some(0), cache_creation_tokens: None, reasoning_tokens: None, total_tokens: Some(input + 1),
+        };
+        let source = aggregate(vec![
+            make("same", "2026-08-18T10:00:00Z", 10),
+            make("same", "2026-08-18T11:00:00Z", 20),
+            make("old", "2026-08-01T10:00:00Z", 30),
+        ], now, 7, &CustomPricing::default()).expect("source");
+        assert_eq!(source.request_count, 1);
+        assert_eq!(source.conversation_count, 1);
+        assert_eq!(source.token_mix.input_tokens, Some(20));
+        assert_eq!(source.coverage.priced, 1);
+        assert!(source.known_cost_usd.is_some());
+    }
+
+    #[test]
     fn parser_keeps_reported_token_classes() {
         let value = serde_json::json!({
             "requestId": "r1", "timestamp": "2026-08-18T10:00:00Z", "provider": "openai",

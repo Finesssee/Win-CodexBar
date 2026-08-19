@@ -350,6 +350,7 @@ export const ALL_LOCALE_KEYS = [
   "UsageSpendModels",
   "UsageSpendAllTime",
   "UsageSpendOpenCodexImport",
+  "UsageSpendHideNativeCodex",
   "UsageSpendSpend",
   "UsageSpendPriceCoverage",
   "UsageSpendConversations",

@@ -570,6 +570,7 @@ locale_keys! {
     UsageSpendModels,
     UsageSpendAllTime,
     UsageSpendOpenCodexImport,
+    UsageSpendHideNativeCodex,
     UsageSpendSpend,
     UsageSpendPriceCoverage,
     UsageSpendConversations,

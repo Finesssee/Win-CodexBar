@@ -73,6 +73,7 @@ pub struct SettingsUpdate {
     pub weekly_progress_work_days: Option<u8>,
     pub cost_summary_display_style: Option<String>,
     pub open_codex_usage_logs_enabled: Option<bool>,
+    pub hide_native_codex_cost_when_open_codex_present: Option<bool>,
 }
 
 impl SettingsUpdate {
@@ -153,6 +154,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.open_codex_usage_logs_enabled {
             settings.open_codex_usage_logs_enabled = v;
+        }
+        if let Some(v) = self.hide_native_codex_cost_when_open_codex_present {
+            settings.hide_native_codex_cost_when_open_codex_present = v;
         }
         if let Some(v) = self.low_power_mode {
             settings.low_power_mode_preference = if v {

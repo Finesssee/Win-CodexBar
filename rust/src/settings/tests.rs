@@ -53,6 +53,7 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
 
     let enabled = Settings {
         open_codex_usage_logs_enabled: true,
+        hide_native_codex_cost_when_open_codex_present: true,
         ..Settings::default()
     };
     let json = serde_json::to_string(&enabled).expect("serialize OpenCodex usage opt-in");
@@ -60,6 +61,7 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
 
     let loaded: Settings = serde_json::from_str(&json).expect("deserialize OpenCodex usage opt-in");
     assert!(loaded.open_codex_usage_logs_enabled);
+    assert!(loaded.hide_native_codex_cost_when_open_codex_present);
 }
 
 #[test]

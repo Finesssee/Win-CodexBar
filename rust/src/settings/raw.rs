@@ -175,6 +175,8 @@ pub(super) struct RawSettings {
     cost_summary_display_style: CostSummaryDisplayStyle,
     #[serde(default)]
     open_codex_usage_logs_enabled: bool,
+    #[serde(default)]
+    hide_native_codex_cost_when_open_codex_present: bool,
 }
 
 impl Default for RawSettings {
@@ -277,6 +279,7 @@ impl Default for RawSettings {
             codex_external_oauth_sources_allowed: s.codex_external_oauth_sources_allowed,
             cost_summary_display_style: s.cost_summary_display_style,
             open_codex_usage_logs_enabled: s.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: s.hide_native_codex_cost_when_open_codex_present,
         }
     }
 }
@@ -581,6 +584,7 @@ impl From<RawSettings> for Settings {
             },
             cost_summary_display_style: raw.cost_summary_display_style,
             open_codex_usage_logs_enabled: raw.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: raw.hide_native_codex_cost_when_open_codex_present,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
         }
     }

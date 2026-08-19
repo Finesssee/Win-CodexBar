@@ -306,7 +306,7 @@ fn short_session_id(value: &str) -> String {
 
 /// Print JSON output
 fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Value> {
-    let include_open_codex = Settings::load().open_codex_usage_logs_enabled;
+    let settings = Settings::load();
     results
         .iter()
         .map(|r| {
@@ -321,8 +321,8 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                     .then(|| build_local_spend_contract_from_summary(
                         &r.provider,
                         days.clamp(1, 365),
-                        include_open_codex && r.provider == "codex",
-                        false,
+                        settings.open_codex_usage_logs_enabled && r.provider == "codex",
+                        settings.hide_native_codex_cost_when_open_codex_present && r.provider == "codex",
                         r.summary.clone(),
                     ));
                 serde_json::json!({

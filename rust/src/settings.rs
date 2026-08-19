@@ -341,6 +341,10 @@ pub struct Settings {
     /// Opt-in read-only import of OpenCodex usage.jsonl into Usage & Spend / CLI cost output.
     #[serde(default)]
     pub open_codex_usage_logs_enabled: bool,
+
+    /// Hide native Codex spend rows when an OpenCodex import is present.
+    #[serde(default)]
+    pub hide_native_codex_cost_when_open_codex_present: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -546,6 +550,7 @@ impl Default for Settings {
             codex_external_oauth_sources_allowed: false,
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
             open_codex_usage_logs_enabled: false,
+            hide_native_codex_cost_when_open_codex_present: false,
         }
     }
 }

@@ -93,7 +93,7 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot], selected_days: u3
     };
     let settings = codexbar::settings::Settings::load();
     let contract = build_local_spend_contract_from_summary(
-        "codex", history_days, settings.open_codex_usage_logs_enabled, false, selected_summary,
+        "codex", history_days, settings.open_codex_usage_logs_enabled, settings.hide_native_codex_cost_when_open_codex_present, selected_summary,
     );
     UsageSpendSummary { rows, contract }
 }

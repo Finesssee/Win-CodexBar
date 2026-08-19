@@ -253,6 +253,7 @@ export interface SettingsSnapshot {
   costSummaryDisplayStyle: CostSummaryDisplayStyle;
   /** Opt-in read-only OpenCodex usage.jsonl import. */
   openCodexUsageLogsEnabled?: boolean;
+  hideNativeCodexCostWhenOpenCodexPresent?: boolean;
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
@@ -324,6 +325,7 @@ export interface SettingsUpdate {
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   openCodexUsageLogsEnabled?: boolean;
+  hideNativeCodexCostWhenOpenCodexPresent?: boolean;
   providerAccentColors?: Record<string, string | null>;
 }
 

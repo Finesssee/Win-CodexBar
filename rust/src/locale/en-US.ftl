@@ -327,6 +327,7 @@ UsageSpendCaption = Local estimated cost history for Codex and Claude (JSONL log
 UsageSpendModels = Models
 UsageSpendAllTime = All time
 UsageSpendOpenCodexImport = OpenCodex import
+UsageSpendHideNativeCodex = Hide native Codex when OpenCodex is present
 UsageSpendSpend = Spend
 UsageSpendPriceCoverage = Price coverage
 UsageSpendTokenMix = Token mix

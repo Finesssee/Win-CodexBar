@@ -126,6 +126,7 @@ export default function UsageSpendTab(_props: TabProps) {
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const [includeOpenCodex, setIncludeOpenCodex] = useState(false);
+  const [hideNativeCodex, setHideNativeCodex] = useState(false);
   const [showAllModels, setShowAllModels] = useState(false);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
@@ -133,7 +134,10 @@ export default function UsageSpendTab(_props: TabProps) {
 
   useEffect(() => {
     void getSettingsSnapshot()
-      .then((settings) => setIncludeOpenCodex(settings.openCodexUsageLogsEnabled ?? false))
+      .then((settings) => {
+        setIncludeOpenCodex(settings.openCodexUsageLogsEnabled ?? false);
+        setHideNativeCodex(settings.hideNativeCodexCostWhenOpenCodexPresent ?? false);
+      })
       .catch(() => {
         // Keep the safe default (off) if settings cannot be loaded.
       });
@@ -229,6 +233,23 @@ export default function UsageSpendTab(_props: TabProps) {
           />
           {t("UsageSpendOpenCodexImport")}
         </label>
+        {includeOpenCodex && (
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={hideNativeCodex}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                setHideNativeCodex(enabled);
+                void updateSettings({ hideNativeCodexCostWhenOpenCodexPresent: enabled }).catch((err: unknown) => {
+                  setHideNativeCodex(!enabled);
+                  setError(err instanceof Error ? err.message : String(err));
+                });
+              }}
+            />
+            {t("UsageSpendHideNativeCodex")}
+          </label>
+        )}
       </div>
 
       <CostSummaryStyleControl t={t} />

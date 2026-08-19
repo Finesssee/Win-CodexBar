@@ -158,9 +158,11 @@ describe("GeneralTab language picker", () => {
     const set = vi.fn();
     render(<GeneralTab settings={settings} set={set} saving={false} />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "LowPowerMode" }));
+    fireEvent.change(screen.getByDisplayValue("LowPowerModeOff"), {
+      target: { value: "automatic" },
+    });
 
-    expect(set).toHaveBeenCalledWith({ lowPowerMode: true });
+    expect(set).toHaveBeenCalledWith({ lowPowerModePreference: "automatic" });
   });
 
   it("updates the default notification sound set", () => {

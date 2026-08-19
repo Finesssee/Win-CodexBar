@@ -33,6 +33,7 @@ import type {
   SessionFocusResult,
   TrayVisibilityStatusDto,
   UsageSpendSummary,
+  SpendContract,
   CodexLocalProjectUsageSnapshot,
   CodexAccount,
   CodexAccountUsageSnapshot,
@@ -245,6 +246,17 @@ export function getProviderLocalUsageSummary(
 export function getUsageSpendSummary(options?: { historyDays?: number }): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary", {
     historyDays: options?.historyDays ?? null,
+  });
+}
+
+export function getSpendContract(
+  providerId: string,
+  options?: { historyDays?: number; includeOpenCodex?: boolean },
+): Promise<SpendContract> {
+  return invoke<SpendContract>("get_spend_contract", {
+    providerId,
+    historyDays: options?.historyDays ?? null,
+    includeOpenCodex: options?.includeOpenCodex ?? null,
   });
 }
 

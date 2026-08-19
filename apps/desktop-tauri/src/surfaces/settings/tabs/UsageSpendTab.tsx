@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { getCodexWorkspacesSnapshot, getSettingsSnapshot, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
-import type { CodexLocalProjectUsageSnapshot, CostSummaryDisplayStyle, SettingsSnapshot, UsageSpendSummary } from "../../../types/bridge";
+import { getCodexWorkspacesSnapshot, getSettingsSnapshot, getSpendContract, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
+import type { CodexLocalProjectUsageSnapshot, CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 
@@ -121,11 +121,13 @@ function downloadDataUrl(dataUrl: string, filename: string) {
 export default function UsageSpendTab(_props: TabProps) {
   const { t } = useLocale();
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
-  const [selectedDays, setSelectedDays] = useState<7 | 30>(30);
+  const [selectedDays, setSelectedDays] = useState<0 | 7 | 30>(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<CodexLocalProjectUsageSnapshot | null>(null);
+  const [contract, setContract] = useState<SpendContract | null>(null);
+  const [includeOpenCodex, setIncludeOpenCodex] = useState(false);
   const [showAllModels, setShowAllModels] = useState(false);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
@@ -134,20 +136,23 @@ export default function UsageSpendTab(_props: TabProps) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
+    const indexDays = selectedDays === 0 ? 365 : selectedDays;
     void Promise.all([
-      getUsageSpendSummary({ historyDays: selectedDays }),
-      getCodexWorkspacesSnapshot({ historyDays: selectedDays }),
+      getUsageSpendSummary({ historyDays: selectedDays === 0 ? 30 : selectedDays }),
+      getCodexWorkspacesSnapshot({ historyDays: indexDays }),
+      getSpendContract("codex", { historyDays: selectedDays, includeOpenCodex }),
     ])
-      .then(([data, workspaceData]) => {
+      .then(([data, workspaceData, spendContract]) => {
         setSummary(data);
         setWorkspaces(workspaceData);
+        setContract(spendContract);
         setLoading(false);
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
-  }, [selectedDays]);
+  }, [includeOpenCodex, selectedDays]);
 
   useEffect(() => {
     load();
@@ -199,7 +204,7 @@ export default function UsageSpendTab(_props: TabProps) {
       </div>
 
       <div className="settings-section__group" style={{ marginBottom: 12, display: "flex", gap: 8 }}>
-        {([7, 30] as const).map((days) => (
+        {([7, 30, 0] as const).map((days) => (
           <button
             key={days}
             type="button"
@@ -207,9 +212,17 @@ export default function UsageSpendTab(_props: TabProps) {
             aria-pressed={selectedDays === days}
             onClick={() => setSelectedDays(days)}
           >
-            {days}d
+            {days === 0 ? "All time" : `${days}d`}
           </button>
         ))}
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+          <input
+            type="checkbox"
+            checked={includeOpenCodex}
+            onChange={(event) => setIncludeOpenCodex(event.target.checked)}
+          />
+          OpenCodex import
+        </label>
       </div>
 
       <CostSummaryStyleControl t={t} />
@@ -254,13 +267,19 @@ export default function UsageSpendTab(_props: TabProps) {
         </table>
       )}
 
-      {!error && summary && (
+      {!error && contract && <SpendContractOverview contract={contract} />}
+
+      {!error && summary && selectedDays !== 0 && (
         <ModelsPanel
           models={summary.models ?? []}
           showAll={showAllModels}
           onToggleAll={() => setShowAllModels((value) => !value)}
           t={t}
         />
+      )}
+
+      {!error && contract && selectedDays === 0 && (
+        <ContractModelsPanel contract={contract} />
       )}
 
       {!error && workspaces && (
@@ -284,6 +303,105 @@ export default function UsageSpendTab(_props: TabProps) {
   );
 }
 
+
+
+function SpendContractOverview({ contract }: { contract: SpendContract }) {
+  const coverage = contract.priceCoverageRatio == null
+    ? "unknown"
+    : `${Math.round(contract.priceCoverageRatio * 100)}%`;
+  const provenance = contract.provenance === "listPriceEstimate"
+    ? "API list-price estimate"
+    : contract.provenance === "vendorMetered"
+      ? "Vendor metered"
+      : contract.provenance === "mixed"
+        ? "Mixed sources"
+        : "Unknown";
+  const total = contract.knownCostUsd == null
+    ? "—"
+    : `${contract.priceCoverage.unpriced > 0 ? "~" : ""}${formatUsd(contract.knownCostUsd, "USD")}`;
+  const tokenParts = [
+    contract.tokenMix.inputTokens == null ? null : `${contract.tokenMix.inputTokens.toLocaleString()} input`,
+    contract.tokenMix.outputTokens == null ? null : `${contract.tokenMix.outputTokens.toLocaleString()} output`,
+    contract.tokenMix.cacheReadTokens == null ? null : `${contract.tokenMix.cacheReadTokens.toLocaleString()} cached`,
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <div className="settings-section__group" style={{ marginTop: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+        <MetricCard label="Spend" value={total} detail={contract.knownZero ? "Known zero" : provenance} />
+        <MetricCard label="Price coverage" value={coverage} detail={`${contract.priceCoverage.unpriced} unpriced`} />
+        <MetricCard label="Conversations" value={contract.conversationCount.toLocaleString()} detail={contract.historyCoverageEstablished ? "History covered" : "Partial history"} />
+        <MetricCard label="Token mix" value={tokenParts || "—"} detail={contract.customPricingActive ? "Custom pricing active" : "Default pricing"} />
+      </div>
+      <ActivityHeatmap cells={contract.hourlyActivity} />
+      {contract.imports.map((source) => (
+        <p key={source.sourceId} className="settings-section__caption" style={{ marginTop: 8 }}>
+          {source.displayName}: {source.requestCount.toLocaleString()} requests · {source.conversationCount.toLocaleString()} conversations
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="provider-detail-section" style={{ padding: "10px 12px" }}>
+      <span className="settings-section__caption">{label}</span>
+      <strong style={{ display: "block", marginTop: 3 }}>{value}</strong>
+      <span className="settings-section__caption">{detail}</span>
+    </div>
+  );
+}
+
+function ActivityHeatmap({ cells }: { cells: SpendContract["hourlyActivity"] }) {
+  const lookup = new Map(cells.map((cell) => [`${cell.weekday}:${cell.hour}`, cell.conversations]));
+  const max = Math.max(1, ...cells.map((cell) => cell.conversations));
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h4 style={{ margin: "0 0 8px" }}>Hourly activity</h4>
+      <div
+        aria-label="Hourly conversation activity heatmap"
+        style={{ display: "grid", gridTemplateColumns: "repeat(24, minmax(7px, 1fr))", gap: 2 }}
+      >
+        {Array.from({ length: 7 * 24 }, (_, index) => {
+          const weekday = Math.floor(index / 24);
+          const hour = index % 24;
+          const value = lookup.get(`${weekday}:${hour}`) ?? 0;
+          const alpha = value === 0 ? 0.08 : 0.18 + (value / max) * 0.72;
+          return (
+            <span
+              key={`${weekday}:${hour}`}
+              title={`Day ${weekday + 1}, ${hour}:00 · ${value} conversations`}
+              style={{ aspectRatio: "1", borderRadius: 2, background: `rgb(90 160 255 / ${alpha})` }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ContractModelsPanel({ contract }: { contract: SpendContract }) {
+  return (
+    <div className="settings-section__group" style={{ marginTop: 20 }}>
+      <h4 style={{ margin: 0 }}>Models</h4>
+      <p className="settings-section__caption">All-time is backed by the latest {contract.historyDays} days of local history.</p>
+      <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+        {contract.models.map((model) => (
+          <div key={model.model} className="provider-detail-section" style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
+            <span>
+              <strong>{model.model}</strong>
+              <span className="settings-section__caption" style={{ display: "block" }}>
+                {model.totalTokens.toLocaleString()} tokens{model.customPricing ? " · custom pricing" : ""}
+              </span>
+            </span>
+            <span>{model.costUsd == null ? "unpriced" : formatUsd(model.costUsd, "USD")}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function ModelsPanel({
   models,

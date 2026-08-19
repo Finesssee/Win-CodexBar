@@ -99,6 +99,23 @@ pub struct ImportedSpendSource {
     pub hourly_activity: Vec<SpendActivityCell>,
 }
 
+struct NativeSpendData {
+    projects: Vec<ProjectUsage>,
+    conversations: Vec<SessionUsage>,
+    project_source_status: Option<SourceStatus>,
+    activity: Vec<SpendActivityCell>,
+    daily: Vec<SpendDailyPoint>,
+}
+
+struct ResolvedSpendData {
+    known_cost_usd: Option<f64>,
+    price_coverage: CostCoverageCounts,
+    token_mix: SpendTokenMix,
+    models: Vec<SpendModelRow>,
+    daily: Vec<SpendDailyPoint>,
+    hourly_activity: Vec<SpendActivityCell>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpendContract {
@@ -182,19 +199,12 @@ impl CustomRates {
     }
 
     fn cost(&self, counts: &ModelTokenCounts) -> Option<f64> {
-        let cached = counts.cached_tokens.min(counts.input_tokens);
-        let uncached = counts.input_tokens.saturating_sub(cached);
-        let mut total = 0.0;
-        if uncached > 0 {
-            total += uncached as f64 * self.input? / 1_000_000.0;
-        }
-        if counts.output_tokens > 0 {
-            total += counts.output_tokens as f64 * self.output? / 1_000_000.0;
-        }
-        if cached > 0 {
-            total += cached as f64 * self.cache_read? / 1_000_000.0;
-        }
-        total.is_finite().then_some(total)
+        self.cost_parts(
+            counts.input_tokens,
+            counts.output_tokens,
+            counts.cached_tokens,
+            0,
+        )
     }
 
     fn cost_parts(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> Option<f64> {
@@ -254,24 +264,7 @@ pub fn build_local_spend_contract_from_summary(
         reasoning_tokens: None,
     };
 
-    let (projects, conversations, project_source_status, native_activity, codex_daily) =
-        if provider_id == "codex" {
-            match CodexWorkspacesIndex::new(history_days).load_snapshot(false, |_| {}) {
-                Ok(snapshot) => {
-                    let activity = activity_from_sessions(&snapshot.sessions);
-                    let daily = snapshot.daily.iter().map(|point| SpendDailyPoint {
-                        day: point.day.clone(),
-                        cost_usd: point.estimated_cost_usd,
-                        total_tokens: Some(point.total_tokens),
-                    }).collect();
-                    (snapshot.projects, snapshot.sessions, Some(snapshot.source_status), activity, Some(daily))
-                }
-                Err(_) => (Vec::new(), Vec::new(), None, Vec::new(), None),
-            }
-        } else {
-            (Vec::new(), Vec::new(), None, Vec::new(), None)
-        };
-    let native_daily = codex_daily.unwrap_or_else(|| daily_points(provider_id, history_days));
+    let native = load_native_spend(provider_id, history_days);
     let imports: Vec<_> = if provider_id == "codex" && include_opencodex {
         opencodex::load(history_days, &custom).into_iter().collect()
     } else {
@@ -279,36 +272,21 @@ pub fn build_local_spend_contract_from_summary(
     };
     let imported = imports.first();
     let replace_native = hide_native_codex_when_opencodex_present && imported.is_some();
+    let resolved = resolve_spend(
+        native_cost,
+        native_coverage,
+        native_token_mix,
+        native_models,
+        native.daily.clone(),
+        native.activity.clone(),
+        imported,
+        replace_native,
+    );
 
-    let (known_cost_usd, price_coverage, token_mix, models, daily, hourly_activity) =
-        if let Some(imported) = imported {
-            if replace_native {
-                (
-                    imported.known_cost_usd,
-                    imported.coverage.clone(),
-                    imported.token_mix.clone(),
-                    imported.models.clone(),
-                    imported.daily.clone(),
-                    imported.hourly_activity.clone(),
-                )
-            } else {
-                (
-                    sum_optional_cost(native_cost, imported.known_cost_usd),
-                    merge_coverage(native_coverage.clone(), &imported.coverage),
-                    merge_token_mix(native_token_mix.clone(), &imported.token_mix),
-                    merge_models(native_models.clone(), &imported.models),
-                    merge_daily(native_daily.clone(), &imported.daily),
-                    merge_activity(native_activity.clone(), &imported.hourly_activity),
-                )
-            }
-        } else {
-            (native_cost, native_coverage, native_token_mix, native_models, native_daily, native_activity)
-        };
-
-    let native_conversations = if conversations.is_empty() {
+    let native_conversations = if native.conversations.is_empty() {
         summary.sessions_count
     } else {
-        conversations.len().min(u32::MAX as usize) as u32
+        native.conversations.len().min(u32::MAX as usize) as u32
     };
     let imported_conversations = imported.map_or(0, |source| source.conversation_count);
     let conversation_count = if replace_native {
@@ -325,22 +303,57 @@ pub fn build_local_spend_contract_from_summary(
     SpendContract {
         provider_id: provider_id.to_string(),
         history_days,
-        known_cost_usd,
+        known_cost_usd: resolved.known_cost_usd,
         known_zero,
-        provenance: if known_cost_usd.is_some() { CostProvenance::ListPriceEstimate } else { CostProvenance::Unknown },
-        price_coverage_ratio: price_coverage.coverage_ratio(),
-        price_coverage,
+        provenance: if resolved.known_cost_usd.is_some() { CostProvenance::ListPriceEstimate } else { CostProvenance::Unknown },
+        price_coverage_ratio: resolved.price_coverage.coverage_ratio(),
+        price_coverage: resolved.price_coverage,
         history_coverage_established: summary.history_coverage_established,
-        token_mix,
+        token_mix: resolved.token_mix,
         conversation_count,
-        models,
-        projects,
-        conversations,
-        daily,
-        hourly_activity,
-        project_source_status,
+        models: resolved.models,
+        projects: native.projects,
+        conversations: native.conversations,
+        daily: resolved.daily,
+        hourly_activity: resolved.hourly_activity,
+        project_source_status: native.project_source_status,
         custom_pricing_active: !custom.entries.is_empty(),
         imports,
+    }
+}
+
+fn load_native_spend(provider_id: &str, history_days: u32) -> NativeSpendData {
+    if provider_id != "codex" {
+        return NativeSpendData { projects: Vec::new(), conversations: Vec::new(), project_source_status: None, activity: Vec::new(), daily: daily_points(provider_id, history_days) };
+    }
+    match CodexWorkspacesIndex::new(history_days).load_snapshot(false, |_| {}) {
+        Ok(snapshot) => {
+            let activity = activity_from_sessions(&snapshot.sessions);
+            let daily = snapshot.daily.iter().map(|point| SpendDailyPoint { day: point.day.clone(), cost_usd: point.estimated_cost_usd, total_tokens: Some(point.total_tokens) }).collect();
+            NativeSpendData { projects: snapshot.projects, conversations: snapshot.sessions, project_source_status: Some(snapshot.source_status), activity, daily }
+        }
+        Err(_) => NativeSpendData { projects: Vec::new(), conversations: Vec::new(), project_source_status: None, activity: Vec::new(), daily: daily_points(provider_id, history_days) },
+    }
+}
+
+fn resolve_spend(
+    native_cost: Option<f64>, native_coverage: CostCoverageCounts, native_token_mix: SpendTokenMix,
+    native_models: Vec<SpendModelRow>, native_daily: Vec<SpendDailyPoint>, native_activity: Vec<SpendActivityCell>,
+    imported: Option<&ImportedSpendSource>, replace_native: bool,
+) -> ResolvedSpendData {
+    match imported {
+        Some(imported) if replace_native => ResolvedSpendData {
+            known_cost_usd: imported.known_cost_usd, price_coverage: imported.coverage.clone(), token_mix: imported.token_mix.clone(),
+            models: imported.models.clone(), daily: imported.daily.clone(), hourly_activity: imported.hourly_activity.clone(),
+        },
+        Some(imported) => ResolvedSpendData {
+            known_cost_usd: sum_optional_cost(native_cost, imported.known_cost_usd),
+            price_coverage: merge_coverage(native_coverage, &imported.coverage),
+            token_mix: merge_token_mix(native_token_mix, &imported.token_mix),
+            models: merge_models(native_models, &imported.models), daily: merge_daily(native_daily, &imported.daily),
+            hourly_activity: merge_activity(native_activity, &imported.hourly_activity),
+        },
+        None => ResolvedSpendData { known_cost_usd: native_cost, price_coverage: native_coverage, token_mix: native_token_mix, models: native_models, daily: native_daily, hourly_activity: native_activity },
     }
 }
 

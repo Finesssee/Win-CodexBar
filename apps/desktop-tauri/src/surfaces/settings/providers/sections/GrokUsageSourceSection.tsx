@@ -32,7 +32,7 @@ const GROK_OPTIONS = [
   },
 ] as const;
 
-export function UsageSourceSection({
+export function GrokUsageSourceSection({
   providerId,
   currentValue,
   t,

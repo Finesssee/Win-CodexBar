@@ -44,10 +44,8 @@ struct ModelAccumulator {
     output: u64,
     cache_read: u64,
     cache_creation: u64,
-    total: u64,
-    saw_total: bool,
-    cost: f64,
-    saw_cost: bool,
+    total: Option<u64>,
+    cost: Option<f64>,
     custom_pricing: bool,
 }
 
@@ -165,12 +163,10 @@ fn aggregate(
             .cache_creation
             .saturating_add(entry.cache_creation_tokens.unwrap_or(0));
         if let Some(total) = entry.resolved_total_tokens() {
-            model.total = model.total.saturating_add(total);
-            model.saw_total = true;
+            model.total = Some(model.total.unwrap_or(0).saturating_add(total));
         }
         if let Some(cost) = cost {
-            model.cost += cost;
-            model.saw_cost = true;
+            model.cost = Some(model.cost.unwrap_or(0.0) + cost);
         }
         model.custom_pricing |= custom.rates(&entry.provider, &entry.model).is_some();
     }
@@ -179,17 +175,15 @@ fn aggregate(
         .into_iter()
         .map(|(model, acc)| SpendModelRow {
             model,
-            cost_usd: acc.saw_cost.then_some(acc.cost),
+            cost_usd: acc.cost,
             input_tokens: acc.input,
             output_tokens: acc.output,
             cache_read_tokens: acc.cache_read,
-            total_tokens: if acc.saw_total {
-                acc.total
-            } else {
+            total_tokens: acc.total.unwrap_or_else(|| {
                 acc.input
                     .saturating_add(acc.output)
                     .saturating_add(acc.cache_creation)
-            },
+            }),
             custom_pricing: acc.custom_pricing,
         })
         .collect();

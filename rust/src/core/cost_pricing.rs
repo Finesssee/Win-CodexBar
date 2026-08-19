@@ -1,6 +1,6 @@
 //! Cost usage pricing — model-specific token pricing for Codex (OpenAI) and Claude (Anthropic).
 
-use super::codex_routed_pricing;
+use super::{claude_routed_pricing, codex_routed_pricing};
 use super::models_dev_pricing;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -833,63 +833,9 @@ impl CostUsagePricing {
         ))
     }
 
-    /// Resolve the first-party models.dev vendor for models observed in Claude
-    /// session logs. Recognizable bare families stay with their owning vendor;
-    /// explicit unknown routes fail closed instead of being guessed as Anthropic.
+    #[cfg(test)]
     pub(crate) fn claude_models_dev_target(model: &str) -> Option<(&'static str, String)> {
-        let trimmed = model.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if let Some((route, raw_model)) = trimmed.split_once('/') {
-            if raw_model.trim().is_empty() {
-                return None;
-            }
-            let provider = match route.to_ascii_lowercase().as_str() {
-                "anthropic" => "anthropic",
-                "openai" => "openai",
-                "google" => "google",
-                "moonshot" => "moonshot",
-                "kimi-for-coding" => "kimi-for-coding",
-                "minimax" => "minimax",
-                "deepseek" => "deepseek",
-                _ => return None,
-            };
-            return Some((provider, raw_model.trim().to_string()));
-        }
-
-        let normalized = Self::normalize_claude_model(trimmed);
-        let lower = normalized.to_ascii_lowercase();
-        let provider = if lower.starts_with("claude-") {
-            "anthropic"
-        } else if lower.starts_with("gpt-")
-            || lower.starts_with("chatgpt-")
-            || lower.starts_with("text-embedding-")
-            || ["o1", "o3", "o4"].iter().any(|prefix| {
-                lower == *prefix || lower.starts_with(&format!("{prefix}-"))
-            })
-        {
-            "openai"
-        } else if ["gemini-", "gemma-", "deep-research-", "veo-", "lyria-"]
-            .iter()
-            .any(|prefix| lower.starts_with(prefix))
-        {
-            "google"
-        } else if lower == "kimi-for-coding" || lower == "k3" || lower.starts_with("k3-") {
-            "kimi-for-coding"
-        } else if lower.starts_with("kimi-") || lower.starts_with("moonshot-") {
-            "moonshot"
-        } else if lower.starts_with("minimax-") {
-            "minimax"
-        } else if lower.starts_with("deepseek-") {
-            "deepseek"
-        } else {
-            // Preserve the historical Claude-session fallback for truly bare,
-            // unrecognized names. Unlike an explicit provider/model route, there
-            // is no contradictory routing evidence to fail closed on.
-            "anthropic"
-        };
-        Some((provider, normalized))
+        claude_routed_pricing::models_dev_target(model, Self::normalize_claude_model(model))
     }
 
     /// Calculate cost for Claude usage in USD
@@ -940,57 +886,13 @@ impl CostUsagePricing {
             return Some(cost);
         }
 
-        let (provider_id, lookup_model) = Self::claude_models_dev_target(model)?;
-        let pricing = models_dev_pricing::lookup(provider_id, &lookup_model)?;
-        let input_tokens = input_tokens.max(0);
-        let cache_read_input_tokens = cache_read_input_tokens.max(0);
-        let cache_creation_input_tokens = cache_creation_input_tokens.max(0);
-        let output_tokens = output_tokens.max(0);
-        let use_tier = pricing.threshold_tokens.is_some_and(|threshold| {
-            (input_tokens as u64)
-                + (cache_read_input_tokens as u64)
-                + (cache_creation_input_tokens as u64)
-                > threshold
-        });
-        let input_rate = if use_tier {
-            pricing
-                .input_cost_per_token_above_threshold
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing.input_cost_per_token
-        };
-        let cache_read_rate = if use_tier {
-            pricing
-                .cache_read_input_cost_per_token_above_threshold
-                .or(pricing.cache_read_input_cost_per_token)
-                .unwrap_or(input_rate)
-        } else {
-            pricing
-                .cache_read_input_cost_per_token
-                .unwrap_or(input_rate)
-        };
-        let cache_write_rate = if use_tier {
-            pricing
-                .cache_write_input_cost_per_token_above_threshold
-                .or(pricing.cache_write_input_cost_per_token)
-                .unwrap_or(input_rate)
-        } else {
-            pricing
-                .cache_write_input_cost_per_token
-                .unwrap_or(input_rate)
-        };
-        let output_rate = if use_tier {
-            pricing
-                .output_cost_per_token_above_threshold
-                .unwrap_or(pricing.output_cost_per_token)
-        } else {
-            pricing.output_cost_per_token
-        };
-        Some(
-            (input_tokens as f64) * input_rate
-                + (cache_read_input_tokens as f64) * cache_read_rate
-                + (cache_creation_input_tokens as f64) * cache_write_rate
-                + (output_tokens as f64) * output_rate,
+        claude_routed_pricing::cost_usd(
+            model,
+            Self::normalize_claude_model(model),
+            input_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            output_tokens,
         )
     }
 
@@ -1002,8 +904,7 @@ impl CostUsagePricing {
         if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
             return Some(pricing.input_cost_per_token);
         }
-        let (provider_id, lookup_model) = Self::claude_models_dev_target(model)?;
-        models_dev_pricing::lookup(provider_id, &lookup_model).map(|p| p.input_cost_per_token)
+        claude_routed_pricing::input_cost_per_token(model, Self::normalize_claude_model(model))
     }
 
     /// Format model name for display (e.g., "claude-3.5-sonnet" → "Sonnet 3.5")

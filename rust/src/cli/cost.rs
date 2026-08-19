@@ -8,7 +8,7 @@ use super::usage::{OutputFormat, ProviderSelection};
 use crate::core::{CostScanOptions, ProviderId};
 use crate::cost_scanner::{CostScanner, CostSummary};
 use crate::settings::Settings;
-use crate::spend_contract::build_local_spend_contract;
+use crate::spend_contract::build_local_spend_contract_from_summary;
 
 /// Arguments for the cost command
 #[derive(Args, Debug, Default)]
@@ -131,9 +131,6 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
         }
         OutputFormat::Json => {
             print_json_output(&results, args.pretty, args.days)?;
-        }
-        OutputFormat::Toon => {
-            print_toon_output(&results, args.days)?;
         }
     }
 
@@ -321,10 +318,12 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                 })
             } else {
                 let spend_contract = matches!(r.provider.as_str(), "codex" | "claude" | "opencodego")
-                    .then(|| build_local_spend_contract(
+                    .then(|| build_local_spend_contract_from_summary(
                         &r.provider,
-                        days,
+                        days.clamp(1, 365),
                         include_open_codex && r.provider == "codex",
+                        false,
+                        r.summary.clone(),
                     ));
                 serde_json::json!({
                     "provider": r.provider,
@@ -350,12 +349,6 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
             }
         })
         .collect()
-}
-
-fn print_toon_output(results: &[CostResult], days: u32) -> anyhow::Result<()> {
-    let payloads = build_json_payloads(results, days);
-    println!("{}", super::toon::encode(&serde_json::Value::Array(payloads)));
-    Ok(())
 }
 
 fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
@@ -472,6 +465,11 @@ mod tests {
         // Default CostArgs has provider_native_only = false (backward compat).
         let args = CostArgs::default();
         assert!(!args.provider_native_only);
+    }
+
+    #[test]
+    fn cost_output_format_rejects_toon() {
+        assert!("toon".parse::<OutputFormat>().is_err());
     }
 
     #[test]

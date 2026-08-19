@@ -18,9 +18,9 @@ pub struct UsageArgs {
     #[arg(short, long, help = PROVIDER_ARG_HELP)]
     pub provider: Option<String>,
 
-    /// Output format: text or json
+    /// Output format: text, json, or toon
     #[arg(short, long, default_value = "text")]
-    pub format: OutputFormat,
+    pub format: UsageOutputFormat,
 
     /// Shorthand for --format json
     #[arg(long)]
@@ -69,17 +69,34 @@ pub enum OutputFormat {
     #[default]
     Text,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsageOutputFormat {
+    #[default]
+    Text,
+    Json,
     Toon,
 }
 
 impl std::str::FromStr for OutputFormat {
     type Err = String;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "text" => Ok(OutputFormat::Text),
             "json" => Ok(OutputFormat::Json),
-            "toon" => Ok(OutputFormat::Toon),
+            _ => Err(format!("Invalid format: {}. Use 'text' or 'json'", s)),
+        }
+    }
+}
+
+impl std::str::FromStr for UsageOutputFormat {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "text" => Ok(UsageOutputFormat::Text),
+            "json" => Ok(UsageOutputFormat::Json),
+            "toon" => Ok(UsageOutputFormat::Toon),
             _ => Err(format!("Invalid format: {}. Use 'text', 'json', or 'toon'", s)),
         }
     }
@@ -148,7 +165,7 @@ pub async fn run(args: UsageArgs) -> anyhow::Result<()> {
 }
 
 struct UsageCommand {
-    format: OutputFormat,
+    format: UsageOutputFormat,
     providers: Vec<ProviderId>,
     use_color: bool,
     brief: bool,
@@ -191,9 +208,9 @@ impl UsageCommand {
     }
 }
 
-fn effective_format(args: &UsageArgs) -> OutputFormat {
+fn effective_format(args: &UsageArgs) -> UsageOutputFormat {
     if args.json {
-        OutputFormat::Json
+        UsageOutputFormat::Json
     } else {
         args.format
     }
@@ -228,14 +245,14 @@ enum UsageOutput {
 
 async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
     match command.format {
-        OutputFormat::Text => {
+        UsageOutputFormat::Text => {
             let mut sections = Vec::new();
             for provider_id in &command.providers {
                 sections.push(fetch_provider_text_output(*provider_id, command).await);
             }
             UsageOutput::Text(sections)
         }
-        OutputFormat::Json => {
+        UsageOutputFormat::Json => {
             let mut results = Vec::new();
             for provider_id in &command.providers {
                 results.push(fetch_provider_json_output(*provider_id, command).await);
@@ -245,7 +262,7 @@ async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
                 pretty: command.pretty,
             }
         }
-        OutputFormat::Toon => {
+        UsageOutputFormat::Toon => {
             let mut results = Vec::new();
             for provider_id in &command.providers {
                 results.push(fetch_provider_json_output(*provider_id, command).await);
@@ -717,6 +734,12 @@ mod tests {
 
     fn fetch_result(usage: UsageSnapshot) -> ProviderFetchResult {
         ProviderFetchResult::new(usage, "test")
+    }
+
+    #[test]
+    fn usage_output_format_accepts_toon() {
+        assert_eq!("toon".parse::<UsageOutputFormat>(), Ok(UsageOutputFormat::Toon));
+        assert!("toon".parse::<OutputFormat>().is_err());
     }
 
     #[test]

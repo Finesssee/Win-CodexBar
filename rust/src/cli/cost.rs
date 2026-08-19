@@ -7,6 +7,8 @@ use clap::Args;
 use super::usage::{OutputFormat, ProviderSelection};
 use crate::core::{CostScanOptions, ProviderId};
 use crate::cost_scanner::{CostScanner, CostSummary};
+use crate::settings::Settings;
+use crate::spend_contract::build_local_spend_contract;
 
 /// Arguments for the cost command
 #[derive(Args, Debug, Default)]
@@ -304,6 +306,7 @@ fn short_session_id(value: &str) -> String {
 
 /// Print JSON output
 fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
+    let include_open_codex = Settings::load().open_codex_usage_logs_enabled;
     let payloads: Vec<serde_json::Value> = results
         .iter()
         .map(|r| {
@@ -314,6 +317,12 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     "error": "Local cost scanning not available for this provider"
                 })
             } else {
+                let spend_contract = matches!(r.provider.as_str(), "codex" | "claude" | "opencodego")
+                    .then(|| build_local_spend_contract(
+                        &r.provider,
+                        days,
+                        include_open_codex && r.provider == "codex",
+                    ));
                 serde_json::json!({
                     "provider": r.provider,
                     "supported": true,
@@ -369,7 +378,10 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     "period": {
                         "start": r.summary.period_start.map(|d| d.to_string()),
                         "end": r.summary.period_end.map(|d| d.to_string())
-                    }
+                    },
+                    // 0.53: one authoritative contract for CLI/UI accounting semantics.
+                    // Existing keys above remain for backward compatibility.
+                    "spendContract": spend_contract
                 })
             }
         })

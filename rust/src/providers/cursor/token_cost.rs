@@ -188,9 +188,9 @@ async fn fetch_page(
 }
 
 fn summarize_events(events: &[UsageEvent]) -> CursorTokenCostReport {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     let mut by_model: HashMap<String, f64> = HashMap::new();
-    let mut api_rate_cents = 0.0;
+    let mut invalid_models: HashSet<String> = HashSet::new();
     let mut metered_cents = 0.0;
     let mut metered_complete = !events.is_empty();
 
@@ -202,14 +202,14 @@ fn summarize_events(events: &[UsageEvent]) -> CursorTokenCostReport {
             .filter(|s| !s.is_empty())
             .unwrap_or("unknown")
             .to_string();
-        let list_cents = event
-            .token_usage
-            .as_ref()
-            .and_then(|u| u.total_cents)
-            .filter(|v| v.is_finite() && *v >= 0.0)
-            .unwrap_or(0.0);
-        api_rate_cents += list_cents;
-        *by_model.entry(model).or_insert(0.0) += list_cents;
+        if let Some(list_cents) = event.token_usage.as_ref().and_then(|u| u.total_cents) {
+            if !list_cents.is_finite() || list_cents < 0.0 {
+                invalid_models.insert(model.clone());
+                by_model.remove(&model);
+            } else if !invalid_models.contains(&model) {
+                *by_model.entry(model.clone()).or_insert(0.0) += list_cents;
+            }
+        }
 
         match event.charged_cents.filter(|v| v.is_finite() && *v >= 0.0) {
             Some(c) => metered_cents += c,
@@ -229,13 +229,15 @@ fn summarize_events(events: &[UsageEvent]) -> CursorTokenCostReport {
 
     let mut by_model_usd: Vec<(String, f64)> = by_model
         .into_iter()
+        .filter(|(model, _)| !invalid_models.contains(model))
         .map(|(m, cents)| (m, cents / 100.0))
         .filter(|(_, usd)| *usd > 0.0)
         .collect();
     by_model_usd.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let api_rate_usd = by_model_usd.iter().map(|(_, usd)| *usd).sum();
 
     CursorTokenCostReport {
-        api_rate_usd: api_rate_cents / 100.0,
+        api_rate_usd,
         metered_usd: if metered_complete && metered_cents > 0.0 {
             Some(metered_cents / 100.0)
         } else {
@@ -358,6 +360,60 @@ mod tests {
         let windows = report.to_extra_windows();
         assert_eq!(windows.len(), 2);
         assert!(windows[0].window.is_informational);
+    }
+
+    #[test]
+    fn missing_model_cost_keeps_priced_siblings() {
+        let events = vec![
+            UsageEvent {
+                timestamp_ms: Some(1),
+                model: Some("gpt-5".into()),
+                token_usage: Some(EventTokenUsage {
+                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    total_cents: Some(25.0),
+                }),
+                charged_cents: Some(0.0), cursor_token_fee: None,
+            },
+            UsageEvent {
+                timestamp_ms: Some(2),
+                model: Some("gpt-5".into()),
+                token_usage: Some(EventTokenUsage {
+                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    total_cents: None,
+                }),
+                charged_cents: Some(0.0), cursor_token_fee: None,
+            },
+        ];
+        let report = summarize_events(&events);
+        assert!((report.api_rate_usd - 0.25).abs() < 0.001);
+        assert_eq!(report.by_model_usd, vec![("gpt-5".to_string(), 0.25)]);
+    }
+
+    #[test]
+    fn invalid_model_cost_latches_and_cannot_revive() {
+        let events = vec![
+            UsageEvent {
+                timestamp_ms: Some(1),
+                model: Some("gpt-5".into()),
+                token_usage: Some(EventTokenUsage {
+                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    total_cents: Some(-1.0),
+                }),
+                charged_cents: Some(0.0), cursor_token_fee: None,
+            },
+            UsageEvent {
+                timestamp_ms: Some(2),
+                model: Some("gpt-5".into()),
+                token_usage: Some(EventTokenUsage {
+                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    total_cents: Some(50.0),
+                }),
+                charged_cents: Some(0.0), cursor_token_fee: None,
+            },
+        ];
+        let report = summarize_events(&events);
+        assert_eq!(report.api_rate_usd, 0.0);
+        assert!(report.by_model_usd.is_empty());
     }
 
     #[test]

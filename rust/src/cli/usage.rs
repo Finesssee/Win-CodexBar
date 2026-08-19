@@ -69,6 +69,7 @@ pub enum OutputFormat {
     #[default]
     Text,
     Json,
+    Toon,
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -78,7 +79,8 @@ impl std::str::FromStr for OutputFormat {
         match s.to_lowercase().as_str() {
             "text" => Ok(OutputFormat::Text),
             "json" => Ok(OutputFormat::Json),
-            _ => Err(format!("Invalid format: {}. Use 'text' or 'json'", s)),
+            "toon" => Ok(OutputFormat::Toon),
+            _ => Err(format!("Invalid format: {}. Use 'text', 'json', or 'toon'", s)),
         }
     }
 }
@@ -221,6 +223,7 @@ enum UsageOutput {
         results: Vec<serde_json::Value>,
         pretty: bool,
     },
+    Toon(Vec<serde_json::Value>),
 }
 
 async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
@@ -241,6 +244,13 @@ async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
                 results,
                 pretty: command.pretty,
             }
+        }
+        OutputFormat::Toon => {
+            let mut results = Vec::new();
+            for provider_id in &command.providers {
+                results.push(fetch_provider_json_output(*provider_id, command).await);
+            }
+            UsageOutput::Toon(results)
         }
     }
 }
@@ -419,6 +429,9 @@ fn print_usage_output(output: UsageOutput) -> anyhow::Result<()> {
                 serde_json::to_string(&results)?
             };
             println!("{}", output);
+        }
+        UsageOutput::Toon(results) => {
+            println!("{}", super::toon::encode(&serde_json::Value::Array(results)));
         }
     }
 

@@ -132,6 +132,9 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
         OutputFormat::Json => {
             print_json_output(&results, args.pretty, args.days)?;
         }
+        OutputFormat::Toon => {
+            print_toon_output(&results, args.days)?;
+        }
     }
 
     Ok(())
@@ -305,9 +308,9 @@ fn short_session_id(value: &str) -> String {
 }
 
 /// Print JSON output
-fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
+fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Value> {
     let include_open_codex = Settings::load().open_codex_usage_logs_enabled;
-    let payloads: Vec<serde_json::Value> = results
+    results
         .iter()
         .map(|r| {
             if !r.supported {
@@ -327,65 +330,36 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                     "provider": r.provider,
                     "supported": true,
                     "days_scanned": days,
-                    "cost": {
-                        "total_usd": r.summary.total_cost_usd,
-                        "currency": "USD"
-                    },
-                    "tokens": {
-                        "input": r.summary.input_tokens,
-                        "output": r.summary.output_tokens,
-                        "cached": r.summary.cached_tokens
-                    },
+                    "cost": {"total_usd": r.summary.total_cost_usd, "currency": "USD"},
+                    "tokens": {"input": r.summary.input_tokens, "output": r.summary.output_tokens, "cached": r.summary.cached_tokens},
                     "sessions_count": r.summary.sessions_count,
-                    // A16 (upstream 0.48.0): scan completeness for the requested
-                    // window. null for non-Codex; true/false for Codex.
-                    "historyCoverageIsEstablished": if r.provider == "codex" {
-                        serde_json::Value::Bool(r.summary.history_coverage_established)
-                    } else {
-                        serde_json::Value::Null
-                    },
-                    // Upstream 0.50.1 #2932: known-zero flag — scan completed
-                    // with zero results. null for non-Codex; true/false for Codex.
-                    "knownZero": if r.provider == "codex" {
-                        serde_json::Value::Bool(r.summary.known_zero)
-                    } else {
-                        serde_json::Value::Null
-                    },
-                    // F18 (upstream 0.48.0): pricing completeness. "complete" or
-                    // {"partial": {"unpriced_models": [...]}}.
+                    "historyCoverageIsEstablished": if r.provider == "codex" { serde_json::Value::Bool(r.summary.history_coverage_established) } else { serde_json::Value::Null },
+                    "knownZero": if r.provider == "codex" { serde_json::Value::Bool(r.summary.known_zero) } else { serde_json::Value::Null },
                     "modelPricingCompleteness": match &r.summary.model_pricing_completeness {
-                        crate::cost_scanner::ModelPricingCompleteness::Complete => {
-                            serde_json::Value::String("complete".to_string())
-                        }
-                        crate::cost_scanner::ModelPricingCompleteness::Partial { unpriced_models } => {
-                            serde_json::json!({
-                                "partial": {
-                                    "unpriced_models": unpriced_models
-                                }
-                            })
-                        }
+                        crate::cost_scanner::ModelPricingCompleteness::Complete => serde_json::Value::String("complete".to_string()),
+                        crate::cost_scanner::ModelPricingCompleteness::Partial { unpriced_models } => serde_json::json!({"partial": {"unpriced_models": unpriced_models}}),
                     },
                     "by_model": r.summary.by_model,
                     "by_speed": r.summary.by_speed,
                     "by_speed_tokens": r.summary.by_speed_tokens.iter().map(|(bucket, counts)| {
-                        (bucket.clone(), serde_json::json!({
-                            "input": counts.input_tokens,
-                            "output": counts.output_tokens,
-                            "cached": counts.cached_tokens,
-                            "total": counts.total()
-                        }))
+                        (bucket.clone(), serde_json::json!({"input": counts.input_tokens, "output": counts.output_tokens, "cached": counts.cached_tokens, "total": counts.total()}))
                     }).collect::<serde_json::Map<_, _>>(),
-                    "period": {
-                        "start": r.summary.period_start.map(|d| d.to_string()),
-                        "end": r.summary.period_end.map(|d| d.to_string())
-                    },
-                    // 0.53: one authoritative contract for CLI/UI accounting semantics.
-                    // Existing keys above remain for backward compatibility.
+                    "period": {"start": r.summary.period_start.map(|d| d.to_string()), "end": r.summary.period_end.map(|d| d.to_string())},
                     "spendContract": spend_contract
                 })
             }
         })
-        .collect();
+        .collect()
+}
+
+fn print_toon_output(results: &[CostResult], days: u32) -> anyhow::Result<()> {
+    let payloads = build_json_payloads(results, days);
+    println!("{}", super::toon::encode(&serde_json::Value::Array(payloads)));
+    Ok(())
+}
+
+fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
+    let payloads = build_json_payloads(results, days);
 
     let output = if pretty {
         serde_json::to_string_pretty(&payloads)?

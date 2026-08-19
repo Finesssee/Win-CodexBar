@@ -19,6 +19,7 @@ pub mod hooks;
 pub mod serve;
 pub mod sessions;
 pub mod tty_runner;
+pub mod toon;
 pub mod usage;
 pub mod workspaces;
 

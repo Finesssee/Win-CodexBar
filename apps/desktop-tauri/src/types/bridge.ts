@@ -848,6 +848,8 @@ export interface ProviderDetail {
 
   hasSnapshot: boolean;
 
+  /** Persisted provider usage source (auto | cli | oauth | web). */
+  usageSource?: string | null;
   /** Phase 6c — currently-persisted cookie source value ("auto" | "manual" | "off" | …).
    *  `null` for providers that do not expose a cookie-source picker. */
   cookieSource: string | null;

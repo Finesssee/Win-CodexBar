@@ -63,6 +63,37 @@ pub fn reorder_providers(
     Ok(build_provider_summaries(&settings))
 }
 
+// ── Per-provider usage source ─────────────────────────────────────────
+
+pub(crate) fn provider_usage_source_lookup(
+    settings: &Settings,
+    provider_id: &str,
+) -> Option<String> {
+    parse_provider_arg(provider_id)
+        .ok()
+        .map(|id| settings.usage_source(id).to_string())
+}
+
+#[tauri::command]
+pub fn set_provider_usage_source(provider_id: String, source: String) -> Result<(), String> {
+    let id = parse_provider_arg(&provider_id)?;
+    let mode = SourceMode::parse(source.trim())
+        .ok_or_else(|| format!("Invalid usage source '{source}' for provider '{provider_id}'"))?;
+    let provider = instantiate_provider(id);
+    if !provider.available_sources().contains(&mode) {
+        return Err(format!("Usage source '{source}' is unavailable for provider '{provider_id}'"));
+    }
+    let value = match mode {
+        SourceMode::Auto => "auto",
+        SourceMode::Cli => "cli",
+        SourceMode::OAuth => "oauth",
+        SourceMode::Web => "web",
+    };
+    let mut settings = Settings::load();
+    settings.set_usage_source(id, value);
+    settings.save().map_err(|e| e.to_string())
+}
+
 // ── Per-provider cookie source + region ───────────────────────────────
 
 /// Map a CLI-name string to a `ProviderId` whose cookie source is exposed in
@@ -86,6 +117,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "codebuddy" => ProviderId::CodeBuddy,
         "sakana" => ProviderId::Sakana,
         "notion" => ProviderId::Notion,
+        "grok" => ProviderId::Grok,
         _ => return None,
     })
 }
@@ -428,6 +460,29 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "",
                 "Paste a Cookie header from a cursor.com request.",
                 None,
+            ),
+        ],
+        "grok" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Automatic imports grok.com browser cookies.",
+                "Paste a Cookie header from a grok.com request.",
+                Some("Grok browser cookies are disabled."),
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste a Cookie header from a grok.com request.",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some("Grok browser cookies are disabled."),
             ),
         ],
         "opencode" => vec![

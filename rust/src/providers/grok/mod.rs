@@ -234,27 +234,37 @@ impl Provider for GrokProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
+            SourceMode::Auto => {
+                // Upstream 0.53: prefer the explicit Grok login principal before
+                // trying browser cookies. Authentication failures may continue
+                // through Auto, while explicit source modes surface them.
+                if let Ok(credentials) = Self::load_credentials() {
+                    match self.fetch_with_auth(&credentials).await {
+                        Ok(result) => return Ok(result),
+                        Err(ProviderError::AuthRequired) => {}
+                        Err(error) => tracing::debug!("Grok login path failed in Auto: {error}"),
+                    }
+                }
                 if let Some(cookie_header) = &ctx.manual_cookie_header {
                     return self.fetch_with_cookie(cookie_header).await;
                 }
-                // Explicit cookie path: try validated cache, else re-import browser cookies,
-                // validate the session, and cache the header for background reuse (#2458).
-                match self.fetch_with_cookie_refresh().await {
-                    Ok(result) => return Ok(result),
-                    Err(ProviderError::AuthRequired) | Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
+                self.fetch_with_cookie_refresh().await
+            }
+            SourceMode::Web => {
+                if let Some(cookie_header) = &ctx.manual_cookie_header {
+                    return self.fetch_with_cookie(cookie_header).await;
                 }
+                self.fetch_with_cookie_refresh().await
+            }
+            SourceMode::Cli | SourceMode::OAuth => {
                 let credentials = Self::load_credentials()?;
                 self.fetch_with_auth(&credentials).await
             }
-            SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
-            SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::Web]
+        vec![SourceMode::Auto, SourceMode::Cli, SourceMode::OAuth, SourceMode::Web]
     }
 
     fn supports_web(&self) -> bool {

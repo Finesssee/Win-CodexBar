@@ -364,6 +364,10 @@ export function getProviderRegionOptions(providerId: string): Promise<RegionOpti
   return invoke<RegionOption[]>("get_provider_region_options", { providerId });
 }
 
+export function setProviderUsageSource(providerId: string, source: string): Promise<void> {
+  return invoke<void>("set_provider_usage_source", { providerId, source });
+}
+
 export function setProviderCookieSource(providerId: string, source: string): Promise<void> {
   return invoke<void>("set_provider_cookie_source", { providerId, source });
 }

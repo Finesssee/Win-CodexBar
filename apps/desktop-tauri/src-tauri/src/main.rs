@@ -207,6 +207,7 @@ fn main() {
             commands::get_codex_workspaces_snapshot,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
+            commands::set_provider_usage_source,
             commands::get_provider_cookie_source_options,
             commands::set_provider_region,
             commands::get_provider_region_options,

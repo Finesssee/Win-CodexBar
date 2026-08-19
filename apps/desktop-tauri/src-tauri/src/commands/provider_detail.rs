@@ -43,6 +43,7 @@ pub struct ProviderDetail {
     // Phase 6c — currently-persisted cookie source & region for round-tripping
     // into the settings UI pickers. `None` for providers that do not support
     // one of the pickers.
+    pub usage_source: Option<String>,
     pub cookie_source: Option<String>,
     pub region: Option<String>,
 }
@@ -96,6 +97,7 @@ pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail,
             None
         },
         has_snapshot: false,
+        usage_source: provider_usage_source_lookup(&settings, id.cli_name()),
         cookie_source: provider_cookie_source_lookup(&settings, id.cli_name()),
         region: provider_region_lookup(&settings, id.cli_name()),
     })

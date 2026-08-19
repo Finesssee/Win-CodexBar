@@ -833,6 +833,65 @@ impl CostUsagePricing {
         ))
     }
 
+    /// Resolve the first-party models.dev vendor for models observed in Claude
+    /// session logs. Recognizable bare families stay with their owning vendor;
+    /// explicit unknown routes fail closed instead of being guessed as Anthropic.
+    pub(crate) fn claude_models_dev_target(model: &str) -> Option<(&'static str, String)> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if let Some((route, raw_model)) = trimmed.split_once('/') {
+            if raw_model.trim().is_empty() {
+                return None;
+            }
+            let provider = match route.to_ascii_lowercase().as_str() {
+                "anthropic" => "anthropic",
+                "openai" => "openai",
+                "google" => "google",
+                "moonshot" => "moonshot",
+                "kimi-for-coding" => "kimi-for-coding",
+                "minimax" => "minimax",
+                "deepseek" => "deepseek",
+                _ => return None,
+            };
+            return Some((provider, raw_model.trim().to_string()));
+        }
+
+        let normalized = Self::normalize_claude_model(trimmed);
+        let lower = normalized.to_ascii_lowercase();
+        let provider = if lower.starts_with("claude-") {
+            "anthropic"
+        } else if lower.starts_with("gpt-")
+            || lower.starts_with("chatgpt-")
+            || lower.starts_with("text-embedding-")
+            || ["o1", "o3", "o4"].iter().any(|prefix| {
+                lower == *prefix || lower.starts_with(&format!("{prefix}-"))
+            })
+        {
+            "openai"
+        } else if ["gemini-", "gemma-", "deep-research-", "veo-", "lyria-"]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        {
+            "google"
+        } else if lower == "kimi-for-coding" || lower == "k3" || lower.starts_with("k3-") {
+            "kimi-for-coding"
+        } else if lower.starts_with("kimi-") || lower.starts_with("moonshot-") {
+            "moonshot"
+        } else if lower.starts_with("minimax-") {
+            "minimax"
+        } else if lower.starts_with("deepseek-") {
+            "deepseek"
+        } else {
+            // Preserve the historical Claude-session fallback for truly bare,
+            // unrecognized names. Unlike an explicit provider/model route, there
+            // is no contradictory routing evidence to fail closed on.
+            "anthropic"
+        };
+        Some((provider, normalized))
+    }
+
     /// Calculate cost for Claude usage in USD
     pub fn claude_cost_usd(
         model: &str,
@@ -881,7 +940,8 @@ impl CostUsagePricing {
             return Some(cost);
         }
 
-        let pricing = models_dev_pricing::lookup("anthropic", model)?;
+        let (provider_id, lookup_model) = Self::claude_models_dev_target(model)?;
+        let pricing = models_dev_pricing::lookup(provider_id, &lookup_model)?;
         let input_tokens = input_tokens.max(0);
         let cache_read_input_tokens = cache_read_input_tokens.max(0);
         let cache_creation_input_tokens = cache_creation_input_tokens.max(0);
@@ -942,7 +1002,8 @@ impl CostUsagePricing {
         if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
             return Some(pricing.input_cost_per_token);
         }
-        models_dev_pricing::lookup("anthropic", model).map(|p| p.input_cost_per_token)
+        let (provider_id, lookup_model) = Self::claude_models_dev_target(model)?;
+        models_dev_pricing::lookup(provider_id, &lookup_model).map(|p| p.input_cost_per_token)
     }
 
     /// Format model name for display (e.g., "claude-3.5-sonnet" → "Sonnet 3.5")

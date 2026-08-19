@@ -561,7 +561,7 @@ impl Provider for OpenCodeGoProvider {
                 if Self::auto_prefers_web_first(ctx) {
                     match self.fetch_web(ctx).await {
                         Ok(result) => return Ok(result),
-                        Err(e) if Self::web_error_allows_local_fallback(&e) => {
+                        Err(e) if Self::web_error_allows_local_fallback(ctx, &e) => {
                             tracing::debug!(
                                 "OpenCode Go web failed in scoped Auto; trying local: {e}"
                             );
@@ -613,7 +613,15 @@ impl OpenCodeGoProvider {
         ctx.auto_prefer_web
     }
 
-    fn web_error_allows_local_fallback(err: &ProviderError) -> bool {
+    fn web_error_allows_local_fallback(ctx: &FetchContext, err: &ProviderError) -> bool {
+        // Upstream 0.53: an explicitly selected/manual token is an account
+        // choice. Never mask that account's auth failure with account-agnostic
+        // local SQLite estimates. Workspace-only scoping may still fall back.
+        if matches!(err, ProviderError::AuthRequired | ProviderError::NoCookies)
+            && (ctx.manual_cookie_header.is_some() || ctx.auto_prefer_web)
+        {
+            return false;
+        }
         matches!(
             err,
             ProviderError::AuthRequired
@@ -783,6 +791,25 @@ mod tests {
         let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
         assert!((snap.primary.used_percent - 1.0).abs() < 0.001);
         assert!((snap.secondary.as_ref().unwrap().used_percent - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn selected_token_auth_failure_does_not_fall_back_to_local_estimate() {
+        let mut selected = FetchContext {
+            auto_prefer_web: true,
+            ..FetchContext::default()
+        };
+        assert!(!OpenCodeGoProvider::web_error_allows_local_fallback(
+            &selected,
+            &ProviderError::AuthRequired
+        ));
+
+        selected.auto_prefer_web = false;
+        selected.workspace_id = Some("wrk_example".to_string());
+        assert!(OpenCodeGoProvider::web_error_allows_local_fallback(
+            &selected,
+            &ProviderError::AuthRequired
+        ));
     }
 
     #[test]

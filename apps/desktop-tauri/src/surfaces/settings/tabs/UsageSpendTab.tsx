@@ -220,7 +220,7 @@ export default function UsageSpendTab(_props: TabProps) {
             aria-pressed={selectedDays === days}
             onClick={() => setSelectedDays(days)}
           >
-            {days === 0 ? "All time" : `${days}d`}
+            {days === 0 ? t("UsageSpendAllTime") : `${days}d`}
           </button>
         ))}
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
@@ -236,7 +236,7 @@ export default function UsageSpendTab(_props: TabProps) {
               });
             }}
           />
-          OpenCodex import
+          {t("UsageSpendOpenCodexImport")}
         </label>
       </div>
 
@@ -282,7 +282,7 @@ export default function UsageSpendTab(_props: TabProps) {
         </table>
       )}
 
-      {!error && contract && <SpendContractOverview contract={contract} />}
+      {!error && contract && <SpendContractOverview contract={contract} t={t} />}
 
       {!error && summary && selectedDays !== 0 && (
         <ModelsPanel
@@ -294,7 +294,7 @@ export default function UsageSpendTab(_props: TabProps) {
       )}
 
       {!error && contract && selectedDays === 0 && (
-        <ContractModelsPanel contract={contract} />
+        <ContractModelsPanel contract={contract} t={t} />
       )}
 
       {!error && workspaces && (
@@ -320,17 +320,17 @@ export default function UsageSpendTab(_props: TabProps) {
 
 
 
-function SpendContractOverview({ contract }: { contract: SpendContract }) {
+function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (key: LocaleKey) => string }) {
   const coverage = contract.priceCoverageRatio == null
-    ? "unknown"
+    ? t("UsageSpendUnknown")
     : `${Math.round(contract.priceCoverageRatio * 100)}%`;
   const provenance = contract.provenance === "listPriceEstimate"
-    ? "API list-price estimate"
+    ? t("UsageSpendApiEstimate")
     : contract.provenance === "vendorMetered"
-      ? "Vendor metered"
+      ? t("UsageSpendVendorMetered")
       : contract.provenance === "mixed"
-        ? "Mixed sources"
-        : "Unknown";
+        ? t("UsageSpendMixedSources")
+        : t("UsageSpendUnknown");
   const total = contract.knownCostUsd == null
     ? "—"
     : `${contract.priceCoverage.unpriced > 0 ? "~" : ""}${formatUsd(contract.knownCostUsd, "USD")}`;
@@ -343,15 +343,15 @@ function SpendContractOverview({ contract }: { contract: SpendContract }) {
   return (
     <div className="settings-section__group" style={{ marginTop: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
-        <MetricCard label="Spend" value={total} detail={contract.knownZero ? "Known zero" : provenance} />
-        <MetricCard label="Price coverage" value={coverage} detail={`${contract.priceCoverage.unpriced} unpriced`} />
-        <MetricCard label="Conversations" value={contract.conversationCount.toLocaleString()} detail={contract.historyCoverageEstablished ? "History covered" : "Partial history"} />
-        <MetricCard label="Token mix" value={tokenParts || "—"} detail={contract.customPricingActive ? "Custom pricing active" : "Default pricing"} />
+        <MetricCard label={t("UsageSpendSpend")} value={total} detail={contract.knownZero ? t("UsageSpendKnownZero") : provenance} />
+        <MetricCard label={t("UsageSpendPriceCoverage")} value={coverage} detail={`${contract.priceCoverage.unpriced} ${t("UsageSpendUnpriced")}`} />
+        <MetricCard label={t("UsageSpendConversations")} value={contract.conversationCount.toLocaleString()} detail={contract.historyCoverageEstablished ? t("UsageSpendHistoryCovered") : t("UsageSpendPartialHistory")} />
+        <MetricCard label={t("UsageSpendTokenMix")} value={tokenParts || "—"} detail={contract.customPricingActive ? t("UsageSpendCustomPricingActive") : t("UsageSpendDefaultPricing")} />
       </div>
-      <ActivityHeatmap cells={contract.hourlyActivity} />
+      <ActivityHeatmap cells={contract.hourlyActivity} t={t} />
       {contract.imports.map((source) => (
         <p key={source.sourceId} className="settings-section__caption" style={{ marginTop: 8 }}>
-          {source.displayName}: {source.requestCount.toLocaleString()} requests · {source.conversationCount.toLocaleString()} conversations
+          {source.displayName}: {source.requestCount.toLocaleString()} {t("UsageSpendRequests")} · {source.conversationCount.toLocaleString()} {t("UsageSpendConversations").toLowerCase()}
         </p>
       ))}
     </div>
@@ -368,14 +368,14 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
   );
 }
 
-function ActivityHeatmap({ cells }: { cells: SpendContract["hourlyActivity"] }) {
+function ActivityHeatmap({ cells, t }: { cells: SpendContract["hourlyActivity"]; t: (key: LocaleKey) => string }) {
   const lookup = new Map(cells.map((cell) => [`${cell.weekday}:${cell.hour}`, cell.conversations]));
   const max = Math.max(1, ...cells.map((cell) => cell.conversations));
   return (
     <div style={{ marginTop: 14 }}>
-      <h4 style={{ margin: "0 0 8px" }}>Hourly activity</h4>
+      <h4 style={{ margin: "0 0 8px" }}>{t("UsageSpendHourlyActivity")}</h4>
       <div
-        aria-label="Hourly conversation activity heatmap"
+        aria-label={t("UsageSpendHourlyActivity")}
         style={{ display: "grid", gridTemplateColumns: "repeat(24, minmax(7px, 1fr))", gap: 2 }}
       >
         {Array.from({ length: 7 * 24 }, (_, index) => {
@@ -396,21 +396,21 @@ function ActivityHeatmap({ cells }: { cells: SpendContract["hourlyActivity"] }) 
   );
 }
 
-function ContractModelsPanel({ contract }: { contract: SpendContract }) {
+function ContractModelsPanel({ contract, t }: { contract: SpendContract; t: (key: LocaleKey) => string }) {
   return (
     <div className="settings-section__group" style={{ marginTop: 20 }}>
-      <h4 style={{ margin: 0 }}>Models</h4>
-      <p className="settings-section__caption">All-time is backed by the latest {contract.historyDays} days of local history.</p>
+      <h4 style={{ margin: 0 }}>{t("UsageSpendModels")}</h4>
+      <p className="settings-section__caption">{t("UsageSpendAllTimeHistory")} {contract.historyDays} days of local history.</p>
       <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
         {contract.models.map((model) => (
           <div key={model.model} className="provider-detail-section" style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
             <span>
               <strong>{model.model}</strong>
               <span className="settings-section__caption" style={{ display: "block" }}>
-                {model.totalTokens.toLocaleString()} tokens{model.customPricing ? " · custom pricing" : ""}
+                {model.totalTokens.toLocaleString()} {t("UsageSpendTokens")}{model.customPricing ? ` · ${t("UsageSpendCustomPricing")}` : ""}
               </span>
             </span>
-            <span>{model.costUsd == null ? "unpriced" : formatUsd(model.costUsd, "USD")}</span>
+            <span>{model.costUsd == null ? t("UsageSpendUnpriced") : formatUsd(model.costUsd, "USD")}</span>
           </div>
         ))}
       </div>

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
+import type { LocaleKey } from "../i18n/keys";
 import { beginFlyoutGesture, getUsageSpendSummary, openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import {
   TRAY_SCALE_MAX,
@@ -186,7 +187,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         />
         <div className="provider-grid__divider" />
         {selectedProviderId === null && (
-          <OverviewSpendSummary providerIds={sorted.map((provider) => provider.providerId)} />
+          <OverviewSpendSummary providerIds={sorted.map((provider) => provider.providerId)} t={t} />
         )}
         <div className="menu-stack">
           {useWideColumns
@@ -301,7 +302,7 @@ function TrayResizeHandles() {
   );
 }
 
-function OverviewSpendSummary({ providerIds }: { providerIds: string[] }) {
+function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (key: LocaleKey) => string }) {
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
 
   useEffect(() => {
@@ -324,11 +325,11 @@ function OverviewSpendSummary({ providerIds }: { providerIds: string[] }) {
   return (
     <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-        <strong>Usage & Spend · 30d</strong>
+        <strong>{t("OverviewSpendTitle")}</strong>
         <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>
-        {known.length} of {providerIds.length} providers have spend · local/provider estimates
+        {known.length} of {providerIds.length} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
       </div>
     </div>
   );

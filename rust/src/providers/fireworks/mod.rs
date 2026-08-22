@@ -9,8 +9,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::Client;
+use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
+use std::collections::BTreeSet;
 
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
@@ -64,6 +65,35 @@ struct UsageBucket {
     #[serde(default)]
     #[allow(dead_code)]
     bucket_start_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountsResponse {
+    #[serde(default)]
+    accounts: Vec<FireworksAccount>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FireworksAccount {
+    name: Option<String>,
+    account_id: Option<String>,
+    id: Option<String>,
+}
+
+impl FireworksAccount {
+    fn slug(&self) -> Option<String> {
+        [&self.account_id, &self.id, &self.name]
+            .into_iter()
+            .flatten()
+            .map(|value| value.trim())
+            .find(|value| !value.is_empty())
+            .and_then(|value| value.rsplit('/').next())
+            .map(str::to_string)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,24 +213,21 @@ impl FireworksProvider {
     /// Account slug from settings (provider workspace slot) or
     /// `FIREWORKS_ACCOUNT_SLUG`. Validated against the upstream slug charset
     /// so a bad slug surfaces as a config error, not a widened request path.
-    fn resolve_account_slug(ctx: &FetchContext) -> Result<String, ProviderError> {
+    fn resolve_account_slug(ctx: &FetchContext) -> Result<Option<String>, ProviderError> {
         let from_env = SLUG_ENV_KEYS.iter().find_map(|key| std::env::var(key).ok());
         let raw = from_env
             .or_else(|| ctx.workspace_id.as_deref().map(str::to_string))
             .unwrap_or_default();
         let slug = raw.trim().to_string();
         if slug.is_empty() {
-            return Err(ProviderError::NotInstalled(
-                "Fireworks needs the account slug from app.fireworks.ai/accounts/<slug>. Set FIREWORKS_ACCOUNT_SLUG or the slug field in Settings."
-                    .to_string(),
-            ));
+            return Ok(None);
         }
         if !slug.chars().all(SLUG_ALLOWED) {
             return Err(ProviderError::Other(format!(
                 "Invalid Fireworks account slug '{slug}'. Please double-check the account slug in Settings."
             )));
         }
-        Ok(slug)
+        Ok(Some(slug))
     }
 
     fn summary_url(slug: &str, now: DateTime<Utc>) -> String {
@@ -212,14 +239,107 @@ impl FireworksProvider {
         )
     }
 
-    async fn fetch_usage_api(
-        &self,
-        ctx: &FetchContext,
-    ) -> Result<ProviderFetchResult, ProviderError> {
-        let api_key = Self::resolve_api_key(ctx.api_key.as_deref())?;
-        let slug = Self::resolve_account_slug(ctx)?;
-        let url = Self::summary_url(&slug, Utc::now());
+    fn accounts_url(page_token: Option<&str>) -> Result<Url, ProviderError> {
+        let mut url = Url::parse(BILLING_SUMMARY_URL)
+            .map_err(|e| ProviderError::Other(format!("Invalid Fireworks accounts URL: {e}")))?;
+        if let Some(token) = page_token.filter(|token| !token.trim().is_empty()) {
+            url.query_pairs_mut().append_pair("pageToken", token.trim());
+        }
+        Ok(url)
+    }
 
+    #[cfg(test)]
+    fn parse_account_slugs(body: &str) -> Result<Vec<String>, ProviderError> {
+        let page: AccountsResponse = serde_json::from_str(body).map_err(|e| {
+            ProviderError::Parse(format!("Could not parse Fireworks accounts response: {e}"))
+        })?;
+        Ok(page
+            .accounts
+            .iter()
+            .filter_map(FireworksAccount::slug)
+            .filter(|slug| !slug.is_empty() && slug.chars().all(SLUG_ALLOWED))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
+    async fn list_account_slugs(&self, api_key: &str) -> Result<Vec<String>, ProviderError> {
+        let mut slugs = BTreeSet::new();
+        let mut page_token: Option<String> = None;
+        for _ in 0..100 {
+            let url = Self::accounts_url(page_token.as_deref())?;
+            let resp = self
+                .client
+                .get(url)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .header("Accept", "application/json")
+                .send()
+                .await?;
+            let status = resp.status();
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                return Err(ProviderError::Other(
+                    "Fireworks rejected the API key. Create a new key at app.fireworks.ai and update Settings."
+                        .to_string(),
+                ));
+            }
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::Other(
+                    "Fireworks rate limit exceeded. Usage will refresh on the next cycle.".to_string(),
+                ));
+            }
+            if !status.is_success() {
+                return Err(ProviderError::Other(format!(
+                    "Fireworks accounts API returned HTTP {status}."
+                )));
+            }
+            let body = resp.text().await.map_err(|e| {
+                ProviderError::Parse(format!("Could not read Fireworks accounts response: {e}"))
+            })?;
+            let page: AccountsResponse = serde_json::from_str(&body).map_err(|e| {
+                ProviderError::Parse(format!("Could not parse Fireworks accounts response: {e}"))
+            })?;
+            for slug in page
+                .accounts
+                .iter()
+                .filter_map(FireworksAccount::slug)
+                .filter(|slug| !slug.is_empty() && slug.chars().all(SLUG_ALLOWED))
+            {
+                slugs.insert(slug);
+            }
+            page_token = page
+                .next_page_token
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty());
+            if page_token.is_none() {
+                return Ok(slugs.into_iter().collect());
+            }
+        }
+        Err(ProviderError::Other(
+            "Fireworks account discovery returned too many pages.".to_string(),
+        ))
+    }
+
+    fn choose_discovered_slug(slugs: Vec<String>) -> Result<String, ProviderError> {
+        match slugs.as_slice() {
+            [] => Err(ProviderError::Other(
+                "No Fireworks accounts are visible to this API key. Check the key in app.fireworks.ai or run 'firectl whoami'."
+                    .to_string(),
+            )),
+            [slug] => Ok(slug.clone()),
+            _ => Err(ProviderError::Other(format!(
+                "This Fireworks API key can access multiple accounts: {}. Set the account slug in Settings or FIREWORKS_ACCOUNT_SLUG.",
+                slugs.join(", ")
+            ))),
+        }
+    }
+
+    async fn fetch_summary(
+        &self,
+        api_key: &str,
+        slug: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<FireworksSummary>, ProviderError> {
+        let url = Self::summary_url(slug, now);
         let resp = self
             .client
             .get(&url)
@@ -227,15 +347,17 @@ impl FireworksProvider {
             .header("Accept", "application/json")
             .send()
             .await?;
-
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(ProviderError::Other(
                 "Fireworks rejected the API key. Create a new key at app.fireworks.ai and update Settings."
                     .to_string(),
             ));
         }
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        if status == StatusCode::TOO_MANY_REQUESTS {
             return Err(ProviderError::Other(
                 "Fireworks rate limit exceeded. Usage will refresh on the next cycle.".to_string(),
             ));
@@ -245,19 +367,73 @@ impl FireworksProvider {
                 "Fireworks billing API returned HTTP {status}."
             )));
         }
+        let body = resp.text().await.map_err(|e| {
+            ProviderError::Parse(format!("Could not read Fireworks usage: {e}"))
+        })?;
+        parse_summary_for_testing(&body).map(Some)
+    }
 
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| ProviderError::Parse(format!("Could not read Fireworks usage: {e}")))?;
-        let summary = parse_summary_for_testing(&body)?;
+    async fn fetch_usage_api(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let api_key = Self::resolve_api_key(ctx.api_key.as_deref())?;
+        let configured_slug = Self::resolve_account_slug(ctx)?;
+        let now = Utc::now();
 
-        let mut result = ProviderFetchResult::new(summary.to_usage_snapshot(), "api");
+        let (slug, summary, discovered) = if let Some(slug) = configured_slug {
+            match self.fetch_summary(&api_key, &slug, now).await? {
+                Some(summary) if summary.last_30_days_spend.is_some() => (slug, summary, false),
+                Some(summary) => {
+                    let slugs = self.list_account_slugs(&api_key).await?;
+                    if slugs.iter().any(|candidate| candidate == &slug) {
+                        (slug, summary, false)
+                    } else {
+                        return Err(ProviderError::Other(format!(
+                            "Fireworks account slug '{slug}' was not found for this API key. Leave it blank to auto-discover the account or run 'firectl whoami'."
+                        )));
+                    }
+                }
+                None => {
+                    let discovered_slug = Self::choose_discovered_slug(
+                        self.list_account_slugs(&api_key).await?,
+                    )?;
+                    let summary = self
+                        .fetch_summary(&api_key, &discovered_slug, now)
+                        .await?
+                        .ok_or_else(|| {
+                            ProviderError::Other(format!(
+                                "Fireworks account slug '{discovered_slug}' was discovered but its billing endpoint returned 404."
+                            ))
+                        })?;
+                    (discovered_slug, summary, true)
+                }
+            }
+        } else {
+            let slug = Self::choose_discovered_slug(self.list_account_slugs(&api_key).await?)?;
+            let summary = self
+                .fetch_summary(&api_key, &slug, now)
+                .await?
+                .ok_or_else(|| {
+                    ProviderError::Other(format!(
+                        "Fireworks account slug '{slug}' was discovered but its billing endpoint returned 404."
+                    ))
+                })?;
+            (slug, summary, true)
+        };
+
+        let source = if discovered {
+            format!("api / {slug} (auto-discovered)")
+        } else {
+            format!("api / {slug}")
+        };
+        let mut result = ProviderFetchResult::new(summary.to_usage_snapshot(), source);
         if let Some(cost) = summary.to_cost_snapshot() {
             result = result.with_cost(cost);
         }
         Ok(result)
     }
+
 }
 
 impl Default for FireworksProvider {
@@ -348,10 +524,11 @@ mod tests {
             ..FetchContext::default()
         };
 
-        let err = FireworksProvider::resolve_account_slug(&ctx(" ")).unwrap_err();
-        assert!(err.to_string().contains("account slug"), "{err}");
-
-        assert!(FireworksProvider::resolve_account_slug(&ctx("acme_corp.1-2")).is_ok());
+        assert_eq!(FireworksProvider::resolve_account_slug(&ctx(" ")).unwrap(), None);
+        assert_eq!(
+            FireworksProvider::resolve_account_slug(&ctx("acme_corp.1-2")).unwrap(),
+            Some("acme_corp.1-2".to_string())
+        );
         assert!(FireworksProvider::resolve_account_slug(&ctx("../etc")).is_err());
         assert!(FireworksProvider::resolve_account_slug(&ctx("a?x=1")).is_err());
 
@@ -365,6 +542,33 @@ mod tests {
             url.starts_with("https://api.fireworks.ai/v1/accounts/acme/billing/summary?startTime=")
         );
         assert!(url.contains("&endTime=2026-08-17T00:00:00"));
+    }
+
+    #[test]
+    fn account_listing_parses_dedupes_and_sorts_slugs() {
+        let slugs = FireworksProvider::parse_account_slugs(
+            r#"{"accounts":[{"name":"accounts/zeta"},{"accountId":"alpha"},{"id":"alpha"},{"name":"accounts/bad?slug"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(slugs, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
+
+    #[test]
+    fn account_discovery_requires_exactly_one_visible_account() {
+        let empty = FireworksProvider::choose_discovered_slug(vec![]).unwrap_err();
+        assert!(empty.to_string().contains("No Fireworks accounts"));
+
+        assert_eq!(
+            FireworksProvider::choose_discovered_slug(vec!["team".to_string()]).unwrap(),
+            "team"
+        );
+
+        let multiple = FireworksProvider::choose_discovered_slug(vec![
+            "alpha".to_string(),
+            "zeta".to_string(),
+        ])
+        .unwrap_err();
+        assert!(multiple.to_string().contains("alpha, zeta"));
     }
 
     #[test]

@@ -19,12 +19,14 @@
 //! - `accounts.pace` uses the 7-stage local [`PaceStage`] model (identical
 //!   stage names to upstream's `UsagePace.Stage`).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
+
+use super::antigravity;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::core::{NamedRateWindow, ProviderFetchResult, RateWindow, UsagePace, UsageSnapshot};
+use crate::core::{ProviderFetchResult, RateWindow, UsagePace, UsageSnapshot};
 
 /// How much account identity a snapshot exposes. Upstream 0.48.0 exposes two
 /// CLI modes (`redacted` default, `full` opt-in); upstream's internal `none`
@@ -227,7 +229,12 @@ pub struct SnapshotInput {
 pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
     let mut sort_keys: HashMap<&str, u32> = HashMap::new();
     for (index, id) in input.order.iter().enumerate() {
-        sort_keys.entry(id.as_str()).or_insert(index as u32 * 10);
+        sort_keys
+            .entry(id.as_str())
+            .or_insert(#[allow(
+                clippy::cast_possible_truncation,
+                reason = "provider order is a short config list; index*10 fits u32"
+            )] index as u32 * 10);
     }
 
     let known_ids: BTreeSet<&str> = crate::core::cli_name_map().keys().copied().collect();
@@ -248,7 +255,10 @@ pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
             let sort_key = sort_keys
                 .get(envelope.id.as_str())
                 .copied()
-                .unwrap_or(10_000 + index as u32);
+                .unwrap_or(#[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "fallback key for a short provider list; index fits u32"
+                )] 10_000 + index as u32);
             build_provider(envelope, &input.costs, input, &known_ids, sort_key, claude)
         })
         .collect();
@@ -448,7 +458,7 @@ fn make_windows(
     // of its quota buckets. Keep every bucket in the v1 payload, mark known-idle
     // families for display clients, and avoid repeating representative rows.
     if provider_id == "antigravity" && !usage.extra_rate_windows.is_empty() {
-        let idle_ids = antigravity_idle_window_ids(&usage.extra_rate_windows);
+        let idle_ids = antigravity::idle_window_ids(&usage.extra_rate_windows);
         return usage
             .extra_rate_windows
             .iter()
@@ -473,70 +483,6 @@ fn make_windows(
         windows.push(make_window(&extra.id, &extra.title, &extra.window));
     }
     windows
-}
-
-fn antigravity_idle_window_ids(windows: &[NamedRateWindow]) -> HashSet<String> {
-    if windows.is_empty() {
-        return HashSet::new();
-    }
-    let mut families: HashMap<String, Vec<&NamedRateWindow>> = HashMap::new();
-    for window in windows {
-        families
-            .entry(antigravity_family_key(window))
-            .or_default()
-            .push(window);
-    }
-    let idle_families: Vec<_> = families
-        .iter()
-        .filter(|(_, lanes)| {
-            lanes
-                .iter()
-                .all(|lane| lane.usage_known && lane.window.used_percent <= 0.0)
-        })
-        .map(|(family, _)| family.clone())
-        .collect();
-    // Immediately after a global reset every family can be at known zero. Keep all
-    // of them so the dashboard never renders an empty Antigravity card.
-    if idle_families.len() == families.len() {
-        return HashSet::new();
-    }
-    idle_families
-        .into_iter()
-        .flat_map(|family| {
-            families
-                .get(&family)
-                .into_iter()
-                .flatten()
-                .map(|lane| lane.id.clone())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-fn antigravity_family_key(window: &NamedRateWindow) -> String {
-    let id = window.id.to_ascii_lowercase();
-    if id.contains("gemini") {
-        return "gemini".to_string();
-    }
-    if id.contains("3p") || id.contains("third-party") {
-        return "claude-gpt".to_string();
-    }
-    let title = window.title.trim().to_ascii_lowercase();
-    if title.contains("gemini") {
-        return "gemini".to_string();
-    }
-    if title.contains("claude") || title.contains("gpt") {
-        return "claude-gpt".to_string();
-    }
-    for suffix in [" 5-hour", " weekly"] {
-        if let Some(stripped) = title.strip_suffix(suffix) {
-            let stripped = stripped.trim();
-            if !stripped.is_empty() {
-                return stripped.to_string();
-            }
-        }
-    }
-    title
 }
 
 /// Shared tail for window mapping: model-specific row plus tertiary row.
@@ -612,6 +558,7 @@ fn pace_stage_name(stage: crate::core::PaceStage) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::NamedRateWindow;
     use crate::core::{CostSnapshot, RateWindow};
 
     fn fetch_result(used: f64, email: Option<&str>, plan: Option<&str>) -> ProviderFetchResult {

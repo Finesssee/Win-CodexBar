@@ -4,6 +4,7 @@
 //! Route handlers here are pure functions of an injected [`DashboardState`] so
 //! every route stays socket-testable end to end.
 
+mod antigravity;
 pub mod coordinator;
 pub mod html;
 pub mod icons;

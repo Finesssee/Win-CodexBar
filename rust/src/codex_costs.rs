@@ -60,6 +60,9 @@ pub(crate) fn merge_codex_records_into_days(
     records: &[CodexUsageRecord],
 ) {
     for record in records {
+        if !CostUsagePricing::counts_toward_codex_subscription(&record.model) {
+            continue;
+        }
         let models = days.entry(record.day_key.clone()).or_default();
         let packed = models
             .entry(record.model.clone())
@@ -169,6 +172,9 @@ fn add_codex_tokens_to_summary(
     pricing_day: Option<NaiveDate>,
 ) -> Option<f64> {
     if tokens.is_empty() {
+        return None;
+    }
+    if !CostUsagePricing::counts_toward_codex_subscription(model) {
         return None;
     }
 
@@ -289,7 +295,9 @@ fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -
     for record in records.iter().filter(|record| {
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
-        if CostUsagePricing::is_codex_unattributed_model(&record.model) {
+        if CostUsagePricing::is_codex_unattributed_model(&record.model)
+            || !CostUsagePricing::counts_toward_codex_subscription(&record.model)
+        {
             continue;
         }
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
@@ -476,6 +484,49 @@ mod tests {
         let after_expected = 90.0 * 2e-6 + 10.0 * 2e-7 + 5.0 * 1.2e-5;
         assert!(has_tokens);
         assert!((cost - (before_expected + after_expected)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn routed_models_do_not_count_toward_native_codex_summary() {
+        let target = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let records = vec![
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+                input: 100,
+                cached: 0,
+                output: 5,
+            },
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "deepseek/deepseek-chat".to_string(),
+                input: 1_000_000,
+                cached: 0,
+                output: 1_000_000,
+            },
+        ];
+        let mut summary = CostSummary::default();
+        let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
+        assert!(has_tokens);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 5);
+        assert!(!summary.by_model.contains_key("deepseek/deepseek-chat"));
+        assert!(cost < 0.01, "routed DeepSeek cost leaked into native Codex: {cost}");
+    }
+
+    #[test]
+    fn routed_models_are_not_persisted_in_codex_day_token_cache() {
+        let records = vec![CodexUsageRecord {
+            day_key: "2026-08-19".to_string(),
+            model: "opencode/gpt-5".to_string(),
+            input: 10,
+            cached: 0,
+            output: 1,
+        }];
+        let mut days = std::collections::HashMap::new();
+        merge_codex_records_into_days(&mut days, &records);
+        assert!(days.is_empty());
     }
 
     #[test]

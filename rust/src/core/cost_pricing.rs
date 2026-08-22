@@ -647,6 +647,12 @@ impl CostUsagePricing {
         codex_routed_pricing::codex_routed_provider(model)
     }
 
+    /// Whether a Codex model belongs to the native OpenAI subscription rather
+    /// than a provider-qualified routed subscription.
+    pub fn counts_toward_codex_subscription(model: &str) -> bool {
+        codex_routed_pricing::counts_toward_codex_subscription(model)
+    }
+
     /// Get the display label for a Codex model (e.g. "Research Preview")
     pub fn codex_display_label(model: &str) -> Option<&'static str> {
         let key = Self::normalize_codex_model(model);

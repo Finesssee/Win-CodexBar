@@ -39,3 +39,14 @@ pub fn strip_route_prefix(model: &str) -> &str {
     }
     trimmed
 }
+
+/// Whether a model belongs to the native Codex/OpenAI subscription.
+/// Provider-qualified non-OpenAI routes are attributed to their own subscription
+/// by OpenCodex fan-out and must not inflate native Codex session spend.
+pub fn counts_toward_codex_subscription(model: &str) -> bool {
+    let trimmed = model.trim();
+    let Some((prefix, _)) = trimmed.split_once('/') else {
+        return true;
+    };
+    prefix.eq_ignore_ascii_case("openai")
+}

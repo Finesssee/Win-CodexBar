@@ -57,9 +57,57 @@ struct DailyAccumulator {
     saw_tokens: bool,
 }
 
-pub(super) fn load(history_days: u32, custom: &CustomPricing) -> Option<ImportedSpendSource> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteTarget {
+    Subscription(&'static str),
+    TokenOnly,
+    Unknown,
+}
+
+fn route_provider(provider: &str) -> RouteTarget {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openai" => RouteTarget::Subscription("codex"),
+        "opencode-go" => RouteTarget::Subscription("opencodego"),
+        "kimi-coding" | "kimi-for-coding" => RouteTarget::Subscription("kimi"),
+        "deepseek" => RouteTarget::Subscription("deepseek"),
+        "opencode-free" | "opencode" => RouteTarget::TokenOnly,
+        _ => RouteTarget::Unknown,
+    }
+}
+
+fn route_model(model: &str) -> RouteTarget {
+    let trimmed = model.trim();
+    let Some((prefix, _)) = trimmed.split_once('/') else {
+        return RouteTarget::Subscription("codex");
+    };
+    if prefix.is_empty() {
+        RouteTarget::Unknown
+    } else {
+        route_provider(prefix)
+    }
+}
+
+fn route_entry(entry: &OpenCodexEntry) -> RouteTarget {
+    if entry.model.trim().contains('/') {
+        let routed = route_model(&entry.model);
+        if routed != RouteTarget::Unknown {
+            return routed;
+        }
+    }
+    route_provider(&entry.provider)
+}
+
+pub(super) fn load_for_subscription(
+    provider_id: &str,
+    history_days: u32,
+    custom: &CustomPricing,
+) -> Option<ImportedSpendSource> {
     let source_path = usage_path()?;
     let entries = load_entries(&source_path)?;
+    let entries = entries
+        .into_iter()
+        .filter(|entry| matches!(route_entry(entry), RouteTarget::Subscription(id) if id == provider_id))
+        .collect();
     aggregate(entries, Utc::now(), history_days.clamp(1, 365), custom)
 }
 
@@ -244,7 +292,33 @@ fn entry_cost(entry: &OpenCodexEntry, custom: &CustomPricing) -> Option<f64> {
     if let Some(rates) = custom.rates(&entry.provider, &entry.model) {
         return rates.cost_parts(input, output, cache_read, cache_write);
     }
-    CostUsagePricing::codex_cost_usd(&entry.model, input, cache_read, output)
+    let pricing_model = pricing_model(entry)?;
+    CostUsagePricing::codex_cost_usd_at_date(
+        &pricing_model,
+        input,
+        cache_read,
+        output,
+        entry.timestamp.date_naive(),
+    )
+}
+
+fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
+    let target = route_entry(entry);
+    let model = entry.model.trim();
+    let model_tail = model.split_once('/').map(|(_, tail)| tail).unwrap_or(model);
+    match target {
+        RouteTarget::Subscription("codex") => Some(
+            if model.contains('/') && model.split_once('/').is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("openai")) {
+                model.to_string()
+            } else {
+                model_tail.to_string()
+            },
+        ),
+        RouteTarget::Subscription("opencodego") => Some(format!("opencode/{model_tail}")),
+        RouteTarget::Subscription("kimi") => Some(format!("kimi/{model_tail}")),
+        RouteTarget::Subscription("deepseek") => Some(format!("deepseek/{model_tail}")),
+        RouteTarget::Subscription(_) | RouteTarget::TokenOnly | RouteTarget::Unknown => None,
+    }
 }
 
 fn load_entries(source_path: &Path) -> Option<Vec<OpenCodexEntry>> {
@@ -471,6 +545,61 @@ mod tests {
         assert_eq!(source.token_mix.input_tokens, Some(20));
         assert_eq!(source.coverage.priced, 1);
         assert!(source.known_cost_usd.is_some());
+    }
+
+    fn entry(provider: &str, model: &str) -> OpenCodexEntry {
+        OpenCodexEntry {
+            request_id: format!("{provider}:{model}"),
+            timestamp: DateTime::parse_from_rfc3339("2026-07-29T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            usage_status: "reported".to_string(),
+            conversation_id: None,
+            input_tokens: Some(100),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(10),
+            cache_creation_tokens: None,
+            reasoning_tokens: None,
+            total_tokens: Some(105),
+        }
+    }
+
+    #[test]
+    fn routes_opencodex_entries_into_subscription_rows() {
+        assert_eq!(route_entry(&entry("openai", "gpt-5.6-sol")), RouteTarget::Subscription("codex"));
+        assert_eq!(route_entry(&entry("opencode-go", "gpt-5.6-sol")), RouteTarget::Subscription("opencodego"));
+        assert_eq!(route_entry(&entry("kimi-coding", "k2p5")), RouteTarget::Subscription("kimi"));
+        assert_eq!(route_entry(&entry("deepseek", "deepseek-chat")), RouteTarget::Subscription("deepseek"));
+        assert_eq!(route_entry(&entry("opencode-free", "free-model")), RouteTarget::TokenOnly);
+    }
+
+    #[test]
+    fn model_prefix_wins_over_mismatched_provider_label() {
+        assert_eq!(
+            route_entry(&entry("openai", "opencode-go/deepseek-v4-flash")),
+            RouteTarget::Subscription("opencodego")
+        );
+        assert_eq!(
+            route_entry(&entry("opencode-go", "openai/gpt-5.6-sol")),
+            RouteTarget::Subscription("codex")
+        );
+    }
+
+    #[test]
+    fn pricing_model_uses_routed_vendor_catalog() {
+        assert_eq!(pricing_model(&entry("opencode-go", "gpt-5")).as_deref(), Some("opencode/gpt-5"));
+        assert_eq!(pricing_model(&entry("kimi-coding", "k2p5")).as_deref(), Some("kimi/k2p5"));
+        assert_eq!(pricing_model(&entry("deepseek", "deepseek-chat")).as_deref(), Some("deepseek/deepseek-chat"));
+    }
+
+    #[test]
+    fn opencodex_uses_request_day_for_historical_gpt56_pricing() {
+        let entry = entry("openai", "gpt-5.6-terra");
+        let cost = entry_cost(&entry, &CustomPricing::default()).unwrap();
+        let expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
+        assert!((cost - expected).abs() < 1e-12);
     }
 
     #[test]

@@ -279,13 +279,17 @@ pub fn build_local_spend_contract_from_summary(
     };
 
     let native = load_native_spend(provider_id, history_days);
-    let imports: Vec<_> = if provider_id == "codex" && include_opencodex {
-        opencodex::load(history_days, &custom).into_iter().collect()
+    let imports: Vec<_> = if include_opencodex {
+        opencodex::load_for_subscription(provider_id, history_days, &custom)
+            .into_iter()
+            .collect()
     } else {
         Vec::new()
     };
     let imported = imports.first();
-    let replace_native = hide_native_codex_when_opencodex_present && imported.is_some();
+    let replace_native = provider_id == "codex"
+        && hide_native_codex_when_opencodex_present
+        && imported.is_some();
     let resolved = resolve_spend(
         native_cost,
         native_coverage,

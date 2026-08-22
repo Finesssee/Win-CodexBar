@@ -1,0 +1,6 @@
+{
+  "identifier": "usage-spend-save-dialog",
+  "description": "Allow the Settings window to choose a destination for Usage & Spend JSON exports.",
+  "windows": ["settings"],
+  "permissions": ["dialog:allow-save"]
+}

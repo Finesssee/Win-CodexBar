@@ -313,6 +313,21 @@ pub fn parse_amp_free_percent_remaining(text: &str) -> Option<f64> {
     None
 }
 
+fn normalize_amp_subscription_line(line: &str) -> String {
+    let trimmed = line.trim();
+    let Some(rest) = trimmed.strip_prefix("Amp ") else {
+        return line.to_string();
+    };
+    let Some((plan, suffix)) = rest.split_once(" Subscription:") else {
+        return line.to_string();
+    };
+    let plan = plan.trim();
+    if plan.is_empty() {
+        return line.to_string();
+    }
+    format!("Subscription {plan}:{suffix}")
+}
+
 /// Parse Amp subscription display text (Megawatt/Gigawatt dual other/orb windows).
 ///
 /// Matches:
@@ -331,7 +346,8 @@ pub fn parse_amp_subscription_usage(
     .ok()?;
 
     for line in text.lines() {
-        let Some(caps) = re.captures(line) else {
+        let normalized_line = normalize_amp_subscription_line(line);
+        let Some(caps) = re.captures(&normalized_line) else {
             continue;
         };
         let plan = caps.get(1)?.as_str().trim();
@@ -583,5 +599,26 @@ Subscription Megawatt: 42% other usage and 88% orb usage remaining - resets upon
         assert!((snapshot.primary.used_percent - 28.0).abs() < f64::EPSILON);
         assert!(snapshot.secondary.is_none());
         assert_eq!(snapshot.login_method.as_deref(), Some("Amp Free"));
+    }
+}
+
+#[cfg(test)]
+mod current_subscription_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    #[test]
+    fn parses_current_amp_subscription_line_format() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 18, 12, 0, 0).unwrap();
+        let text = "Signed in as user@example.com\nAmp Megawatt Subscription: 100% other usage and 100% orb usage remaining - resets upon renewal in 1 month\n";
+        let sub = parse_amp_subscription_usage(text, now).expect("subscription");
+
+        assert_eq!(sub.plan, "Megawatt");
+        assert!((sub.other_used_percent - 0.0).abs() < f64::EPSILON);
+        assert!((sub.orb_used_percent - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            sub.resets_at,
+            Utc.with_ymd_and_hms(2026, 9, 18, 12, 0, 0).unwrap()
+        );
+        assert_eq!(sub.reset_description, "renews in 1 month");
     }
 }

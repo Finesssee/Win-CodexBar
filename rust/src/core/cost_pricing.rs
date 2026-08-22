@@ -1,6 +1,7 @@
 //! Cost usage pricing — model-specific token pricing for Codex (OpenAI) and Claude (Anthropic).
 
 use super::models_dev_pricing;
+use chrono::NaiveDate;
 use super::{claude_routed_pricing, codex_routed_pricing};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -737,6 +738,62 @@ impl CostUsagePricing {
             input.max(0) as u64,
             cached.max(0) as u64,
             output.max(0) as u64,
+        )?;
+        Some(base_cost * multiplier)
+    }
+
+    /// Calculate Codex cost using the rates in effect on a historical usage day.
+    /// GPT-5.6 Terra/Luna were cut on 2026-07-30; Sol was unchanged.
+    pub fn codex_cost_usd_at_date(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: NaiveDate,
+    ) -> Option<f64> {
+        let key = Self::normalize_codex_model(model);
+        let cutoff = NaiveDate::from_ymd_opt(2026, 7, 30).expect("valid pricing cutoff");
+        if pricing_date < cutoff {
+            let long = input_tokens > CODEX_LONG_CONTEXT_THRESHOLD;
+            let rates = match (key.as_str(), long) {
+                ("gpt-5.6-terra", false) => Some((2.5e-6, 2.5e-7, 1.5e-5)),
+                ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 2.25e-5)),
+                ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 6e-6)),
+                ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 9e-6)),
+                _ => None,
+            };
+            if let Some((input_rate, cache_rate, output_rate)) = rates {
+                return Some(codex_cost_from_rates(
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                    input_rate,
+                    cache_rate,
+                    output_rate,
+                ));
+            }
+        }
+        Self::codex_cost_usd(model, input_tokens, cached_input_tokens, output_tokens)
+    }
+
+    pub fn codex_fast_cost_usd_at_date(
+        model: &str,
+        input: i32,
+        cached: i32,
+        output: i32,
+        pricing_date: NaiveDate,
+    ) -> Option<f64> {
+        let multiplier = Self::codex_api_fast_multiplier(model)?;
+        if (input.max(0) as u64) > CODEX_LONG_CONTEXT_THRESHOLD {
+            return None;
+        }
+        let base = Self::codex_fast_base_model(model);
+        let base_cost = Self::codex_cost_usd_at_date(
+            &base,
+            input.max(0) as u64,
+            cached.max(0) as u64,
+            output.max(0) as u64,
+            pricing_date,
         )?;
         Some(base_cost * multiplier)
     }

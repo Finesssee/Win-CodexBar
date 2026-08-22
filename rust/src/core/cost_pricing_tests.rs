@@ -390,3 +390,69 @@ fn claude_explicit_unknown_vendor_fails_closed() {
         ("openai", "gpt-5".to_string())
     );
 }
+
+
+#[test]
+fn gpt56_historical_terra_luna_rates_change_at_2026_07_30() {
+    use chrono::NaiveDate;
+
+    let before = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+    let after = NaiveDate::from_ymd_opt(2026, 7, 30).unwrap();
+
+    let terra_before = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-terra", 100, 10, 5, before,
+    )
+    .unwrap();
+    let terra_after = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-terra", 100, 10, 5, after,
+    )
+    .unwrap();
+    let luna_before = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-luna", 100, 10, 5, before,
+    )
+    .unwrap();
+    let luna_after = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-luna", 100, 10, 5, after,
+    )
+    .unwrap();
+
+    let terra_before_expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
+    let terra_after_expected = 90.0 * 2e-6 + 10.0 * 2e-7 + 5.0 * 1.2e-5;
+    let luna_before_expected = 90.0 * 1e-6 + 10.0 * 1e-7 + 5.0 * 6e-6;
+    let luna_after_expected = 90.0 * 2e-7 + 10.0 * 2e-8 + 5.0 * 1.2e-6;
+
+    assert!((terra_before - terra_before_expected).abs() < 1e-12);
+    assert!((terra_after - terra_after_expected).abs() < 1e-12);
+    assert!((luna_before - luna_before_expected).abs() < 1e-12);
+    assert!((luna_after - luna_after_expected).abs() < 1e-12);
+    assert!(terra_before > terra_after);
+    assert!(luna_before > luna_after);
+}
+
+#[test]
+fn gpt56_historical_pricing_keeps_sol_unchanged() {
+    use chrono::NaiveDate;
+
+    let before = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+    let current = CostUsagePricing::codex_cost_usd("gpt-5.6-sol", 100, 10, 5).unwrap();
+    let historical =
+        CostUsagePricing::codex_cost_usd_at_date("gpt-5.6-sol", 100, 10, 5, before).unwrap();
+    assert!((historical - current).abs() < f64::EPSILON);
+}
+
+#[test]
+fn gpt56_historical_long_context_uses_pre_cut_rates() {
+    use chrono::NaiveDate;
+
+    let before = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+    let terra = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-terra",
+        300_000,
+        30_000,
+        1_000,
+        before,
+    )
+    .unwrap();
+    let expected = 270_000.0 * 5e-6 + 30_000.0 * 5e-7 + 1_000.0 * 2.25e-5;
+    assert!((terra - expected).abs() < 1e-10);
+}

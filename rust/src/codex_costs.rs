@@ -42,7 +42,10 @@ pub(crate) fn add_codex_records_to_summary(
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if let Some(cost) = add_codex_tokens_to_summary(summary, &record.model, tokens) {
+        let pricing_day = CostUsageDayRange::parse_day_key(&record.day_key);
+        if let Some(cost) =
+            add_codex_tokens_to_summary(summary, &record.model, tokens, pricing_day)
+        {
             total_cost += cost;
             has_tokens = true;
         }
@@ -75,6 +78,7 @@ pub(crate) fn add_codex_packed_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
     packed: &[i32],
+    pricing_day: Option<NaiveDate>,
 ) -> Option<f64> {
     let input = packed.first().copied().unwrap_or(0);
     let cached = packed.get(1).copied().unwrap_or(0);
@@ -83,6 +87,7 @@ pub(crate) fn add_codex_packed_tokens_to_summary(
         summary,
         model,
         CodexTokenCounts::from_values(input, cached, output),
+        pricing_day,
     )
 }
 
@@ -99,8 +104,11 @@ pub(crate) fn add_codex_days_map_to_summary(
         if !CostUsageDayRange::is_in_range(day_key, &range.since_key, &range.until_key) {
             continue;
         }
+        let pricing_day = CostUsageDayRange::parse_day_key(day_key);
         for (model, packed) in models {
-            if let Some(cost) = add_codex_packed_tokens_to_summary(summary, model, packed) {
+            if let Some(cost) =
+                add_codex_packed_tokens_to_summary(summary, model, packed, pricing_day)
+            {
                 total_cost += cost;
                 has_tokens = true;
             }
@@ -158,6 +166,7 @@ fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
     tokens: CodexTokenCounts,
+    pricing_day: Option<NaiveDate>,
 ) -> Option<f64> {
     if tokens.is_empty() {
         return None;
@@ -207,10 +216,32 @@ fn add_codex_tokens_to_summary(
         return Some(0.0);
     }
 
-    let uses_fallback_pricing =
-        CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
-            .is_none();
-    let cost = codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output);
+    let priced = pricing_day
+        .and_then(|day| {
+            CostUsagePricing::codex_cost_usd_at_date(
+                &model_key,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+                day,
+            )
+        })
+        .or_else(|| {
+            CostUsagePricing::codex_cost_usd(
+                &model_key,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+            )
+        });
+    let uses_fallback_pricing = priced.is_none();
+    let cost = codex_cost_usd_for_day(
+        &model_key,
+        tokens.input,
+        tokens.cached,
+        tokens.output,
+        pricing_day,
+    );
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
         match &mut summary.model_pricing_completeness {
@@ -263,7 +294,13 @@ fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -
         }
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
         if !tokens.is_empty() {
-            total_cost += codex_cost_usd(&record.model, tokens.input, tokens.cached, tokens.output);
+            total_cost += codex_cost_usd_for_day(
+                &record.model,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+                CostUsageDayRange::parse_day_key(&record.day_key),
+            );
         }
     }
 
@@ -283,27 +320,57 @@ fn codex_speed_bucket(model: &str) -> &'static str {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
+    codex_cost_usd_for_day(model, input, cached, output, None)
+}
+
+fn codex_cost_usd_for_day(
+    model: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    pricing_day: Option<NaiveDate>,
+) -> f64 {
     if CostUsagePricing::is_codex_unattributed_model(model) {
         return 0.0;
     }
-    if let Some(cost) = CostUsagePricing::codex_cost_usd(model, input, cached, output) {
+    let priced = pricing_day
+        .and_then(|day| CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day))
+        .or_else(|| CostUsagePricing::codex_cost_usd(model, input, cached, output));
+    if let Some(cost) = priced {
         return cost;
     }
 
-    // C4 (upstream 0.48.0): Fast-tier models are priced as Standard × multiplier.
-    // Try Fast pricing before the legacy gpt-4o fallback so Fast-bucket model
-    // IDs get real rates instead of fake gpt-4o defaults. Fast detection is
-    // name-based locally (upstream uses a priority-trace SQLite DB scan that
-    // is absent locally — documented divergence).
     let normalized = CostUsagePricing::normalize_codex_model(model);
-    if (normalized.contains("fast") || normalized.contains("priority"))
-        && let Some(fast_cost) =
-            CostUsagePricing::codex_fast_cost_usd(model, input as i32, cached as i32, output as i32)
-    {
-        return fast_cost;
+    if normalized.contains("fast") || normalized.contains("priority") {
+        let fast = pricing_day
+            .and_then(|day| {
+                CostUsagePricing::codex_fast_cost_usd_at_date(
+                    model,
+                    input as i32,
+                    cached as i32,
+                    output as i32,
+                    day,
+                )
+            })
+            .or_else(|| {
+                CostUsagePricing::codex_fast_cost_usd(
+                    model,
+                    input as i32,
+                    cached as i32,
+                    output as i32,
+                )
+            });
+        if let Some(cost) = fast {
+            return cost;
+        }
     }
 
+    codex_cost_usd_fallback(model, input, cached, output)
+}
+
+fn codex_cost_usd_fallback(model: &str, input: u64, cached: u64, output: u64) -> f64 {
     let (input_price, cached_price, output_price) = match model.to_lowercase().as_str() {
         m if m.contains("gpt-4o-mini") => (0.15, 0.075, 0.60),
         m if m.contains("gpt-4o") => (2.50, 1.25, 10.00),
@@ -379,6 +446,36 @@ mod tests {
         assert!(has_tokens);
         assert_eq!(summary.input_tokens, 400_000);
         assert!((cost - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cached_day_fold_preserves_gpt56_historical_pricing() {
+        let before = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+        let after = NaiveDate::from_ymd_opt(2026, 7, 30).unwrap();
+        let range = CostUsageDayRange::new(before, after);
+        let days = std::collections::HashMap::from([
+            (
+                "2026-07-29".to_string(),
+                std::collections::HashMap::from([(
+                    "gpt-5.6-terra".to_string(),
+                    vec![100, 10, 5],
+                )]),
+            ),
+            (
+                "2026-07-30".to_string(),
+                std::collections::HashMap::from([(
+                    "gpt-5.6-terra".to_string(),
+                    vec![100, 10, 5],
+                )]),
+            ),
+        ]);
+        let mut summary = CostSummary::default();
+        let (cost, has_tokens) = add_codex_days_map_to_summary(&mut summary, &days, &range);
+
+        let before_expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
+        let after_expected = 90.0 * 2e-6 + 10.0 * 2e-7 + 5.0 * 1.2e-5;
+        assert!(has_tokens);
+        assert!((cost - (before_expected + after_expected)).abs() < 1e-12);
     }
 
     #[test]

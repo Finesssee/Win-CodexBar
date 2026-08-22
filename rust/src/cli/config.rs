@@ -294,6 +294,7 @@ fn is_secret_field_name(key: &str) -> bool {
             | "manualcookieheader"
             | "token"
             | "apitoken"
+            | "managementapitoken"
             | "httpproxypassword"
             | "password"
     )
@@ -485,7 +486,8 @@ mod tests {
             "provider_configs": {
                 "claude": {
                     "manual_cookie_header": "sessionKey=abc",
-                    "api_token": "tok-123"
+                    "api_token": "tok-123",
+                    "management_api_token": "management-secret"
                 }
             },
             "api_keys": {
@@ -525,6 +527,7 @@ mod tests {
         assert!(!text.contains("proxy-secret"));
         assert!(!text.contains("sessionKey=abc"));
         assert!(!text.contains("tok-123"));
+        assert!(!text.contains("management-secret"));
         assert!(!text.contains("cb_test_api_key_456"));
         assert!(!text.contains("secret-cookie"));
         assert!(!text.contains("raw-token-value"));

@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrayPanelLayoutOptions } from "./useTrayPanelLayout";
 
@@ -38,6 +38,33 @@ vi.mock("@tauri-apps/api/window", () => windowMocks);
 import { useTrayPanelLayout } from "./useTrayPanelLayout";
 
 let surface: HTMLElement;
+let feedbackObserverCallbacks = 0;
+
+class StyleFeedbackResizeObserver {
+  private mutationObserver: MutationObserver | null = null;
+
+  constructor(private readonly callback: ResizeObserverCallback) {}
+
+  observe(target: Element): void {
+    this.mutationObserver = new MutationObserver(() => {
+      feedbackObserverCallbacks += 1;
+      this.callback([], this as unknown as ResizeObserver);
+    });
+    this.mutationObserver.observe(target, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+  }
+
+  unobserve(): void {
+    this.disconnect();
+  }
+
+  disconnect(): void {
+    this.mutationObserver?.disconnect();
+    this.mutationObserver = null;
+  }
+}
 
 function mountSurface(): void {
   document.body.innerHTML = [
@@ -79,9 +106,10 @@ function hookResult(result: unknown): { current: { requestLayout: () => void } }
   return result as { current: { requestLayout: () => void } };
 }
 
-describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
+describe("useTrayPanelLayout sizing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    feedbackObserverCallbacks = 0;
     mountSurface();
     Object.defineProperty(window, "devicePixelRatio", {
       configurable: true,
@@ -106,6 +134,7 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
   });
 
@@ -133,6 +162,30 @@ describe("useTrayPanelLayout two-state cycle detection (#261)", () => {
       { timeout: 3000 },
     );
   }
+
+  it("does not feed measurement style changes back into another auto-fit pass", async () => {
+    vi.stubGlobal("ResizeObserver", StyleFeedbackResizeObserver);
+    setScrollHeight(1_200);
+
+    const { result } = renderHook(() => useTrayPanelLayout(hookProps()));
+    await waitFor(() => expect(result.current.layoutReady).toBe(true), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(feedbackObserverCallbacks).toBeGreaterThan(0));
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+    });
+    const settledRevealCount =
+      tauriMocks.revealTrayPanelWindow.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    });
+
+    expect(tauriMocks.revealTrayPanelWindow.mock.calls.length).toBe(
+      settledRevealCount,
+    );
+  });
 
   it("commits stable small changes, locks the reporter pair on the larger member, tracks retained height in the DOM", async () => {
     setScrollHeight(535); // → 539 logical → 674 physical

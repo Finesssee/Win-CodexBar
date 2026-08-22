@@ -188,7 +188,19 @@ export function useTrayPanelLayout({
   useEffect(() => {
     const surface = document.querySelector<HTMLElement>(".menu-surface--tray");
     if (!surface || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => requestLayout());
+    const observer = new ResizeObserver(() => {
+      // Measuring temporarily removes the surface/body constraints, which
+      // resizes the observed surface. Do not feed that programmatic change
+      // back into another pass or the capped flyout flashes between its
+      // measured and committed layouts forever.
+      if (
+        layoutReadyRef.current &&
+        programmaticInFlightRef.current > 0
+      ) {
+        return;
+      }
+      requestLayout();
+    });
     observer.observe(surface);
     return () => observer.disconnect();
   }, [requestLayout]);

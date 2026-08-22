@@ -1068,6 +1068,7 @@ mod tests {
                 formatted_limit: Some(format!("${limit:.2}")),
                 balance: None,
                 formatted_balance: None,
+                daily: Vec::new(),
             }),
             plan_name: None,
             account_email: None,

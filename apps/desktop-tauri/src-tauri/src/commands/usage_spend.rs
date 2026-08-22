@@ -44,6 +44,17 @@ pub struct UsageSpendRow {
     pub stale_updated_at: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct SpendValues {
+    seven_day: Option<f64>,
+    thirty_day: Option<f64>,
+    seven_day_tokens: Option<u64>,
+    thirty_day_tokens: Option<u64>,
+    source: String,
+    refreshing: bool,
+    stale_updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSpendSummary {
@@ -232,63 +243,54 @@ fn build_usage_spend_summary(
             })
             .unwrap_or_else(|| provider_id.clone());
 
-        let (
-            seven_day,
-            thirty_day,
-            seven_day_tokens,
-            thirty_day_tokens,
-            source,
-            refreshing,
-            stale_updated_at,
-        ) = match provider_id.as_str() {
-            "codex" => (
-                codex_7_contract.known_cost_usd,
-                codex_30_contract.known_cost_usd,
-                total_token_mix(&codex_7_contract.token_mix),
-                total_token_mix(&codex_30_contract.token_mix),
-                if include_opencodex && !codex_30_contract.imports.is_empty() {
+        let spend = match provider_id.as_str() {
+            "codex" => SpendValues {
+                seven_day: codex_7_contract.known_cost_usd,
+                thirty_day: codex_30_contract.known_cost_usd,
+                seven_day_tokens: total_token_mix(&codex_7_contract.token_mix),
+                thirty_day_tokens: total_token_mix(&codex_30_contract.token_mix),
+                source: if include_opencodex && !codex_30_contract.imports.is_empty() {
                     "local logs + OpenCodex".to_string()
                 } else {
                     "local logs".to_string()
                 },
-                codex_stale,
-                codex_stale_updated_at.clone(),
-            ),
-            "claude" => (
-                Some(claude_7_summary.total_cost_usd),
-                Some(claude_30_summary.total_cost_usd),
-                Some(
+                refreshing: codex_stale,
+                stale_updated_at: codex_stale_updated_at.clone(),
+            },
+            "claude" => SpendValues {
+                seven_day: Some(claude_7_summary.total_cost_usd),
+                thirty_day: Some(claude_30_summary.total_cost_usd),
+                seven_day_tokens: Some(
                     claude_7_summary
                         .input_tokens
                         .saturating_add(claude_7_summary.output_tokens),
                 ),
-                Some(
+                thirty_day_tokens: Some(
                     claude_30_summary
                         .input_tokens
                         .saturating_add(claude_30_summary.output_tokens),
                 ),
-                "local logs".to_string(),
-                false,
-                None,
-            ),
+                source: "local logs".to_string(),
+                refreshing: false,
+                stale_updated_at: None,
+            },
             "opencodego" | "kimi" | "deepseek" if include_opencodex => {
                 let seven = build_local_spend_contract(&provider_id, 7, true);
                 let thirty = build_local_spend_contract(&provider_id, 30, true);
-                let imported = !thirty.imports.is_empty();
-                if imported {
-                    (
-                        seven.known_cost_usd,
-                        thirty.known_cost_usd,
-                        total_token_mix(&seven.token_mix),
-                        total_token_mix(&thirty.token_mix),
-                        if provider_id == "opencodego" {
+                if !thirty.imports.is_empty() {
+                    SpendValues {
+                        seven_day: seven.known_cost_usd,
+                        thirty_day: thirty.known_cost_usd,
+                        seven_day_tokens: total_token_mix(&seven.token_mix),
+                        thirty_day_tokens: total_token_mix(&thirty.token_mix),
+                        source: if provider_id == "opencodego" {
                             "local logs + OpenCodex".to_string()
                         } else {
                             "OpenCodex".to_string()
                         },
-                        false,
-                        None,
-                    )
+                        refreshing: false,
+                        stale_updated_at: None,
+                    }
                 } else {
                     cached_spend(cached_snapshot)
                 }
@@ -296,20 +298,13 @@ fn build_usage_spend_summary(
             "grok" => {
                 let seven = codexbar::providers::grok::local_sessions::summarize(7);
                 let thirty = codexbar::providers::grok::local_sessions::summarize(30);
-                let cached = cached_spend(cached_snapshot);
-                (
-                    cached.0,
-                    cached.1,
-                    (seven.session_count > 0).then_some(seven.total_tokens),
-                    (thirty.session_count > 0).then_some(thirty.total_tokens),
-                    if thirty.session_count > 0 {
-                        "local Grok sessions".to_string()
-                    } else {
-                        cached.4
-                    },
-                    cached.5,
-                    cached.6,
-                )
+                let mut spend = cached_spend(cached_snapshot);
+                spend.seven_day_tokens = (seven.session_count > 0).then_some(seven.total_tokens);
+                spend.thirty_day_tokens = (thirty.session_count > 0).then_some(thirty.total_tokens);
+                if thirty.session_count > 0 {
+                    spend.source = "local Grok sessions".to_string();
+                }
+                spend
             }
             _ => cached_spend(cached_snapshot),
         };
@@ -333,17 +328,17 @@ fn build_usage_spend_summary(
         rows.push(UsageSpendRow {
             provider_id: provider_id.clone(),
             display_name,
-            seven_day,
-            thirty_day,
-            seven_day_tokens,
-            thirty_day_tokens,
+            seven_day: spend.seven_day,
+            thirty_day: spend.thirty_day,
+            seven_day_tokens: spend.seven_day_tokens,
+            thirty_day_tokens: spend.thirty_day_tokens,
             currency,
-            source,
+            source: spend.source,
             included_in_overview: settings.enabled_providers.contains(&provider_id)
                 || cached_snapshot.is_some(),
             daily,
-            refreshing,
-            stale_updated_at,
+            refreshing: spend.refreshing,
+            stale_updated_at: spend.stale_updated_at,
         });
     }
 
@@ -382,42 +377,32 @@ fn total_token_mix(mix: &codexbar::spend_contract::SpendTokenMix) -> Option<u64>
     saw.then_some(total)
 }
 
-fn cached_spend(
-    snapshot: Option<&ProviderUsageSnapshot>,
-) -> (
-    Option<f64>,
-    Option<f64>,
-    Option<u64>,
-    Option<u64>,
-    String,
-    bool,
-    Option<String>,
-) {
+fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
     let Some(snapshot) = snapshot else {
-        return (
-            None,
-            None,
-            None,
-            None,
-            "unavailable".to_string(),
-            false,
-            None,
-        );
+        return SpendValues {
+            seven_day: None,
+            thirty_day: None,
+            seven_day_tokens: None,
+            thirty_day_tokens: None,
+            source: "unavailable".to_string(),
+            refreshing: false,
+            stale_updated_at: None,
+        };
     };
     let Some(cost) = snapshot.cost.as_ref() else {
-        return (
-            None,
-            None,
-            None,
-            None,
-            if snapshot.error.is_some() {
+        return SpendValues {
+            seven_day: None,
+            thirty_day: None,
+            seven_day_tokens: None,
+            thirty_day_tokens: None,
+            source: if snapshot.error.is_some() {
                 "unavailable".to_string()
             } else {
                 snapshot.source_label.clone()
             },
-            false,
-            None,
-        );
+            refreshing: false,
+            stale_updated_at: None,
+        };
     };
     let period = cost.period.trim();
     let period_lower = period.to_ascii_lowercase();
@@ -450,17 +435,17 @@ fn cached_spend(
         }
         (saw_seven.then_some(seven), saw_thirty.then_some(thirty))
     };
-    (
+    SpendValues {
         seven_day,
         thirty_day,
-        None,
-        None,
-        if period.is_empty() {
+        seven_day_tokens: None,
+        thirty_day_tokens: None,
+        source: if period.is_empty() {
             snapshot.source_label.clone()
         } else {
             format!("period ({period})")
         },
-        false,
-        None,
-    )
+        refreshing: false,
+        stale_updated_at: None,
+    }
 }

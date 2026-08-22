@@ -46,6 +46,7 @@ export interface MenuCardDisplayOptions {
   hideEmail: boolean;
   resetTimeRelative: boolean;
   showResetWhenExhausted?: boolean;
+  showPace?: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
@@ -121,6 +122,7 @@ export default function MenuCard({
     hideEmail,
     resetTimeRelative,
     showResetWhenExhausted = false,
+    showPace = true,
     showAsUsed = false,
     compactMetrics = false,
     costSummaryDisplayStyle,
@@ -213,7 +215,13 @@ export default function MenuCard({
   }
   const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
 
-  const presence = describeCard(provider, chartData, visibleMetrics, costSummaryDisplayStyle);
+  const presence = describeCard(
+    provider,
+    chartData,
+    visibleMetrics,
+    costSummaryDisplayStyle,
+    showPace,
+  );
   const { hasDetails } = presence;
   const cardClassName = [
     "menu-card",
@@ -264,6 +272,7 @@ export default function MenuCard({
           display={{
             resetTimeRelative,
             showResetWhenExhausted,
+            showPace,
             showAsUsed,
             costSummaryDisplayStyle,
           }}

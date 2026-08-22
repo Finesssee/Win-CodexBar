@@ -187,6 +187,7 @@ export interface SettingsSnapshot {
   criticalUsageThreshold: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
+  showPace?: boolean;
   trayIconMode: TrayIconMode;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
@@ -283,6 +284,7 @@ export interface SettingsUpdate {
   criticalUsageThreshold?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
+  showPace?: boolean;
   trayIconMode?: TrayIconMode;
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;

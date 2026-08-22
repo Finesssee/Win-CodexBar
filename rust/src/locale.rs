@@ -229,6 +229,8 @@ locale_keys! {
     ResetTimeRelativeHelper,
     ShowResetWhenExhausted,
     ShowResetWhenExhaustedHelper,
+    ShowPace,
+    ShowPaceHelper,
     TrayIcon,
     MergeTrayIcons,
     MergeTrayIconsHelper,

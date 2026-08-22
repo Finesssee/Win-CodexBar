@@ -44,6 +44,8 @@ pub(super) struct RawSettings {
     reset_time_relative: bool,
     show_reset_when_exhausted: bool,
     predictive_pace_warning_enabled: bool,
+    #[serde(default = "default_true")]
+    show_pace: bool,
     menu_bar_display_mode: String,
     show_all_token_accounts_in_menu: bool,
 
@@ -208,6 +210,7 @@ impl Default for RawSettings {
             reset_time_relative: s.reset_time_relative,
             show_reset_when_exhausted: s.show_reset_when_exhausted,
             predictive_pace_warning_enabled: s.predictive_pace_warning_enabled,
+            show_pace: s.show_pace,
             menu_bar_display_mode: s.menu_bar_display_mode,
             show_all_token_accounts_in_menu: s.show_all_token_accounts_in_menu,
             provider_configs: s.provider_configs,
@@ -532,6 +535,7 @@ impl From<RawSettings> for Settings {
             reset_time_relative: raw.reset_time_relative,
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
             predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
+            show_pace: raw.show_pace,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,

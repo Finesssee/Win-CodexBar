@@ -654,6 +654,7 @@ pub struct SettingsSnapshot {
     provider_usage_thresholds:
         std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
     predictive_pace_warning_enabled: bool,
+    show_pace: bool,
     tray_icon_mode: &'static str,
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
@@ -766,6 +767,7 @@ impl From<Settings> for SettingsSnapshot {
             critical_usage_threshold: settings.critical_usage_threshold,
             provider_usage_thresholds: settings.provider_usage_thresholds,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
+            show_pace: settings.show_pace,
             tray_icon_mode: tray_icon_mode_label(settings.tray_icon_mode),
             switcher_shows_icons: settings.switcher_shows_icons,
             menu_bar_shows_highest_usage: settings.menu_bar_shows_highest_usage,

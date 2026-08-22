@@ -24,6 +24,7 @@ const baseSettings = {
   showAllTokenAccountsInMenu: false,
   resetTimeRelative: false,
   showResetWhenExhausted: false,
+  showPace: false,
 } as unknown as SettingsSnapshot;
 
 function renderTab(set: (patch: Record<string, unknown>) => void) {
@@ -62,5 +63,14 @@ describe("DisplayTab window scale", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "ShowResetWhenExhausted" }));
 
     expect(set).toHaveBeenCalledWith({ showResetWhenExhausted: true });
+  });
+
+  it("updates the show pace preference", () => {
+    const set = vi.fn();
+    renderTab(set);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "ShowPace" }));
+
+    expect(set).toHaveBeenCalledWith({ showPace: true });
   });
 });

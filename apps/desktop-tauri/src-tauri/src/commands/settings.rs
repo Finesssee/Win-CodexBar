@@ -24,6 +24,7 @@ pub struct SettingsUpdate {
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
+    pub show_pace: Option<bool>,
     pub tray_icon_mode: Option<String>,
     pub switcher_shows_icons: Option<bool>,
     pub menu_bar_shows_highest_usage: Option<bool>,
@@ -271,6 +272,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.predictive_pace_warning_enabled {
             settings.predictive_pace_warning_enabled = v;
+        }
+        if let Some(v) = self.show_pace {
+            settings.show_pace = v;
         }
         Ok(self)
     }

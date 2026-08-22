@@ -198,6 +198,14 @@ export default function DisplayTab({
               onChange={(v) => set({ showResetWhenExhausted: v })}
             />
           </Field>
+          <Field label={t("ShowPace")} description={t("ShowPaceHelper")} leading>
+            <Toggle
+              checked={settings.showPace ?? true}
+              ariaLabel={t("ShowPace")}
+              disabled={saving}
+              onChange={(v) => set({ showPace: v })}
+            />
+          </Field>
         </div>
       </section>}
 

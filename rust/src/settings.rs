@@ -154,6 +154,10 @@ pub struct Settings {
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
 
+    /// Show pace visualizations and forecast text in provider menu cards.
+    #[serde(default = "default_true")]
+    pub show_pace: bool,
+
     /// Menu bar display mode: "minimal", "compact", or "detailed"
     pub menu_bar_display_mode: String,
 
@@ -508,6 +512,7 @@ impl Default for Settings {
             reset_time_relative: true, // Show relative times by default
             show_reset_when_exhausted: false,
             predictive_pace_warning_enabled: false,
+            show_pace: true,
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             show_all_token_accounts_in_menu: false,
             provider_configs: HashMap::new(),

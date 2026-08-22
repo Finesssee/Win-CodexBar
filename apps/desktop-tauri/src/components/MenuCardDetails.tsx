@@ -274,6 +274,7 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
 type MetricRowDisplay = {
   resetTimeRelative: boolean;
   showResetWhenExhausted?: boolean;
+  showPace?: boolean;
   showAsUsed?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
 };
@@ -304,8 +305,12 @@ function MetricRow({
   sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }) {
   const { t } = useLocale();
-  const { resetTimeRelative, showResetWhenExhausted = false, showAsUsed = false } =
-    display;
+  const {
+    resetTimeRelative,
+    showResetWhenExhausted = false,
+    showPace = true,
+    showAsUsed = false,
+  } = display;
   const isInformational = snap.isInformational === true;
   const usedPct = Number.isFinite(snap.usedPercent) ? Math.max(0, snap.usedPercent) : 0;
   const barPct = Math.min(100, usedPct);
@@ -328,7 +333,7 @@ function MetricRow({
     Number.isFinite(resetTarget) &&
     resetTarget > Date.now() &&
     resetText !== null;
-  const paceView = getMetricPaceView(snap);
+  const paceView = showPace ? getMetricPaceView(snap) : { kind: "none" as const };
   const reserveDescription = formatReserveDescription(snap, t);
   const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
   return (
@@ -394,7 +399,7 @@ function MetricRow({
           )}
         </div>
       )}
-      {!isInformational && forecastText && (
+      {showPace && !isInformational && forecastText && (
         <div className="menu-metric__row menu-metric__forecast">
           <span className="menu-metric__pct">{forecastText}</span>
         </div>
@@ -435,6 +440,7 @@ export function describeCard(
   chartData: ProviderChartData | null,
   visibleMetrics: MetricEntry[],
   costSummaryDisplayStyle: CostSummaryDisplayStyle = "detailed",
+  showPace = true,
 ): MenuCardPresence {
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
@@ -448,7 +454,7 @@ export function describeCard(
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
   const hasMetrics = visibleMetrics.length > 0;
   const hasCost = !!provider.cost && costSummaryDisplayStyle !== "hidden";
-  const hasPace = !!provider.pace;
+  const hasPace = showPace && !!provider.pace;
   const hasDetails =
     !provider.error &&
     (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage || !!wayfinderUsage);
@@ -608,7 +614,7 @@ export default function MenuCardDetails({
 
       {(hasMetrics || hasCost) && hasPace && <div className="menu-card__divider" />}
 
-      {provider.pace && (
+      {hasPace && provider.pace && (
         <section className="menu-card__group menu-card__pace">
           <div className="menu-card__pace-header">
             <span className="menu-card__group-title">{t("DetailPaceTitle")}</span>

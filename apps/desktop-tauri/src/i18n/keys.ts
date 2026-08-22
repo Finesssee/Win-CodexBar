@@ -65,6 +65,8 @@ export const ALL_LOCALE_KEYS = [
   "ResetTimeRelativeHelper",
   "ShowResetWhenExhausted",
   "ShowResetWhenExhaustedHelper",
+  "ShowPace",
+  "ShowPaceHelper",
   "TrayIcon",
   "MergeTrayIcons",
   "MergeTrayIconsHelper",

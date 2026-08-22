@@ -10,7 +10,7 @@ wire-shape source**, not code to cherry-pick.
 | Item | Value |
 |------|--------|
 | Upstream repo | `steipete/CodexBar` |
-| Last landed baseline | **v0.54.0** (this port PR) |
+| Last landed baseline | **v0.54.0** (`1181138ac`) |
 | Current port branch | **v0.54.0** |
 | PR naming | One PR per upstream release: `Port upstream CodexBar X.Y.Z` |
 

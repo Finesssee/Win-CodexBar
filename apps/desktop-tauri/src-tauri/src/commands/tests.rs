@@ -444,6 +444,27 @@ fn fetch_context_kimi_api_key_preserves_auto_for_web_fallback() {
 }
 
 #[test]
+fn fetch_context_opencodego_api_key_preserves_auto_for_api_overlay() {
+    let settings = Settings::default();
+    let cookies = ManualCookies::default();
+    let mut api_keys = ApiKeys::default();
+    api_keys.set("opencodego", "go-test", None);
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.api_key.as_deref(), Some("go-test"));
+}
+
+#[test]
 fn fetch_context_includes_minimax_region() {
     let mut settings = Settings::default();
     settings.set_api_region(ProviderId::MiniMax, "cn");

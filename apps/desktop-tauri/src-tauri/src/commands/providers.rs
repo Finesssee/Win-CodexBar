@@ -35,6 +35,8 @@ pub(crate) fn build_fetch_context(
     let api_key = active_token_api_key.or(stored_api_key);
     let has_kimi_code_api_key =
         id == ProviderId::Kimi && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
+    let has_opencodego_api_key = id == ProviderId::OpenCodeGo
+        && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
 
     let (mut source_mode, mut cookie_header) = if id.cookie_domain().is_none() {
         let source_mode = if active_token_env.is_some() {
@@ -50,6 +52,9 @@ pub(crate) fn build_fetch_context(
                 (SourceMode::OAuth, None)
             }
             "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
+                (SourceMode::Auto, None)
+            }
+            "off" if has_opencodego_api_key && usage_source == SourceMode::Auto => {
                 (SourceMode::Auto, None)
             }
             // Droid/Factory: cookie-off must never scrape browser cookies. Map to

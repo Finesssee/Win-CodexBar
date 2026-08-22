@@ -187,6 +187,10 @@ More release automation notes live in [docs/release/ci-cd.md](docs/release/ci-cd
 | WSL setup and auth tips | [docs/WSL.md](docs/WSL.md) |
 | Browser cookie details | [docs/COOKIES.md](docs/COOKIES.md) |
 
+## Local integrations
+
+- [AI Usage Limits](https://github.com/lenadweb/stream-deck-ai-limits) — Elgato Stream Deck integration that can consume the local `codexbar serve` dashboard/API to show provider, account, quota, or payload metrics.
+
 ## Credits
 
 - Original macOS app: [steipete/CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger

@@ -19,12 +19,12 @@
 //! - `accounts.pace` uses the 7-stage local [`PaceStage`] model (identical
 //!   stage names to upstream's `UsagePace.Stage`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::core::{ProviderFetchResult, RateWindow, UsagePace, UsageSnapshot};
+use crate::core::{NamedRateWindow, ProviderFetchResult, RateWindow, UsagePace, UsageSnapshot};
 
 /// How much account identity a snapshot exposes. Upstream 0.48.0 exposes two
 /// CLI modes (`redacted` default, `full` opt-in); upstream's internal `none`
@@ -106,6 +106,13 @@ pub struct WindowPayload {
     pub used_percent: f64,
     pub remaining_percent: f64,
     pub reset_at: Option<DateTime<Utc>>,
+    /// Display-only hint. Script clients can ignore this additive schema-v1 key.
+    #[serde(skip_serializing_if = "is_false")]
+    pub idle: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +286,7 @@ fn build_provider(
             let source = dashboard_source(&result.source_label);
             let identity = make_identity(&result.usage, input.identity);
             let windows = make_windows(
+                &envelope.id,
                 &envelope.session_label,
                 &envelope.weekly_label,
                 &result.usage,
@@ -362,7 +370,7 @@ fn build_account(
     let (identity, windows, pace, error, updated_at) = match &account.fetch {
         Ok(result) => (
             make_identity(&result.usage, identity_mode),
-            make_windows(session_label, weekly_label, &result.usage),
+            make_windows("claude", session_label, weekly_label, &result.usage),
             make_pace(&result.usage),
             None,
             Some(result.usage.updated_at),
@@ -431,10 +439,30 @@ fn dashboard_email(email: Option<&str>, mode: DashboardIdentity) -> Option<Strin
 }
 
 fn make_windows(
+    provider_id: &str,
     session_label: &str,
     weekly_label: &str,
     usage: &UsageSnapshot,
 ) -> Vec<WindowPayload> {
+    // Upstream 0.54 #3061: Antigravity's primary/secondary slots are representatives
+    // of its quota buckets. Keep every bucket in the v1 payload, mark known-idle
+    // families for display clients, and avoid repeating representative rows.
+    if provider_id == "antigravity" && !usage.extra_rate_windows.is_empty() {
+        let idle_ids = antigravity_idle_window_ids(&usage.extra_rate_windows);
+        return usage
+            .extra_rate_windows
+            .iter()
+            .map(|extra| {
+                make_window_with_idle(
+                    &extra.id,
+                    &extra.title,
+                    &extra.window,
+                    idle_ids.contains(&extra.id),
+                )
+            })
+            .collect();
+    }
+
     let mut windows = Vec::new();
     windows.push(make_window("session", session_label, &usage.primary));
     if let Some(secondary) = &usage.secondary {
@@ -445,6 +473,70 @@ fn make_windows(
         windows.push(make_window(&extra.id, &extra.title, &extra.window));
     }
     windows
+}
+
+fn antigravity_idle_window_ids(windows: &[NamedRateWindow]) -> HashSet<String> {
+    if windows.is_empty() {
+        return HashSet::new();
+    }
+    let mut families: HashMap<String, Vec<&NamedRateWindow>> = HashMap::new();
+    for window in windows {
+        families
+            .entry(antigravity_family_key(window))
+            .or_default()
+            .push(window);
+    }
+    let idle_families: Vec<_> = families
+        .iter()
+        .filter(|(_, lanes)| {
+            lanes
+                .iter()
+                .all(|lane| lane.usage_known && lane.window.used_percent <= 0.0)
+        })
+        .map(|(family, _)| family.clone())
+        .collect();
+    // Immediately after a global reset every family can be at known zero. Keep all
+    // of them so the dashboard never renders an empty Antigravity card.
+    if idle_families.len() == families.len() {
+        return HashSet::new();
+    }
+    idle_families
+        .into_iter()
+        .flat_map(|family| {
+            families
+                .get(&family)
+                .into_iter()
+                .flatten()
+                .map(|lane| lane.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn antigravity_family_key(window: &NamedRateWindow) -> String {
+    let id = window.id.to_ascii_lowercase();
+    if id.contains("gemini") {
+        return "gemini".to_string();
+    }
+    if id.contains("3p") || id.contains("third-party") {
+        return "claude-gpt".to_string();
+    }
+    let title = window.title.trim().to_ascii_lowercase();
+    if title.contains("gemini") {
+        return "gemini".to_string();
+    }
+    if title.contains("claude") || title.contains("gpt") {
+        return "claude-gpt".to_string();
+    }
+    for suffix in [" 5-hour", " weekly"] {
+        if let Some(stripped) = title.strip_suffix(suffix) {
+            let stripped = stripped.trim();
+            if !stripped.is_empty() {
+                return stripped.to_string();
+            }
+        }
+    }
+    title
 }
 
 /// Shared tail for window mapping: model-specific row plus tertiary row.
@@ -458,6 +550,15 @@ fn push_model_and_tertiary_windows(windows: &mut Vec<WindowPayload>, usage: &Usa
 }
 
 fn make_window(kind: &str, label: &str, window: &RateWindow) -> WindowPayload {
+    make_window_with_idle(kind, label, window, false)
+}
+
+fn make_window_with_idle(
+    kind: &str,
+    label: &str,
+    window: &RateWindow,
+    idle: bool,
+) -> WindowPayload {
     let used = window.used_percent.clamp(0.0, 100.0);
     WindowPayload {
         kind: kind.to_string(),
@@ -465,6 +566,7 @@ fn make_window(kind: &str, label: &str, window: &RateWindow) -> WindowPayload {
         used_percent: used,
         remaining_percent: (100.0 - used).clamp(0.0, 100.0),
         reset_at: window.resets_at,
+        idle,
     }
 }
 
@@ -672,6 +774,75 @@ mod tests {
             kinds,
             ["session", "weekly", "model", "tertiary", "reset-credits"]
         );
+    }
+
+    fn antigravity_envelope(windows: Vec<NamedRateWindow>) -> ProviderFetchEnvelope {
+        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
+        usage.extra_rate_windows = windows;
+        ProviderFetchEnvelope {
+            id: "antigravity".to_string(),
+            display_name: "Antigravity".to_string(),
+            session_label: "Session".to_string(),
+            weekly_label: "Weekly".to_string(),
+            fetch: Ok(ProviderFetchResult::new(usage, "local")),
+        }
+    }
+
+    #[test]
+    fn antigravity_dashboard_marks_only_known_idle_family() {
+        let windows = vec![
+            NamedRateWindow::new("model-gemini-pro", "Gemini Pro", RateWindow::new(20.0)),
+            NamedRateWindow::new("model-gemini-flash", "Gemini Flash", RateWindow::new(0.0)),
+            NamedRateWindow::new("model-claude", "Claude Sonnet", RateWindow::new(0.0)),
+            NamedRateWindow::new("model-gpt", "GPT", RateWindow::new(0.0)),
+        ];
+        let json = serde_json::to_value(build_snapshot(&input(
+            vec![antigravity_envelope(windows)],
+            DashboardIdentity::Redacted,
+        )))
+        .unwrap();
+        let windows = json["providers"][0]["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 4, "representative session rows must not duplicate buckets");
+        let by_label: HashMap<_, _> = windows
+            .iter()
+            .map(|window| (window["label"].as_str().unwrap(), window))
+            .collect();
+        assert!(by_label["Gemini Pro"].get("idle").is_none());
+        assert!(by_label["Gemini Flash"].get("idle").is_none());
+        assert_eq!(by_label["Claude Sonnet"]["idle"], true);
+        assert_eq!(by_label["GPT"]["idle"], true);
+    }
+
+    #[test]
+    fn antigravity_dashboard_keeps_unknown_zero_family_visible() {
+        let windows = vec![
+            NamedRateWindow::new("model-gemini", "Gemini Pro", RateWindow::new(20.0)),
+            NamedRateWindow::new("model-claude", "Claude Sonnet", RateWindow::new(0.0))
+                .with_usage_known(false),
+            NamedRateWindow::new("model-gpt", "GPT", RateWindow::new(0.0)),
+        ];
+        let json = serde_json::to_value(build_snapshot(&input(
+            vec![antigravity_envelope(windows)],
+            DashboardIdentity::Redacted,
+        )))
+        .unwrap();
+        let windows = json["providers"][0]["windows"].as_array().unwrap();
+        assert!(windows.iter().all(|window| window.get("idle").is_none()));
+    }
+
+    #[test]
+    fn antigravity_dashboard_keeps_all_families_after_global_reset() {
+        let windows = vec![
+            NamedRateWindow::new("model-gemini", "Gemini Pro", RateWindow::new(0.0)),
+            NamedRateWindow::new("model-claude", "Claude Sonnet", RateWindow::new(0.0)),
+        ];
+        let json = serde_json::to_value(build_snapshot(&input(
+            vec![antigravity_envelope(windows)],
+            DashboardIdentity::Redacted,
+        )))
+        .unwrap();
+        let windows = json["providers"][0]["windows"].as_array().unwrap();
+        assert!(windows.iter().all(|window| window.get("idle").is_none()));
     }
 
     #[test]

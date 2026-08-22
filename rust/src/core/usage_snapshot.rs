@@ -44,6 +44,14 @@ pub struct NamedRateWindow {
     pub id: String,
     pub title: String,
     pub window: RateWindow,
+    /// Whether the provider explicitly reported usage for this lane.
+    /// In-memory presentation metadata only; external snapshot JSON stays stable.
+    #[serde(default = "named_rate_window_usage_known_default", skip_serializing)]
+    pub usage_known: bool,
+}
+
+fn named_rate_window_usage_known_default() -> bool {
+    true
 }
 
 impl NamedRateWindow {
@@ -52,7 +60,13 @@ impl NamedRateWindow {
             id: id.into(),
             title: title.into(),
             window,
+            usage_known: true,
         }
+    }
+
+    pub fn with_usage_known(mut self, usage_known: bool) -> Self {
+        self.usage_known = usage_known;
+        self
     }
 }
 

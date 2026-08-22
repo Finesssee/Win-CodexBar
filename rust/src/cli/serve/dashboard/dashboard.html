@@ -128,6 +128,9 @@ function pctClass(used) {
   if (used >= 70) return "bar warn";
   return "bar";
 }
+function visibleWindows(windows) {
+  return (windows || []).filter(w => w.idle !== true);
+}
 function windowRow(w) {
   const used = Number.isFinite(w.usedPercent) ? Math.max(0, Math.min(100, w.usedPercent)) : 0;
   return '<div class="wrow">' +
@@ -155,7 +158,7 @@ function accountCard(providerId, account) {
   let inner = '<div class="card-head">' + iconHtml(providerId, account.label) +
     '<span class="name">' + esc(account.label) + badge + "</span></div>" + identityLine(account.identity);
   if (account.error) inner += '<div class="err">' + esc(account.error) + "</div>";
-  (account.windows || []).forEach(w => { inner += windowRow(w); });
+  visibleWindows(account.windows).forEach(w => { inner += windowRow(w); });
   const pace = account.pace && (account.pace.primary || account.pace.secondary || account.pace.tertiary);
   if (pace) inner += '<div class="pace">' + esc((pace.summary) || "") + "</div>";
   return '<div class="card">' + inner + "</div>";
@@ -166,7 +169,7 @@ function providerCard(row, dailyCharts) {
     (row.enabled === false ? '<span class="chip off">disabled</span>' : statusChip(row.status)) + "</div>";
   inner += identityLine(row.identity);
   if (row.error) inner += '<div class="err">' + esc((row.error && row.error.message) || row.error) + "</div>";
-  (row.windows || []).forEach(w => { inner += windowRow(w); });
+  visibleWindows(row.windows).forEach(w => { inner += windowRow(w); });
   if (row.cost && (row.cost.todayUSD != null || row.cost.last30DaysUSD != null)) {
     const today = row.cost.todayUSD == null ? "—" : "$" + Number(row.cost.todayUSD).toFixed(2);
     const month = row.cost.last30DaysUSD == null ? "—" : "$" + Number(row.cost.last30DaysUSD).toFixed(2);

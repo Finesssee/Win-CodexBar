@@ -55,6 +55,15 @@ mod tests {
     /// `/cost` wire key (`totalCost`). The shell is static, so the agreement is
     /// pinned by exact-string assertions on the rendered template.
     #[test]
+    fn web_ui_skips_windows_marked_idle() {
+        let html = render_shell(60);
+        assert!(html.contains("function visibleWindows(windows)"));
+        assert!(html.contains("w.idle !== true"));
+        assert!(html.contains("visibleWindows(account.windows).forEach"));
+        assert!(html.contains("visibleWindows(row.windows).forEach"));
+    }
+
+    #[test]
     fn daily_chart_gate_reads_upstream_total_cost_key() {
         let html = render_shell(60);
         // Gate: render only when some row has a positive totalCost.

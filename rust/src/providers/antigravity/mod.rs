@@ -12,8 +12,8 @@ use std::process::Command;
 use std::sync::{LazyLock, OnceLock};
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 const NOT_RUNNING_MESSAGE: &str =
@@ -467,10 +467,13 @@ impl AntigravityProvider {
             if title.is_empty() {
                 continue;
             }
-            snapshot = snapshot.with_extra_rate_window(
-                model_window_id(config),
-                title,
-                rate_window_from_quota(quota),
+            snapshot.extra_rate_windows.push(
+                NamedRateWindow::new(
+                    model_window_id(config),
+                    title,
+                    rate_window_from_quota(quota),
+                )
+                .with_usage_known(quota.remaining_fraction.is_some()),
             );
         }
 

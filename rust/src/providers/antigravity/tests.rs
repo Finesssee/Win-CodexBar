@@ -92,6 +92,41 @@ fn make_response(models: Vec<(&str, f64)>) -> UserStatusResponse {
 }
 
 #[test]
+fn antigravity_extra_windows_preserve_usage_known() {
+    let json = serde_json::json!({
+        "userStatus": {
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 2.5 Pro",
+                        "quotaInfo": {"remainingFraction": 0.8}
+                    },
+                    {
+                        "label": "Claude 4 Sonnet",
+                        "quotaInfo": {"remainingFraction": null}
+                    }
+                ]
+            }
+        }
+    });
+    let resp: UserStatusResponse = serde_json::from_value(json).unwrap();
+    let snap = AntigravityProvider::new().parse_user_status(resp).unwrap();
+    let gemini = snap
+        .extra_rate_windows
+        .iter()
+        .find(|window| window.title.contains("Gemini"))
+        .unwrap();
+    let claude = snap
+        .extra_rate_windows
+        .iter()
+        .find(|window| window.title.contains("Claude"))
+        .unwrap();
+    assert!(gemini.usage_known);
+    assert!(!claude.usage_known);
+    assert_eq!(claude.window.used_percent, 0.0);
+}
+
+#[test]
 fn test_parse_user_status_standard() {
     let resp = make_response(vec![
         ("Claude 3.5 Sonnet", 0.8),

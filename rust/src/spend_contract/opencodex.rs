@@ -308,7 +308,11 @@ fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
     let model_tail = model.split_once('/').map(|(_, tail)| tail).unwrap_or(model);
     match target {
         RouteTarget::Subscription("codex") => Some(
-            if model.contains('/') && model.split_once('/').is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("openai")) {
+            if model.contains('/')
+                && model
+                    .split_once('/')
+                    .is_some_and(|(prefix, _)| prefix.eq_ignore_ascii_case("openai"))
+            {
                 model.to_string()
             } else {
                 model_tail.to_string()
@@ -568,11 +572,26 @@ mod tests {
 
     #[test]
     fn routes_opencodex_entries_into_subscription_rows() {
-        assert_eq!(route_entry(&entry("openai", "gpt-5.6-sol")), RouteTarget::Subscription("codex"));
-        assert_eq!(route_entry(&entry("opencode-go", "gpt-5.6-sol")), RouteTarget::Subscription("opencodego"));
-        assert_eq!(route_entry(&entry("kimi-coding", "k2p5")), RouteTarget::Subscription("kimi"));
-        assert_eq!(route_entry(&entry("deepseek", "deepseek-chat")), RouteTarget::Subscription("deepseek"));
-        assert_eq!(route_entry(&entry("opencode-free", "free-model")), RouteTarget::TokenOnly);
+        assert_eq!(
+            route_entry(&entry("openai", "gpt-5.6-sol")),
+            RouteTarget::Subscription("codex")
+        );
+        assert_eq!(
+            route_entry(&entry("opencode-go", "gpt-5.6-sol")),
+            RouteTarget::Subscription("opencodego")
+        );
+        assert_eq!(
+            route_entry(&entry("kimi-coding", "k2p5")),
+            RouteTarget::Subscription("kimi")
+        );
+        assert_eq!(
+            route_entry(&entry("deepseek", "deepseek-chat")),
+            RouteTarget::Subscription("deepseek")
+        );
+        assert_eq!(
+            route_entry(&entry("opencode-free", "free-model")),
+            RouteTarget::TokenOnly
+        );
     }
 
     #[test]
@@ -589,9 +608,18 @@ mod tests {
 
     #[test]
     fn pricing_model_uses_routed_vendor_catalog() {
-        assert_eq!(pricing_model(&entry("opencode-go", "gpt-5")).as_deref(), Some("opencode/gpt-5"));
-        assert_eq!(pricing_model(&entry("kimi-coding", "k2p5")).as_deref(), Some("kimi/k2p5"));
-        assert_eq!(pricing_model(&entry("deepseek", "deepseek-chat")).as_deref(), Some("deepseek/deepseek-chat"));
+        assert_eq!(
+            pricing_model(&entry("opencode-go", "gpt-5")).as_deref(),
+            Some("opencode/gpt-5")
+        );
+        assert_eq!(
+            pricing_model(&entry("kimi-coding", "k2p5")).as_deref(),
+            Some("kimi/k2p5")
+        );
+        assert_eq!(
+            pricing_model(&entry("deepseek", "deepseek-chat")).as_deref(),
+            Some("deepseek/deepseek-chat")
+        );
     }
 
     #[test]

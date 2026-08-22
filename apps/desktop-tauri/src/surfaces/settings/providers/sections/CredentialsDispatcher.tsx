@@ -5,6 +5,7 @@ import { JetBrainsCreds } from "./credentials/JetBrainsCreds";
 import { KiroCreds } from "./credentials/KiroCreds";
 import { ClaudeCreds } from "./credentials/ClaudeCreds";
 import { OpenAiExtras } from "./credentials/OpenAiExtras";
+import { OpenRouterManagementCreds } from "./credentials/OpenRouterManagementCreds";
 
 interface Props {
   providerId: string;
@@ -40,6 +41,8 @@ export function CredentialsDispatcher({ providerId, t }: Props) {
     case "sub2api":
     case "xai":
       return <OpenAiExtras providerId={providerId} t={t} />;
+    case "openrouter":
+      return <OpenRouterManagementCreds t={t} />;
     default:
       return null;
   }

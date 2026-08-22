@@ -69,6 +69,13 @@ impl RateWindowSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CostDailyPointBridge {
+    pub day: String,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CostSnapshotBridge {
     pub used: f64,
     #[serde(default)]
@@ -93,6 +100,8 @@ pub struct CostSnapshotBridge {
     pub balance: Option<f64>,
     #[serde(default)]
     pub formatted_balance: Option<String>,
+    #[serde(default)]
+    pub daily: Vec<CostDailyPointBridge>,
 }
 
 fn default_currency() -> String {
@@ -357,6 +366,14 @@ impl ProviderUsageSnapshot {
                 formatted_limit: c.format_limit(),
                 balance: c.balance,
                 formatted_balance: c.format_balance(),
+                daily: c
+                    .daily
+                    .iter()
+                    .map(|point| CostDailyPointBridge {
+                        day: point.day.clone(),
+                        amount: point.amount,
+                    })
+                    .collect(),
             }),
             plan_name: usage.login_method.clone(),
             account_email: usage.account_email.clone(),

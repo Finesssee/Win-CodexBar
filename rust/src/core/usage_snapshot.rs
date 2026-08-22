@@ -219,6 +219,12 @@ impl UsageSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CostDailyPoint {
+    pub day: String,
+    pub amount: f64,
+}
+
 /// Cost/credits snapshot for providers that support it
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostSnapshot {
@@ -251,6 +257,10 @@ pub struct CostSnapshot {
     /// Remaining prepaid balance (currency units), separate from used/limit spend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<f64>,
+
+    /// Exact daily spend points when the provider supplies them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily: Vec<CostDailyPoint>,
 }
 
 impl CostSnapshot {
@@ -265,6 +275,7 @@ impl CostSnapshot {
             resets_at: None,
             updated_at: Utc::now(),
             balance: None,
+            daily: Vec::new(),
         }
     }
 
@@ -277,6 +288,11 @@ impl CostSnapshot {
     /// Builder pattern: set remaining prepaid balance (finite, ≥ 0 only)
     pub fn with_balance(mut self, balance: f64) -> Self {
         self.balance = finite_amount(balance);
+        self
+    }
+
+    pub fn with_daily(mut self, daily: Vec<CostDailyPoint>) -> Self {
+        self.daily = daily;
         self
     }
 

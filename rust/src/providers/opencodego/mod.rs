@@ -101,9 +101,7 @@ impl OpenCodeGoProvider {
             .await?;
         let status = response.status();
         let body = response.text().await?;
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(ProviderError::AuthRequired);
         }
         if !status.is_success() {
@@ -131,8 +129,9 @@ impl OpenCodeGoProvider {
         let value: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| ProviderError::Parse(format!("Invalid OpenCode Go API JSON: {e}")))?;
         let usage = value.get("usage").unwrap_or(&value);
-        let rolling = Self::api_window(usage, &["rolling", "rollingUsage", "rolling_usage"], now)
-            .ok_or_else(|| ProviderError::Parse("Missing rolling usage window".to_string()))?;
+        let rolling =
+            Self::api_window(usage, &["rolling", "rollingUsage", "rolling_usage"], now)
+                .ok_or_else(|| ProviderError::Parse("Missing rolling usage window".to_string()))?;
         let mut snapshot = UsageSnapshot::new(RateWindow::with_details(
             rolling.0,
             Some(300),
@@ -189,23 +188,28 @@ impl OpenCodeGoProvider {
         }
         percent = percent.clamp(0.0, 100.0);
 
-        let reset = ["resetInSec", "resetInSeconds", "resetSeconds", "reset_in_sec"]
-            .into_iter()
-            .find_map(|key| {
-                object.get(key).and_then(|value| {
-                    value
-                        .as_i64()
-                        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-                })
+        let reset = [
+            "resetInSec",
+            "resetInSeconds",
+            "resetSeconds",
+            "reset_in_sec",
+        ]
+        .into_iter()
+        .find_map(|key| {
+            object.get(key).and_then(|value| {
+                value
+                    .as_i64()
+                    .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
             })
-            .map(|seconds| now + chrono::Duration::seconds(seconds.max(0)))
-            .or_else(|| {
-                ["resetsAt", "resetAt", "resets_at", "reset_at"]
-                    .into_iter()
-                    .find_map(|key| object.get(key).and_then(serde_json::Value::as_str))
-                    .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                    .map(|timestamp| timestamp.with_timezone(&Utc))
-            })?;
+        })
+        .map(|seconds| now + chrono::Duration::seconds(seconds.max(0)))
+        .or_else(|| {
+            ["resetsAt", "resetAt", "resets_at", "reset_at"]
+                .into_iter()
+                .find_map(|key| object.get(key).and_then(serde_json::Value::as_str))
+                .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+                .map(|timestamp| timestamp.with_timezone(&Utc))
+        })?;
         Some((percent, reset))
     }
 
@@ -725,7 +729,9 @@ impl Provider for OpenCodeGoProvider {
                 if let Some(api_key) = Self::resolve_api_key(ctx) {
                     match self.fetch_api_usage(ctx, &api_key, "api").await {
                         Ok(result) => return Ok(result),
-                        Err(e) => tracing::debug!("OpenCode Go API failed in Auto; trying web: {e}"),
+                        Err(e) => {
+                            tracing::debug!("OpenCode Go API failed in Auto; trying web: {e}")
+                        }
                     }
                 }
                 self.fetch_web(ctx).await
@@ -825,7 +831,8 @@ impl OpenCodeGoProvider {
         if let Some(balance) =
             Self::join_zen_balance(task, started, ctx.requires_optional_usage_completeness).await
         {
-            result = Self::with_zen_balance(result.usage, &result.source_label.clone(), Some(balance));
+            result =
+                Self::with_zen_balance(result.usage, &result.source_label.clone(), Some(balance));
         }
         Ok(result)
     }
@@ -959,14 +966,22 @@ mod tests {
 
     #[test]
     fn api_key_normalization_matches_upstream_settings_reader() {
-        assert_eq!(OpenCodeGoProvider::normalized_api_key(Some("  go_test  " )).as_deref(), Some("go_test"));
-        assert_eq!(OpenCodeGoProvider::normalized_api_key(Some("'go_quoted'")).as_deref(), Some("go_quoted"));
+        assert_eq!(
+            OpenCodeGoProvider::normalized_api_key(Some("  go_test  ")).as_deref(),
+            Some("go_test")
+        );
+        assert_eq!(
+            OpenCodeGoProvider::normalized_api_key(Some("'go_quoted'")).as_deref(),
+            Some("go_quoted")
+        );
         assert_eq!(OpenCodeGoProvider::normalized_api_key(Some("   ")), None);
     }
 
     #[test]
     fn parses_public_usage_api_windows() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T00:00:00Z").unwrap().with_timezone(&Utc);
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let text = r#"{"usage":{"rolling":{"percent":12,"resetsAt":"2026-08-12T02:00:00.000Z"},"weekly":{"percent":8,"resetsAt":"2026-08-18T00:00:00.000Z"},"monthly":{"percent":35,"resetsAt":"2026-09-01T00:00:00.000Z"}}}"#;
         let snapshot = OpenCodeGoProvider::parse_api_usage_text(text, now).unwrap();
         assert!((snapshot.primary.used_percent - 12.0).abs() < 0.001);

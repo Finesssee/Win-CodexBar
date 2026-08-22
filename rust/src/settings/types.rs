@@ -372,6 +372,9 @@ pub struct ProviderConfig {
     pub manual_cookie_header: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,
+    /// Optional secondary management credential for providers that expose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub management_api_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     /// Wayfinder gateway URL override.

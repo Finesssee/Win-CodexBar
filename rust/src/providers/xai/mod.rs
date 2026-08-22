@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    CostDailyPoint, CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 const BASE_URL: &str = "https://management-api.x.ai";
@@ -139,7 +139,16 @@ impl XaiUsageSnapshot {
     fn to_cost_snapshot(&self) -> CostSnapshot {
         // Menu card prefers `balance` when limit is absent (shows period title + balance).
         // `used` carries the best-effort 30-day window spend for any secondary UI.
-        let mut cost = CostSnapshot::new(self.window_cost_usd().max(0.0), "USD", "Prepaid credits");
+        let mut cost = CostSnapshot::new(self.window_cost_usd().max(0.0), "USD", "Prepaid credits")
+            .with_daily(
+                self.daily
+                    .iter()
+                    .map(|bucket| CostDailyPoint {
+                        day: bucket.day.clone(),
+                        amount: bucket.cost_usd.max(0.0),
+                    })
+                    .collect(),
+            );
         // `with_balance` clamps negatives to 0; deficit is still shown in the
         // primary reset description above.
         if self.balance_usd.is_finite() && self.balance_usd >= 0.0 {

@@ -192,6 +192,18 @@ export function removeApiKey(providerId: string): Promise<ApiKeyInfoBridge[]> {
   return invoke<ApiKeyInfoBridge[]>("remove_api_key", { providerId });
 }
 
+export function hasOpenRouterManagementApiKey(): Promise<boolean> {
+  return invoke<boolean>("has_openrouter_management_api_key");
+}
+
+export function setOpenRouterManagementApiKey(apiKey: string): Promise<void> {
+  return invoke<void>("set_openrouter_management_api_key", { apiKey });
+}
+
+export function removeOpenRouterManagementApiKey(): Promise<void> {
+  return invoke<void>("remove_openrouter_management_api_key");
+}
+
 export function getManualCookies(): Promise<CookieInfoBridge[]> {
   return invoke<CookieInfoBridge[]>("get_manual_cookies");
 }
@@ -243,10 +255,15 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(options?: { historyDays?: number }): Promise<UsageSpendSummary> {
+export function getUsageSpendSummary(options?: { historyDays?: number; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary", {
     historyDays: options?.historyDays ?? null,
+    forceRefresh: options?.forceRefresh ?? null,
   });
+}
+
+export function writeUsageSpendExport(path: string, payload: string): Promise<void> {
+  return invoke<void>("write_usage_spend_export", { path, payload });
 }
 
 export function getSpendContract(

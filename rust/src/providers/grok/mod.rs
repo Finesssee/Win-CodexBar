@@ -3,6 +3,8 @@
 //! Uses the grok.com billing gRPC-web endpoint via either browser cookies or
 //! `~/.grok/auth.json` produced by `grok login`.
 
+pub mod local_sessions;
+
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use reqwest::Client;

@@ -96,6 +96,34 @@ pub fn set_provider_usage_source(provider_id: String, source: String) -> Result<
     settings.save().map_err(|e| e.to_string())
 }
 
+// ── OpenRouter Management API key ────────────────────────────────────
+
+#[tauri::command]
+pub fn has_openrouter_management_api_key() -> bool {
+    Settings::load()
+        .management_api_token(ProviderId::OpenRouter)
+        .is_some()
+}
+
+#[tauri::command]
+pub fn set_openrouter_management_api_key(api_key: String) -> Result<(), String> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err("Management API key must not be empty".to_string());
+    }
+    validate_single_line_secret(trimmed, "Management API key", MAX_API_KEY_LEN)?;
+    let mut settings = Settings::load();
+    settings.set_management_api_token(ProviderId::OpenRouter, Some(trimmed.to_string()));
+    settings.save().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn remove_openrouter_management_api_key() -> Result<(), String> {
+    let mut settings = Settings::load();
+    settings.set_management_api_token(ProviderId::OpenRouter, None);
+    settings.save().map_err(|error| error.to_string())
+}
+
 // ── Per-provider cookie source + region ───────────────────────────────
 
 /// Map a CLI-name string to a `ProviderId` whose cookie source is exposed in

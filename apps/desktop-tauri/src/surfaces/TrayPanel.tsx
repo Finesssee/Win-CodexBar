@@ -314,13 +314,15 @@ function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (k
     return () => { cancelled = true; };
   }, [providerIds.join("|")]);
 
-  if (!summary || providerIds.length === 0) return null;
-  const wanted = new Set(providerIds);
-  const rows = summary.rows.filter((row) => wanted.has(row.providerId));
-  const known = rows.filter((row) => row.thirtyDay != null && Number.isFinite(row.thirtyDay));
+  if (!summary) return null;
+  // Overview consumes the same backend spend catalog as Usage & Spend. Do not
+  // restrict accounting to whichever cards happen to be rendered in this tray.
+  const rows = summary.rows.filter((row) => row.includedInOverview !== false);
+  const summable = rows.filter((row) => (row.currency || "USD") === "USD");
+  const known = summable.filter((row) => row.thirtyDay != null && Number.isFinite(row.thirtyDay));
   if (known.length === 0) return null;
   const total = known.reduce((sum, row) => sum + (row.thirtyDay ?? 0), 0);
-  const partial = known.length < providerIds.length;
+  const partial = known.length < rows.length;
   const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 
   return (
@@ -330,7 +332,7 @@ function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (k
         <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>
-        {known.length} of {providerIds.length} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
+        {known.length} of {rows.length} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
       </div>
     </div>
   );

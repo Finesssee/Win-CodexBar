@@ -913,6 +913,21 @@ impl Settings {
         self.provider_config_mut(id).api_token = Some(token.into());
     }
 
+    pub fn management_api_token(&self, id: ProviderId) -> Option<&str> {
+        self.provider_configs
+            .get(&id)
+            .and_then(|config| config.management_api_token.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn set_management_api_token(&mut self, id: ProviderId, token: Option<String>) {
+        let token = token
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self.provider_config_mut(id).management_api_token = token;
+    }
+
     /// Workspace ID override for `id`, or `""` if unset.
     pub fn workspace_id(&self, id: ProviderId) -> &str {
         self.provider_configs

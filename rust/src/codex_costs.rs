@@ -43,8 +43,7 @@ pub(crate) fn add_codex_records_to_summary(
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
         let pricing_day = CostUsageDayRange::parse_day_key(&record.day_key);
-        if let Some(cost) =
-            add_codex_tokens_to_summary(summary, &record.model, tokens, pricing_day)
+        if let Some(cost) = add_codex_tokens_to_summary(summary, &record.model, tokens, pricing_day)
         {
             total_cost += cost;
             has_tokens = true;
@@ -233,12 +232,7 @@ fn add_codex_tokens_to_summary(
             )
         })
         .or_else(|| {
-            CostUsagePricing::codex_cost_usd(
-                &model_key,
-                tokens.input,
-                tokens.cached,
-                tokens.output,
-            )
+            CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
         });
     let uses_fallback_pricing = priced.is_none();
     let cost = codex_cost_usd_for_day(
@@ -464,17 +458,11 @@ mod tests {
         let days = std::collections::HashMap::from([
             (
                 "2026-07-29".to_string(),
-                std::collections::HashMap::from([(
-                    "gpt-5.6-terra".to_string(),
-                    vec![100, 10, 5],
-                )]),
+                std::collections::HashMap::from([("gpt-5.6-terra".to_string(), vec![100, 10, 5])]),
             ),
             (
                 "2026-07-30".to_string(),
-                std::collections::HashMap::from([(
-                    "gpt-5.6-terra".to_string(),
-                    vec![100, 10, 5],
-                )]),
+                std::collections::HashMap::from([("gpt-5.6-terra".to_string(), vec![100, 10, 5])]),
             ),
         ]);
         let mut summary = CostSummary::default();
@@ -512,7 +500,10 @@ mod tests {
         assert_eq!(summary.input_tokens, 100);
         assert_eq!(summary.output_tokens, 5);
         assert!(!summary.by_model.contains_key("deepseek/deepseek-chat"));
-        assert!(cost < 0.01, "routed DeepSeek cost leaked into native Codex: {cost}");
+        assert!(
+            cost < 0.01,
+            "routed DeepSeek cost leaked into native Codex: {cost}"
+        );
     }
 
     #[test]

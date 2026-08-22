@@ -284,7 +284,8 @@ impl FireworksProvider {
             }
             if status == StatusCode::TOO_MANY_REQUESTS {
                 return Err(ProviderError::Other(
-                    "Fireworks rate limit exceeded. Usage will refresh on the next cycle.".to_string(),
+                    "Fireworks rate limit exceeded. Usage will refresh on the next cycle."
+                        .to_string(),
                 ));
             }
             if !status.is_success() {
@@ -367,9 +368,10 @@ impl FireworksProvider {
                 "Fireworks billing API returned HTTP {status}."
             )));
         }
-        let body = resp.text().await.map_err(|e| {
-            ProviderError::Parse(format!("Could not read Fireworks usage: {e}"))
-        })?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Could not read Fireworks usage: {e}")))?;
         parse_summary_for_testing(&body).map(Some)
     }
 
@@ -395,9 +397,8 @@ impl FireworksProvider {
                     }
                 }
                 None => {
-                    let discovered_slug = Self::choose_discovered_slug(
-                        self.list_account_slugs(&api_key).await?,
-                    )?;
+                    let discovered_slug =
+                        Self::choose_discovered_slug(self.list_account_slugs(&api_key).await?)?;
                     let summary = self
                         .fetch_summary(&api_key, &discovered_slug, now)
                         .await?
@@ -433,7 +434,6 @@ impl FireworksProvider {
         }
         Ok(result)
     }
-
 }
 
 impl Default for FireworksProvider {
@@ -524,7 +524,10 @@ mod tests {
             ..FetchContext::default()
         };
 
-        assert_eq!(FireworksProvider::resolve_account_slug(&ctx(" ")).unwrap(), None);
+        assert_eq!(
+            FireworksProvider::resolve_account_slug(&ctx(" ")).unwrap(),
+            None
+        );
         assert_eq!(
             FireworksProvider::resolve_account_slug(&ctx("acme_corp.1-2")).unwrap(),
             Some("acme_corp.1-2".to_string())

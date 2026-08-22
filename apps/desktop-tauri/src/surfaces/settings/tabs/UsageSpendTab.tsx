@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useLocale } from "../../../hooks/useLocale";
-import { getSettingsSnapshot, getUsageSpendSummary, updateSettings } from "../../../lib/tauri";
+import {
+  getSettingsSnapshot,
+  getUsageSpendSummary,
+  updateSettings,
+  writeUsageSpendExport,
+} from "../../../lib/tauri";
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
@@ -24,6 +30,20 @@ function formatUsd(value: number | null | undefined, currency: string): string {
   } catch {
     return `$${value.toFixed(2)}`;
   }
+}
+
+function formatSpendMetric(
+  cost: number | null | undefined,
+  tokens: number | null | undefined,
+  currency: string,
+  tokenLabel: string,
+): string {
+  const parts: string[] = [];
+  if (cost != null && Number.isFinite(cost)) parts.push(formatUsd(cost, currency));
+  if (tokens != null && Number.isFinite(tokens)) {
+    parts.push(`${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
 /** Sanitized share-card PNG (no account emails) — upstream #2112. */
@@ -82,8 +102,8 @@ function renderSharePng(summary: UsageSpendSummary, title: string): string {
       const y = y0 + (idx + 1) * rowH;
       const cells = [
         row.displayName,
-        formatUsd(row.sevenDay, row.currency),
-        formatUsd(row.thirtyDay, row.currency),
+        formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
+        formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
         row.currency || "USD",
         row.source,
       ];
@@ -143,10 +163,10 @@ export default function UsageSpendTab(_props: TabProps) {
       });
   }, []);
 
-  const load = useCallback(() => {
+  const load = useCallback((forceRefresh = false) => {
     setLoading(true);
     setError(null);
-    void getUsageSpendSummary({ historyDays: selectedDays })
+    void getUsageSpendSummary({ historyDays: selectedDays, forceRefresh })
       .then((data) => {
         setSummary(data);
         setLoading(false);
@@ -158,7 +178,7 @@ export default function UsageSpendTab(_props: TabProps) {
   }, [includeOpenCodex, selectedDays]);
 
   useEffect(() => {
-    load();
+    load(false);
   }, [load]);
 
   const onShare = useCallback(() => {
@@ -180,6 +200,38 @@ export default function UsageSpendTab(_props: TabProps) {
     }
   }, [summary, t]);
 
+  const onCopyJson = useCallback(async () => {
+    setShareError(null);
+    if (!summary) {
+      setShareError(t("UsageSpendShareEmpty"));
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(summary, null, 2));
+    } catch (cause: unknown) {
+      setShareError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [summary, t]);
+
+  const onSaveJson = useCallback(async () => {
+    setShareError(null);
+    if (!summary) {
+      setShareError(t("UsageSpendShareEmpty"));
+      return;
+    }
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      const path = await save({
+        defaultPath: `codexbar-usage-spend-${stamp}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await writeUsageSpendExport(path, JSON.stringify(summary, null, 2));
+    } catch (cause: unknown) {
+      setShareError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [summary, t]);
+
   return (
     <section className="settings-section">
       <h3 className="settings-section__title settings-section__title--bold">
@@ -192,7 +244,7 @@ export default function UsageSpendTab(_props: TabProps) {
           type="button"
           className="credential-btn credential-btn--secondary"
           disabled={loading}
-          onClick={load}
+          onClick={() => load(true)}
         >
           {loading ? t("UsageSpendLoading") : t("UsageSpendRefresh")}
         </button>
@@ -203,6 +255,22 @@ export default function UsageSpendTab(_props: TabProps) {
           onClick={onShare}
         >
           {t("UsageSpendShare")}
+        </button>
+        <button
+          type="button"
+          className="credential-btn credential-btn--secondary"
+          disabled={loading || !summary}
+          onClick={() => void onCopyJson()}
+        >
+          {t("UsageSpendCopyJson")}
+        </button>
+        <button
+          type="button"
+          className="credential-btn credential-btn--secondary"
+          disabled={loading || !summary}
+          onClick={() => void onSaveJson()}
+        >
+          {t("UsageSpendSaveJson")}
         </button>
       </div>
 
@@ -272,8 +340,8 @@ export default function UsageSpendTab(_props: TabProps) {
             {(summary?.rows ?? []).map((row) => (
               <tr key={row.providerId}>
                 <td>{row.displayName}</td>
-                <td>{formatUsd(row.sevenDay, row.currency)}</td>
-                <td>{formatUsd(row.thirtyDay, row.currency)}</td>
+                <td>{formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, t("UsageSpendTokens"))}</td>
+                <td>{formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, t("UsageSpendTokens"))}</td>
                 <td>{row.currency || "USD"}</td>
                 <td className="usage-spend-table__source">
                   {row.source}
@@ -423,7 +491,7 @@ function ContractModelsPanel({ contract, showAll, onToggleAll, t }: { contract: 
               <span>
                 <strong>{model.model}</strong>
                 <span className="settings-section__caption" style={{ display: "block" }}>
-                  {model.totalTokens.toLocaleString()} {t("UsageSpendTokens")}{model.customPricing ? " � " + t("UsageSpendCustomPricing") : ""}
+                  {model.totalTokens.toLocaleString()} {t("UsageSpendTokens")}{model.customPricing ? " · " + t("UsageSpendCustomPricing") : ""}
                 </span>
               </span>
               <span>{model.costUsd == null ? t("UsageSpendUnpriced") : formatUsd(model.costUsd, "USD")}</span>

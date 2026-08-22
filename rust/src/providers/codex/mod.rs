@@ -56,7 +56,10 @@ fn fetch_result(
 }
 
 fn pat_allows_auto_fallback(error: &ProviderError) -> bool {
-    matches!(error, ProviderError::AuthRequired | ProviderError::NotInstalled(_))
+    matches!(
+        error,
+        ProviderError::AuthRequired | ProviderError::NotInstalled(_)
+    )
 }
 
 impl Default for CodexProvider {
@@ -163,8 +166,14 @@ mod pat_strategy_tests {
     #[test]
     fn pat_auto_fallback_is_narrow() {
         assert!(pat_allows_auto_fallback(&ProviderError::AuthRequired));
-        assert!(pat_allows_auto_fallback(&ProviderError::NotInstalled("missing".into())));
-        assert!(!pat_allows_auto_fallback(&ProviderError::Parse("bad".into())));
-        assert!(!pat_allows_auto_fallback(&ProviderError::Other("server".into())));
+        assert!(pat_allows_auto_fallback(&ProviderError::NotInstalled(
+            "missing".into()
+        )));
+        assert!(!pat_allows_auto_fallback(&ProviderError::Parse(
+            "bad".into()
+        )));
+        assert!(!pat_allows_auto_fallback(&ProviderError::Other(
+            "server".into()
+        )));
     }
 }

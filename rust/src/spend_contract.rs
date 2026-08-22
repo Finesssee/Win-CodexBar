@@ -287,9 +287,8 @@ pub fn build_local_spend_contract_from_summary(
         Vec::new()
     };
     let imported = imports.first();
-    let replace_native = provider_id == "codex"
-        && hide_native_codex_when_opencodex_present
-        && imported.is_some();
+    let replace_native =
+        provider_id == "codex" && hide_native_codex_when_opencodex_present && imported.is_some();
     let resolved = resolve_spend(
         native_cost,
         native_coverage,

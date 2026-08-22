@@ -612,6 +612,8 @@ locale_keys! {
     UsageSpendColCurrency,
     UsageSpendColSource,
     UsageSpendShare,
+    UsageSpendCopyJson,
+    UsageSpendSaveJson,
     UsageSpendShareEmpty,
     UsageSpendShareFailed,
     AgentSessionsTitle,
@@ -950,6 +952,10 @@ locale_keys! {
     OpenCodeGoWorkspaceTitle,
     OpenCodeGoWorkspaceLabel,
     OpenCodeGoWorkspaceHelp,
+    OpenRouterManagementKeyTitle,
+    OpenRouterManagementKeyLabel,
+    OpenRouterManagementKeyHelp,
+    OpenRouterManagementKeyConfigured,
     CredsOpenAiHistoryHelp,
 
     // Tauri desktop shell — Token accounts (Phase 6e, review)

@@ -777,6 +777,8 @@ PromoteTrayIconLabel = Pin to Taskbar (Windows 11)
 PromoteTrayIconHelper = Always show the CodexBar icon on the taskbar instead of inside the overflow chevron
 PromoteTrayIconUnsupportedHint = Not available on this operating system. Drag the icon out of the ^ overflow area in Windows Settings > Taskbar to pin it manually.
 UsageSpendShare = Export share card (PNG)
+UsageSpendCopyJson = Copy JSON
+UsageSpendSaveJson = Save JSON…
 UsageSpendShareEmpty = Nothing to export yet.
 UsageSpendShareFailed = Could not create the share card image.
 NetworkProxyTitle = Network proxy
@@ -809,3 +811,8 @@ ProviderAccentColor = Accent color
 ProviderAccentColorHelper = Override the brand color used for usage bars and charts. Enter a hex color like #FF5733.
 ProviderAccentColorReset = Reset to default
 ProviderAccentColorInvalid = Invalid hex color. Use #RRGGBB format, e.g. #FF5733.
+
+OpenRouterManagementKeyTitle = OpenRouter spend history
+OpenRouterManagementKeyLabel = Management API key
+OpenRouterManagementKeyHelp = Optional. Used only for exact 30-day Activity spend from openrouter.ai. The primary OpenRouter API key remains separate. You can also set OPENROUTER_MANAGEMENT_API_KEY.
+OpenRouterManagementKeyConfigured = Management key configured

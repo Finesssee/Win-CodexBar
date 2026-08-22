@@ -35,15 +35,20 @@ pub(super) fn load_token(auth_path: &Path) -> Result<String, ProviderError> {
 }
 
 pub(super) fn parse_token_json(content: &str) -> Result<String, ProviderError> {
-    let json: Value = serde_json::from_str(content)
-        .map_err(|error| ProviderError::Parse(format!("Invalid Codex credentials JSON: {error}")))?;
+    let json: Value = serde_json::from_str(content).map_err(|error| {
+        ProviderError::Parse(format!("Invalid Codex credentials JSON: {error}"))
+    })?;
     ["personal_access_token", "personalAccessToken"]
         .into_iter()
         .find_map(|key| json.get(key).and_then(Value::as_str))
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| ProviderError::NotInstalled("Codex auth.json contains no personal access token.".to_string()))
+        .ok_or_else(|| {
+            ProviderError::NotInstalled(
+                "Codex auth.json contains no personal access token.".to_string(),
+            )
+        })
 }
 
 pub(super) async fn fetch_usage(
@@ -79,12 +84,13 @@ pub(super) async fn fetch_usage(
         return Err(ProviderError::AuthRequired);
     }
     if !status.is_success() {
-        return Err(ProviderError::Other(format!("Codex PAT usage API returned {status}")));
+        return Err(ProviderError::Other(format!(
+            "Codex PAT usage API returned {status}"
+        )));
     }
-    let usage = response
-        .json::<Value>()
-        .await
-        .map_err(|error| ProviderError::Parse(format!("Invalid Codex PAT usage response: {error}")))?;
+    let usage = response.json::<Value>().await.map_err(|error| {
+        ProviderError::Parse(format!("Invalid Codex PAT usage response: {error}"))
+    })?;
     Ok((usage, whoami))
 }
 
@@ -94,12 +100,13 @@ async fn decode_whoami(response: reqwest::Response) -> Result<PatWhoami, Provide
         return Err(ProviderError::AuthRequired);
     }
     if !status.is_success() {
-        return Err(ProviderError::Other(format!("Codex PAT whoami returned {status}")));
+        return Err(ProviderError::Other(format!(
+            "Codex PAT whoami returned {status}"
+        )));
     }
-    let response = response
-        .json::<WhoamiResponse>()
-        .await
-        .map_err(|error| ProviderError::Parse(format!("Invalid Codex PAT whoami response: {error}")))?;
+    let response = response.json::<WhoamiResponse>().await.map_err(|error| {
+        ProviderError::Parse(format!("Invalid Codex PAT whoami response: {error}"))
+    })?;
     Ok(PatWhoami {
         account_id: nonempty(response.chatgpt_account_id),
         email: nonempty(response.email),
@@ -108,14 +115,23 @@ async fn decode_whoami(response: reqwest::Response) -> Result<PatWhoami, Provide
 }
 
 fn nonempty(value: Option<String>) -> Option<String> {
-    value.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub(super) fn user_agent(cli_version: Option<&str>) -> String {
     let version = cli_version.and_then(normalize_cli_version);
-    let platform = if cfg!(windows) { "Windows" } else { std::env::consts::OS };
+    let platform = if cfg!(windows) {
+        "Windows"
+    } else {
+        std::env::consts::OS
+    };
     match version {
-        Some(version) => format!("codex_cli_rs/{version} ({platform}; {})", std::env::consts::ARCH),
+        Some(version) => format!(
+            "codex_cli_rs/{version} ({platform}; {})",
+            std::env::consts::ARCH
+        ),
         None => format!("codex_cli_rs ({platform}; {})", std::env::consts::ARCH),
     }
 }
@@ -150,12 +166,18 @@ mod tests {
 
     #[test]
     fn accepts_camel_case_pat_alias() {
-        assert_eq!(parse_token_json(r#"{"personalAccessToken":"pat_camel"}"#).unwrap(), "pat_camel");
+        assert_eq!(
+            parse_token_json(r#"{"personalAccessToken":"pat_camel"}"#).unwrap(),
+            "pat_camel"
+        );
     }
 
     #[test]
     fn codex_cli_user_agent_uses_detected_version() {
-        assert!(user_agent(Some("codex-cli 0.148.0-alpha.9")).starts_with("codex_cli_rs/0.148.0-alpha.9 ("));
+        assert!(
+            user_agent(Some("codex-cli 0.148.0-alpha.9"))
+                .starts_with("codex_cli_rs/0.148.0-alpha.9 (")
+        );
         assert!(user_agent(None).starts_with("codex_cli_rs ("));
     }
 }

@@ -345,13 +345,22 @@ export interface UsageThresholdOverride {
 }
 
 /** One provider row for Settings → Usage & Spend. */
+export interface UsageSpendDailyPoint {
+  day: string;
+  amount: number;
+}
+
 export interface UsageSpendRow {
   providerId: string;
   displayName: string;
   sevenDay: number | null;
   thirtyDay: number | null;
+  sevenDayTokens?: number | null;
+  thirtyDayTokens?: number | null;
   currency: string;
   source: string;
+  includedInOverview?: boolean;
+  daily?: UsageSpendDailyPoint[];
   /** F8: true when served from stale cache while a re-scan is in progress. */
   refreshing?: boolean;
   /** ISO 8601 timestamp of the stale snapshot when refreshing. */
@@ -523,6 +532,11 @@ export interface RateWindowSnapshot {
   reserveEtaSeconds?: number | null;
 }
 
+export interface CostDailyPoint {
+  day: string;
+  amount: number;
+}
+
 export interface CostSnapshotBridge {
   used: number;
   limit: number | null;
@@ -536,6 +550,7 @@ export interface CostSnapshotBridge {
   formattedLimit: string | null;
   balance?: number | null;
   formattedBalance?: string | null;
+  daily?: CostDailyPoint[];
 }
 
 export interface PaceSnapshot {

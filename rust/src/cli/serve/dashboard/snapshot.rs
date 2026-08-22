@@ -802,7 +802,11 @@ mod tests {
         )))
         .unwrap();
         let windows = json["providers"][0]["windows"].as_array().unwrap();
-        assert_eq!(windows.len(), 4, "representative session rows must not duplicate buckets");
+        assert_eq!(
+            windows.len(),
+            4,
+            "representative session rows must not duplicate buckets"
+        );
         let by_label: HashMap<_, _> = windows
             .iter()
             .map(|window| (window["label"].as_str().unwrap(), window))

@@ -4,6 +4,7 @@
 //! stored by the Codex CLI in ~/.codex/auth.json
 
 mod api;
+mod pat;
 
 use async_trait::async_trait;
 #[cfg(windows)]
@@ -42,6 +43,22 @@ impl CodexProvider {
     }
 }
 
+fn fetch_result(
+    usage: crate::core::UsageSnapshot,
+    cost: Option<crate::core::CostSnapshot>,
+    source: &str,
+) -> ProviderFetchResult {
+    let mut result = ProviderFetchResult::new(usage, source);
+    if let Some(cost) = cost {
+        result = result.with_cost(cost);
+    }
+    result
+}
+
+fn pat_allows_auto_fallback(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::AuthRequired | ProviderError::NotInstalled(_))
+}
+
 impl Default for CodexProvider {
     fn default() -> Self {
         Self::new()
@@ -58,20 +75,29 @@ impl Provider for CodexProvider {
         &self.metadata
     }
 
-    async fn fetch_usage(&self, _ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
-        tracing::debug!("Fetching Codex usage via OAuth API");
+    async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        tracing::debug!("Fetching Codex usage");
+
+        if ctx.source_mode == SourceMode::Web {
+            return Err(ProviderError::UnsupportedSource(SourceMode::Web));
+        }
+
+        if ctx.source_mode == SourceMode::Auto && self.api.has_pat_credentials() {
+            let version = detect_codex_version();
+            match self.api.fetch_usage_pat(version.as_deref()).await {
+                Ok((usage, cost)) => return Ok(fetch_result(usage, cost, "pat")),
+                Err(error) if pat_allows_auto_fallback(&error) => {
+                    tracing::debug!("Codex PAT unavailable in Auto; trying OAuth: {error}");
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
         match self.api.fetch_usage().await {
-            Ok((usage, cost)) => {
-                let mut result = ProviderFetchResult::new(usage, "oauth");
-                if let Some(c) = cost {
-                    result = result.with_cost(c);
-                }
-                Ok(result)
-            }
-            Err(e) => {
-                tracing::warn!("Codex API fetch failed: {}", e);
-                Err(e)
+            Ok((usage, cost)) => Ok(fetch_result(usage, cost, "oauth")),
+            Err(error) => {
+                tracing::warn!("Codex API fetch failed: {error}");
+                Err(error)
             }
         }
     }
@@ -127,5 +153,18 @@ fn detect_codex_version() -> Option<String> {
         super::extract_semver(&version_str)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod pat_strategy_tests {
+    use super::*;
+
+    #[test]
+    fn pat_auto_fallback_is_narrow() {
+        assert!(pat_allows_auto_fallback(&ProviderError::AuthRequired));
+        assert!(pat_allows_auto_fallback(&ProviderError::NotInstalled("missing".into())));
+        assert!(!pat_allows_auto_fallback(&ProviderError::Parse("bad".into())));
+        assert!(!pat_allows_auto_fallback(&ProviderError::Other("server".into())));
     }
 }

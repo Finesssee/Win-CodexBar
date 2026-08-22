@@ -2,6 +2,7 @@
 //!
 //! Uses OAuth tokens stored by the Codex CLI in ~/.codex/auth.json
 
+use super::pat;
 use crate::core::{
     CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
 };
@@ -63,6 +64,29 @@ impl CodexApi {
             }
         }
         self.home_dir.join(".codex")
+    }
+
+    pub(super) fn has_pat_credentials(&self) -> bool {
+        pat::load_token(&self.get_auth_path()).is_ok()
+    }
+
+    pub(super) async fn fetch_usage_pat(
+        &self,
+        cli_version: Option<&str>,
+    ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
+        let token = pat::load_token(&self.get_auth_path())?;
+        let (json, whoami) =
+            pat::fetch_usage(&self.client, &self.resolve_base_url(), &token, cli_version).await?;
+        let (mut usage, cost) = self.build_result_from_json(&json)?;
+        if let Some(email) = whoami.email {
+            usage = usage.with_email(email);
+        }
+        if usage.login_method.is_none()
+            && let Some(plan_type) = whoami.plan_type
+        {
+            usage = usage.with_login_method(format_plan_type(&plan_type));
+        }
+        Ok((usage, cost))
     }
 
     /// Fetch usage information from Codex API
@@ -348,27 +372,7 @@ impl CodexApi {
         let (primary, secondary, monthly, code_review) = self.extract_rate_limits(json);
 
         // Build login method string
-        let login_method = plan_type.as_ref().map(|pt| match pt.as_str() {
-            "guest" => "Guest".to_string(),
-            "free" => "ChatGPT Free".to_string(),
-            "go" => "Codex Go".to_string(),
-            "plus" => "ChatGPT Plus".to_string(),
-            "pro" | "pro_lite" | "prolite" | "pro-lite" => {
-                if pt == "pro" {
-                    "ChatGPT Pro".to_string()
-                } else {
-                    "Pro Lite".to_string()
-                }
-            }
-            "team" => "ChatGPT Team".to_string(),
-            "business" => "ChatGPT Business".to_string(),
-            "enterprise" => "ChatGPT Enterprise".to_string(),
-            "education" | "edu" => "ChatGPT Education".to_string(),
-            "free_workspace" | "freeWorkspace" => "Free Workspace".to_string(),
-            "quorum" => "Codex Quorum".to_string(),
-            "k12" => "Codex K12".to_string(),
-            other => format!("ChatGPT {}", capitalize(other)),
-        });
+        let login_method = plan_type.as_deref().map(format_plan_type);
 
         let mut usage = UsageSnapshot::new(primary);
         if let Some(sec) = secondary {
@@ -780,6 +784,25 @@ fn rate_window_from_snapshot(window: &WindowSnapshot) -> RateWindow {
         reset_at,
         format_reset_countdown(reset_at),
     )
+}
+
+fn format_plan_type(plan_type: &str) -> String {
+    match plan_type {
+        "guest" => "Guest".to_string(),
+        "free" => "ChatGPT Free".to_string(),
+        "go" => "Codex Go".to_string(),
+        "plus" => "ChatGPT Plus".to_string(),
+        "pro" => "ChatGPT Pro".to_string(),
+        "pro_lite" | "prolite" | "pro-lite" => "Pro Lite".to_string(),
+        "team" => "ChatGPT Team".to_string(),
+        "business" => "ChatGPT Business".to_string(),
+        "enterprise" => "ChatGPT Enterprise".to_string(),
+        "education" | "edu" => "ChatGPT Education".to_string(),
+        "free_workspace" | "freeWorkspace" => "Free Workspace".to_string(),
+        "quorum" => "Codex Quorum".to_string(),
+        "k12" => "Codex K12".to_string(),
+        other => format!("ChatGPT {}", capitalize(other)),
+    }
 }
 
 impl Default for CodexApi {

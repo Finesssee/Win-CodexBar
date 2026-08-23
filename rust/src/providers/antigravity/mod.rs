@@ -52,11 +52,12 @@ enum ProcessSource {
 /// names (e.g. `notantigravity-cli`) from matching.
 fn is_agy_cli_command(command_line: &str) -> bool {
     static CLI_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(^|[\\/])(antigravity-cli|antigravity_cli)([\s/\\]|$)")
+        Regex::new(r#"(^|[\\/])(antigravity-cli|antigravity_cli)(?:"|[\s/\\]|$)"#)
             .expect("valid antigravity-cli pattern")
     });
-    static AGY_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(^|[\\/])agy(\.exe)?(\s|$)").expect("valid agy pattern"));
+    static AGY_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(^|[\\/])agy(\.exe)?(?:"|\s|$)"#).expect("valid agy pattern")
+    });
     let lower = command_line.to_ascii_lowercase();
     CLI_PATH_RE.is_match(&lower) || AGY_RE.is_match(&lower)
 }
@@ -196,7 +197,10 @@ impl AntigravityProvider {
         // SECURITY: TLS verification is disabled because the local language server uses a
         // self-signed certificate. This is scoped to 127.0.0.1 only; we confirm a port by
         // checking that it answers the expected gRPC endpoint.
+        // The language server is a local loopback endpoint. Do not route it
+        // through the app-wide outbound proxy.
         let client = crate::core::credentialed_http_client_builder()
+            .no_proxy()
             .timeout(std::time::Duration::from_secs(2))
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -303,7 +307,10 @@ impl AntigravityProvider {
         let api_port = Self::find_api_port(process_info.extension_port, process_info.pid).await?;
 
         // SECURITY: TLS verification disabled for local language server (see find_api_port)
+        // The language server is a local loopback endpoint. Do not route it
+        // through the app-wide outbound proxy.
         let client = crate::core::credentialed_http_client_builder()
+            .no_proxy()
             .timeout(std::time::Duration::from_secs(8))
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())

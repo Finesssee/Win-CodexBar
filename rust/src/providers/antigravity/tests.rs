@@ -226,6 +226,19 @@ fn detects_agy_exe_cli_process_with_empty_csrf() {
 }
 
 #[test]
+fn detects_quoted_agy_exe_cli_process() {
+    // Windows CIM quotes an executable path that contains path separators.
+    let output = "7777\t\"C:\\Users\\user\\AppData\\Local\\agy\\bin\\agy.exe\" --model gemini-3.7-flash-high";
+
+    let process = AntigravityProvider::parse_process_info(output)
+        .expect("quoted agy CLI process should be detected");
+
+    assert_eq!(process.pid, Some(7777));
+    assert_eq!(process.source, ProcessSource::Cli);
+    assert!(process.csrf_token.is_empty());
+}
+
+#[test]
 fn detects_bare_agy_command() {
     // The CLI may appear under the bare `agy` name (no .exe suffix).
     let output = "8888\tagy serve";
@@ -294,14 +307,29 @@ fn is_agy_cli_command_matches_known_names() {
     assert!(is_agy_cli_command(
         "C:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe session"
     ));
+    assert!(is_agy_cli_command(
+        "C:\\Users\\user\\AppData\\Local\\agy\\bin\\AGY.EXE --model gemini-3.7-flash-high"
+    ));
+    assert!(is_agy_cli_command(
+        "\"C:\\Users\\user\\AppData\\Local\\agy\\bin\\agy.exe\" --model gemini-3.7-flash-high"
+    ));
     assert!(is_agy_cli_command("/usr/local/bin/antigravity-cli status"));
     assert!(is_agy_cli_command("/opt/antigravity_cli run"));
+    assert!(is_agy_cli_command("\"C:\\Tools\\antigravity-cli\" status"));
+    assert!(is_agy_cli_command("\"C:\\Tools\\antigravity_cli\" run"));
 }
 
 #[test]
 fn is_agy_cli_command_rejects_unrelated_names() {
     // A leading path separator prevents `notantigravity-cli` from matching.
+    assert!(!is_agy_cli_command(
+        "notagy.exe --model gemini-3.7-flash-high"
+    ));
+    assert!(!is_agy_cli_command(
+        "C:\\Tools\\someagy.exe --model gemini-3.7-flash-high"
+    ));
     assert!(!is_agy_cli_command("notantigravity-cli status"));
+    assert!(!is_agy_cli_command("C:\\Tools\\notantigravity-cli status"));
     assert!(!is_agy_cli_command("C:\\Windows\\System32\\notepad.exe"));
     assert!(!is_agy_cli_command("language_server.exe --csrf_token abc"));
     assert!(!is_agy_cli_command(""));

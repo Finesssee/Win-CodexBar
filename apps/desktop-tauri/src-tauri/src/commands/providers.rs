@@ -51,10 +51,9 @@ pub(crate) fn build_fetch_context(
             "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
                 (SourceMode::OAuth, None)
             }
-            "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
-                (SourceMode::Auto, None)
-            }
-            "off" if has_opencodego_api_key && usage_source == SourceMode::Auto => {
+            "off" if (has_kimi_code_api_key || has_opencodego_api_key)
+                && usage_source == SourceMode::Auto =>
+            {
                 (SourceMode::Auto, None)
             }
             // Droid/Factory: cookie-off must never scrape browser cookies. Map to
@@ -63,7 +62,9 @@ pub(crate) fn build_fetch_context(
             "off" => (SourceMode::Cli, None),
             "manual" => {
                 let cookie_header = active_token_cookie.or(stored_cookie);
-                let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
+                let source_mode = if (has_kimi_code_api_key || has_opencodego_api_key)
+                    && usage_source == SourceMode::Auto
+                {
                     SourceMode::Auto
                 } else if cookie_header.is_some() {
                     SourceMode::Web

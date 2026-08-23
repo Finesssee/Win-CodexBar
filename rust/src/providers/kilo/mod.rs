@@ -92,15 +92,36 @@ impl KiloProvider {
         kilo_pass_data: Option<&Value>,
     ) -> Result<UsageSnapshot, ProviderError> {
         // --- Credit blocks (primary window) ---
+        // `user.getCreditBlocks` returns an object wrapping a `creditBlocks`
+        // array plus a `totalBalance_mUsd` scalar (micro-USD). Accounts without
+        // a Kilo Pass subscription get an empty array; fall back to the general
+        // balance instead of rendering an empty $0.00 / $0.00 state (#355).
         let mut total = 0.0_f64;
         let mut remaining = 0.0_f64;
+        let mut has_blocks = false;
 
-        if let Some(arr) = credit_blocks_data.and_then(|v| v.as_array()) {
-            for block in arr {
-                if let Ok(b) = serde_json::from_value::<CreditBlock>(block.clone()) {
-                    total += b.amount_m_usd.unwrap_or(0.0);
-                    remaining += b.balance_m_usd.unwrap_or(0.0);
+        if let Some(payload) = credit_blocks_data {
+            let blocks = payload
+                .get("creditBlocks")
+                .and_then(|v| v.as_array())
+                .or_else(|| payload.as_array());
+
+            if let Some(arr) = blocks {
+                has_blocks = !arr.is_empty();
+                for block in arr {
+                    if let Ok(b) = serde_json::from_value::<CreditBlock>(block.clone()) {
+                        total += b.amount_m_usd.unwrap_or(0.0);
+                        remaining += b.balance_m_usd.unwrap_or(0.0);
+                    }
                 }
+            }
+
+            if !has_blocks
+                && let Some(balance_m_usd) =
+                    payload.get("totalBalance_mUsd").and_then(|v| v.as_f64())
+            {
+                total = balance_m_usd;
+                remaining = balance_m_usd;
             }
         }
 
@@ -155,12 +176,16 @@ impl KiloProvider {
     }
 
     fn extract_data(batch: &Value, index: usize) -> Option<&Value> {
-        batch
-            .as_array()?
-            .get(index)?
-            .get("result")?
-            .get("data")?
-            .get("json")
+        // tRPC batch entries nest the payload under `result.data.json`; some
+        // Kilo procedures (e.g. `user.getCreditBlocks`) place fields directly
+        // under `result.data`. Prefer `.json`, fall back to `data` itself.
+        let data = batch.as_array()?.get(index)?.get("result")?.get("data")?;
+        if let Some(json) = data.get("json")
+            && !json.is_null()
+        {
+            return Some(json);
+        }
+        Some(data)
     }
 
     async fn fetch_with_key(&self, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
@@ -298,10 +323,14 @@ mod tests {
 
     #[test]
     fn parses_credit_blocks_and_pass() {
-        let credit_blocks = serde_json::json!([
-            { "amount_mUsd": 1_000_000.0, "balance_mUsd": 750_000.0 },
-            { "amount_mUsd": 2_000_000.0, "balance_mUsd": 1_500_000.0 }
-        ]);
+        let credit_blocks = serde_json::json!({
+            "creditBlocks": [
+                { "amount_mUsd": 1_000_000.0, "balance_mUsd": 750_000.0 },
+                { "amount_mUsd": 2_000_000.0, "balance_mUsd": 1_500_000.0 }
+            ],
+            "totalBalance_mUsd": 2_250_000.0,
+            "autoTopUpEnabled": false
+        });
         let kilo_pass = serde_json::json!({
             "currentPeriodUsageUsd": 5.0,
             "currentPeriodBaseCreditsUsd": 20.0,
@@ -321,6 +350,26 @@ mod tests {
     fn handles_missing_credit_blocks() {
         let snap = KiloProvider::build_snapshot(None, None).unwrap();
         assert!((snap.primary.used_percent - 0.0).abs() < f64::EPSILON);
+        assert!(snap.secondary.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_balance_for_payg_without_pass() {
+        // Pay-as-you-go account: empty creditBlocks, no Kilo Pass subscription.
+        // Backs the "Remaining Credits" field on app.kilo.ai/profile (#355).
+        let credit_blocks = serde_json::json!({
+            "creditBlocks": [],
+            "totalBalance_mUsd": 1_060_000.0,
+            "autoTopUpEnabled": false
+        });
+        let kilo_pass = serde_json::json!({ "subscription": null });
+        let snap = KiloProvider::build_snapshot(Some(&credit_blocks), Some(&kilo_pass)).unwrap();
+        // $1.06 balance, nothing used → 0% used, $0.00/$1.06 (used/total)
+        assert!((snap.primary.used_percent - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            snap.primary.reset_description.as_deref(),
+            Some("$0.00/$1.06")
+        );
         assert!(snap.secondary.is_none());
     }
 }

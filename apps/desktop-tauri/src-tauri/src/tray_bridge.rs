@@ -583,19 +583,29 @@ fn provider_status_label(
         );
     }
 
-    // F5 (upstream 0.48.0): for Codex, prefer the first non-informational lane so
-    // a monthly-only plan shows the monthly window with its reset countdown
-    // instead of the informational "No active 5h session" placeholder.
-    let window = if snapshot.provider_id == "codex" {
-        codex_lane_headline_window(snapshot)
-    } else {
-        &snapshot.primary
-    };
-    let label = crate::commands::compact_tray_status_label(window, lang);
+    let label = crate::commands::compact_tray_status_label(headline_window(snapshot), lang);
     (
         snapshot.provider_id.clone(),
         format!("{} {}", snapshot.display_name, label),
     )
+}
+
+/// Window that headline tray surfaces should label for a provider.
+///
+/// F5 (upstream 0.48.0): for Codex, prefer the first non-informational lane so
+/// a monthly-only plan shows the monthly window with its reset countdown
+/// instead of the informational "No active 5h session" placeholder.
+///
+/// Shared by the tray menu rows (`provider_status_label`) and the tray tooltip
+/// (`build_tooltip`) so the two cannot drift apart.
+fn headline_window(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> &crate::commands::RateWindowSnapshot {
+    if snapshot.provider_id == "codex" {
+        codex_lane_headline_window(snapshot)
+    } else {
+        &snapshot.primary
+    }
 }
 
 /// F5 (upstream 0.48.0): pick the first non-informational Codex lane in
@@ -697,7 +707,7 @@ fn build_tooltip(
             let short = truncate_tooltip_text(err, 36);
             format!("{}: {} ({})", s.display_name, error_label, short)
         } else {
-            let label = crate::commands::compact_tray_status_label(&s.primary, lang);
+            let label = crate::commands::compact_tray_status_label(headline_window(s), lang);
             format!("{}: {}", s.display_name, truncate_tooltip_text(&label, 42))
         };
         lines.push(status);
@@ -1229,6 +1239,21 @@ mod tests {
             tooltip,
             "CodexBar\nClaude: 13% • Resets in 2h 05m\nCodex: 8% • Resets in 4h 10m"
         );
+    }
+
+    #[test]
+    fn tooltip_skips_informational_codex_primary() {
+        // Weekly-only Codex plan: the 5h lane is an informational placeholder,
+        // so the tooltip must label the real weekly lane instead of echoing
+        // "No active 5h session" back at the user.
+        let mut codex = fake_snapshot_with("codex", "Codex", 0.0, Some(16.0), None, None);
+        codex.primary.is_informational = true;
+        codex.primary.reset_description = Some("No active 5h session".to_string());
+        codex.secondary.as_mut().unwrap().reset_description = Some("3d 17h".to_string());
+
+        let tooltip = build_tooltip(&[codex], codexbar::settings::Language::English);
+
+        assert_eq!(tooltip, "CodexBar\nCodex: 16% • Resets in 3d 17h");
     }
 
     #[test]

@@ -134,6 +134,11 @@ impl AlibabaTokenPlanProvider {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Origin", region.gateway_base_url())
             .header("Referer", region.dashboard_url())
+            .header("Referer", region.dashboard_url())
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("User-Agent", USER_AGENT)
             .header("X-Requested-With", "XMLHttpRequest")
             .form(&form);
@@ -468,6 +473,7 @@ fn extract_sec_token(html: &str) -> Option<String> {
         r#""sec_token"\s*:\s*"([^"]+)""#,
         r#"secToken['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
         r#"sec_token['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
+        r#"SEC_TOKEN['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
     ] {
         let Ok(regex) = Regex::new(pattern) else {
             continue;
@@ -1047,6 +1053,13 @@ mod tests {
         assert_eq!(
             extract_sec_token(r#"<script>{"secToken":"abc123"}</script>"#).as_deref(),
             Some("abc123")
+        );
+        assert_eq!(
+            extract_sec_token(
+                r#"<script>window.ALIYUN_CONSOLE_CONFIG = { SEC_TOKEN: "upper123" };</script>"#
+            )
+            .as_deref(),
+            Some("upper123")
         );
         assert_eq!(
             cookie_value("sec_token", "foo=bar; sec_token=xyz"),

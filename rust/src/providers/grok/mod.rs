@@ -430,7 +430,7 @@ fn text_field(value: &Value, key: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Copy)]
 struct GrokBillingSnapshot {
-    used_percent: f64,
+    used_percent: Option<f64>,
     resets_at: Option<DateTime<Utc>>,
 }
 
@@ -443,12 +443,15 @@ fn result_from_billing(
 ) -> ProviderFetchResult {
     // Upstream #2431 / #2566: do not infer windowMinutes from time-until-reset.
     // A monthly quota near its reset would otherwise be misclassified as weekly.
-    let mut usage = UsageSnapshot::new(RateWindow::with_details(
-        billing.used_percent,
-        None,
-        billing.resets_at,
-        None,
-    ));
+    let primary = match billing.used_percent {
+        Some(used_percent) => RateWindow::with_details(used_percent, None, billing.resets_at, None),
+        None => {
+            let mut window = RateWindow::informational("Usage unavailable");
+            window.resets_at = billing.resets_at;
+            window
+        }
+    };
+    let mut usage = UsageSnapshot::new(primary);
     usage.account_email = email;
     usage.account_organization = team_id;
     usage.login_method = login_method;
@@ -525,8 +528,7 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
                 .cmp(&b.path.len())
                 .then_with(|| a.order.cmp(&b.order))
         })
-        .map(|field| field.value as f64)
-        .ok_or_else(|| ProviderError::Parse("Could not parse Grok billing percent".to_string()))?;
+        .map(|field| field.value as f64);
 
     let resets_at = scan
         .varints
@@ -783,7 +785,7 @@ mod tests {
         let resets = Utc::now() + chrono::Duration::days(6);
         let result = result_from_billing(
             GrokBillingSnapshot {
-                used_percent: 12.0,
+                used_percent: Some(12.0),
                 resets_at: Some(resets),
             },
             "web",
@@ -794,5 +796,31 @@ mod tests {
         assert_eq!(result.usage.primary.window_minutes, None);
         assert_eq!(result.usage.primary.resets_at, Some(resets));
         assert_eq!(result.usage.login_method.as_deref(), Some("SuperGrok"));
+    }
+
+    #[test]
+    fn period_only_billing_is_informational_not_zero_usage() {
+        let resets = Utc::now() + chrono::Duration::days(6);
+        let result = result_from_billing(
+            GrokBillingSnapshot {
+                used_percent: None,
+                resets_at: Some(resets),
+            },
+            "cli",
+            Some("user@example.com".into()),
+            None,
+            Some("SuperGrok Heavy".into()),
+        );
+
+        assert!(result.usage.primary.is_informational);
+        assert_eq!(result.usage.primary.resets_at, Some(resets));
+        assert_eq!(
+            result.usage.account_email.as_deref(),
+            Some("user@example.com")
+        );
+        assert_eq!(
+            result.usage.login_method.as_deref(),
+            Some("SuperGrok Heavy")
+        );
     }
 }

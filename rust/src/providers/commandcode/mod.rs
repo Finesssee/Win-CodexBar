@@ -65,6 +65,11 @@ const PLANS: &[CommandCodePlan] = &[
         monthly_credits_usd: 30.0,
     },
     CommandCodePlan {
+        id: "individual-pro-v1",
+        display_name: "Pro",
+        monthly_credits_usd: 80.0,
+    },
+    CommandCodePlan {
         id: "individual-max",
         display_name: "Max",
         monthly_credits_usd: 150.0,
@@ -712,6 +717,10 @@ mod tests {
         assert_eq!(
             find_plan("individual-goat").unwrap().monthly_credits_usd,
             70.0
+        );
+        assert_eq!(
+            find_plan("individual-pro-v1").unwrap().monthly_credits_usd,
+            80.0
         );
         assert_eq!(find_plan("Individual-ULTRA").unwrap().display_name, "Ultra");
         assert!(find_plan("team").is_none());

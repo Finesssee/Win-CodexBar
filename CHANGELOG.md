@@ -1,5 +1,34 @@
 # Changelog
 
+## [Windows] 0.55.0 - 2026-08-25
+
+Windows port of upstream CodexBar **0.54.0 → 0.55.0**, plus the Windows Grok OAuth routing fix from issue #362.
+
+### Added
+- Command Code: individual-pro-v1 Pro tier with the current monthly credit grant.
+- Cursor: Grok Bot usage window and tokscale-compatible local spend import.
+- Antigravity: tokscale-compatible local spend, offline conversation fallback, agy authentication guidance, and retired Flash model aliases.
+- Kiro: overage limits and charges from GetUsageLimits.
+- z.ai: China account balance enrichment.
+- Alibaba Token Plan: Personal/Solo SEC_TOKEN dashboard extraction.
+- Codex: tokscale-compatible cached-token, bare-usage, stale-snapshot, and reasoning accounting parity.
+
+### Changed
+- Usage & Spend refreshes silently when provider data changes and loads independent provider baselines in parallel.
+- OpenCodex bulk pricing reuses one shared models.dev pricing snapshot.
+- OpenRouter management spend uses completed UTC days for the rolling 30-day window.
+- Simplified Chinese session quota labels use explicit whole-hour durations and map weekly-duration windows to the weekly label.
+- Agent session names truncate safely in the desktop UI.
+- Single-meaningful-quota tray icons use the full meter while multi-quota icons keep distinct lanes.
+
+### Fixed
+- Grok preserves unknown-period usage instead of displaying it as zero.
+- Grok Auto/OAuth routing works when browser cookies are disabled (#362).
+- Alibaba retries successful-but-empty usage responses and sends navigation headers on the dashboard request that renders SEC_TOKEN.
+- Gemini shutdown guidance preserves paid/workspace exclusions.
+
+---
+
 ## [Windows] 0.54.0 - 2026-08-22
 
 Windows port of upstream CodexBar **0.53.0 → 0.54.0**.

@@ -3,6 +3,7 @@
 //! Fetches usage data from Kiro (Amazon's AI coding assistant)
 //! Uses kiro-cli for authentication and usage fetching
 
+mod usage_limits;
 pub mod version;
 
 // Re-exports for version compatibility checking
@@ -449,11 +450,25 @@ impl Provider for KiroProvider {
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::Cli => {
                 let usage = self.fetch_via_cli().await?;
+                let usage = match usage_limits::fetch_usage_limits().await {
+                    Ok(limits) => usage_limits::apply_usage_limits(usage, &limits),
+                    Err(error) => {
+                        tracing::debug!("Kiro GetUsageLimits enrichment unavailable: {error}");
+                        usage
+                    }
+                };
                 Ok(ProviderFetchResult::new(usage, "cli"))
             }
             SourceMode::Web => {
                 // Kiro doesn't have a direct web API, use CLI
                 let usage = self.fetch_via_cli().await?;
+                let usage = match usage_limits::fetch_usage_limits().await {
+                    Ok(limits) => usage_limits::apply_usage_limits(usage, &limits),
+                    Err(error) => {
+                        tracing::debug!("Kiro GetUsageLimits enrichment unavailable: {error}");
+                        usage
+                    }
+                };
                 Ok(ProviderFetchResult::new(usage, "cli"))
             }
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),

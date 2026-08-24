@@ -15,6 +15,43 @@ pub fn summarize(days: u32) -> LocalSessionSummary {
     summarize_paths(&tokscale_paths(None), Utc::now(), days)
 }
 
+/// Count local Antigravity conversation artifacts for the quota provider's
+/// offline fallback. Mirrors upstream #3119 without opening SQLite files.
+pub fn offline_conversation_count() -> usize {
+    let Some(home) = dirs::home_dir() else {
+        return 0;
+    };
+    offline_conversation_count_in(&home)
+}
+
+fn offline_conversation_count_in(home: &Path) -> usize {
+    let gemini = home.join(".gemini");
+    let roots = [
+        gemini.join("antigravity-cli").join("conversations"),
+        gemini.join("antigravity"),
+        gemini.join("antigravity").join("conversations"),
+    ];
+    let db_count = roots
+        .iter()
+        .map(|root| count_extension(root, "db"))
+        .sum::<usize>();
+    if db_count > 0 {
+        return db_count;
+    }
+    tokscale_paths(Some(home)).len()
+}
+
+fn count_extension(root: &Path, extension: &str) -> usize {
+    fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some(extension))
+        .count()
+}
+
 fn tokscale_paths(home: Option<&Path>) -> Vec<PathBuf> {
     let base = if let Some(home) = home {
         home.join(".config")
@@ -140,6 +177,36 @@ mod tests {
         let summary = summarize_paths(&[path], now, 7);
         assert_eq!(summary.total_tokens, 135);
         assert_eq!(summary.session_count, 1);
+    }
+
+    #[test]
+    fn offline_count_prefers_cli_and_app_db_artifacts_then_tokscale() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir
+            .path()
+            .join(".gemini")
+            .join("antigravity")
+            .join("conversations");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("a.db"), b"").unwrap();
+        fs::write(app.join("a.db-wal"), b"").unwrap();
+        assert_eq!(offline_conversation_count_in(dir.path()), 1);
+
+        fs::remove_file(app.join("a.db")).unwrap();
+        let cache = dir
+            .path()
+            .join(".config")
+            .join("tokscale")
+            .join("antigravity-cache")
+            .join("sessions");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(
+            cache.join("one.jsonl"),
+            b"{}
+",
+        )
+        .unwrap();
+        assert_eq!(offline_conversation_count_in(dir.path()), 1);
     }
 
     #[test]

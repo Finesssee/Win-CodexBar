@@ -531,6 +531,19 @@ impl Provider for AntigravityProvider {
         match self.fetch_user_status().await {
             Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
             Err(e) => {
+                let count = local_sessions::offline_conversation_count();
+                if count > 0 {
+                    let noun = if count == 1 {
+                        "conversation"
+                    } else {
+                        "conversations"
+                    };
+                    let usage = UsageSnapshot::new(RateWindow::informational(format!(
+                        "Offline · {count} {noun}"
+                    )))
+                    .with_login_method("offline");
+                    return Ok(ProviderFetchResult::new(usage, "offline"));
+                }
                 tracing::warn!("Antigravity probe failed: {}", e);
                 Err(e)
             }

@@ -307,6 +307,17 @@ impl CodexParserState {
 
         if token_count_payload(&obj).is_some() {
             self.record_token_count(&obj, day_key);
+        } else if let Some((totals, model)) = bare_usage_totals(&obj) {
+            if totals.input != 0 || totals.cached != 0 || totals.output != 0 {
+                let model = self
+                    .current_model
+                    .as_deref()
+                    .and_then(model_evidence)
+                    .or(model.as_deref().and_then(model_evidence))
+                    .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
+                    .to_string();
+                self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
+            }
         }
     }
 
@@ -675,6 +686,54 @@ fn codex_timestamp_day_key(timestamp: &str) -> Option<String> {
         .or_else(|| timestamp.get(..10).map(str::to_string))
 }
 
+fn bare_usage_totals(obj: &Value) -> Option<(CodexTotals, Option<String>)> {
+    let usage = obj
+        .get("usage")
+        .or_else(|| obj.get("data").and_then(|v| v.get("usage")))
+        .or_else(|| obj.get("result").and_then(|v| v.get("usage")))
+        .or_else(|| obj.get("response").and_then(|v| v.get("usage")))?;
+    let input = ["input_tokens", "prompt_tokens", "input"]
+        .into_iter()
+        .find_map(|key| usage.get(key).and_then(Value::as_i64))
+        .unwrap_or(0)
+        .max(0) as i32;
+    let output = ["output_tokens", "completion_tokens", "output"]
+        .into_iter()
+        .find_map(|key| usage.get(key).and_then(Value::as_i64))
+        .unwrap_or(0)
+        .max(0) as i32;
+    let cached = [
+        "cached_input_tokens",
+        "cache_read_input_tokens",
+        "cached_tokens",
+    ]
+    .into_iter()
+    .filter_map(|key| usage.get(key).and_then(Value::as_i64))
+    .max()
+    .unwrap_or(0)
+    .max(0) as i32;
+    if input == 0 && output == 0 && cached == 0 {
+        return None;
+    }
+    let model = obj
+        .get("model")
+        .or_else(|| obj.get("data").and_then(|v| v.get("model")))
+        .or_else(|| obj.get("result").and_then(|v| v.get("model")))
+        .or_else(|| obj.get("response").and_then(|v| v.get("model")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    Some((
+        CodexTotals {
+            input,
+            cached,
+            output,
+        },
+        model,
+    ))
+}
+
 fn token_count_payload(obj: &Value) -> Option<&Value> {
     if let Some(payload) = obj.get("payload")
         && payload.get("type").and_then(|v| v.as_str()) == Some("token_count")
@@ -691,9 +750,14 @@ fn read_token_totals(value: &Value) -> CodexTotals {
         input: token_i32(value, "input_tokens"),
         cached: value
             .get("cached_input_tokens")
-            .or_else(|| value.get("cache_read_input_tokens"))
             .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32,
+            .unwrap_or(0)
+            .max(
+                value
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            ) as i32,
         output: token_i32(value, "output_tokens"),
     }
 }
@@ -703,8 +767,8 @@ fn codex_totals_from_fast(value: CodexFastTotals) -> CodexTotals {
         input: value.input_tokens,
         cached: value
             .cached_input_tokens
-            .or(value.cache_read_input_tokens)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .max(value.cache_read_input_tokens.unwrap_or(0)),
         output: value.output_tokens,
     }
 }
@@ -714,8 +778,8 @@ fn fast_totals_from_payload(value: &CodexFastPayload<'_>) -> CodexTotals {
         input: value.input_tokens.unwrap_or(0),
         cached: value
             .cached_input_tokens
-            .or(value.cache_read_input_tokens)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .max(value.cache_read_input_tokens.unwrap_or(0)),
         output: value.output_tokens.unwrap_or(0),
     }
 }
@@ -1364,6 +1428,36 @@ mod tests {
             parser.records[0].model,
             CostUsagePricing::CODEX_UNATTRIBUTED_MODEL
         );
+    }
+
+    #[test]
+    fn cached_tokens_use_larger_cached_or_cache_read_field() {
+        let value = serde_json::json!({
+            "input_tokens": 100,
+            "cached_input_tokens": 20,
+            "cache_read_input_tokens": 35,
+            "output_tokens": 10
+        });
+        let totals = read_token_totals(&value);
+        assert_eq!(totals.cached, 35);
+    }
+
+    #[test]
+    fn parses_bare_usage_rows_outside_token_count_envelope() {
+        let value = serde_json::json!({
+            "model": "gpt-5.6-sol",
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 30,
+                "cached_input_tokens": 40,
+                "cache_read_input_tokens": 55
+            }
+        });
+        let (totals, model) = bare_usage_totals(&value).expect("bare usage");
+        assert_eq!(totals.input, 120);
+        assert_eq!(totals.output, 30);
+        assert_eq!(totals.cached, 55);
+        assert_eq!(model.as_deref(), Some("gpt-5.6-sol"));
     }
 
     #[test]

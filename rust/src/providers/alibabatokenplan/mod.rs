@@ -134,11 +134,6 @@ impl AlibabaTokenPlanProvider {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Origin", region.gateway_base_url())
             .header("Referer", region.dashboard_url())
-            .header("Referer", region.dashboard_url())
-            .header("Sec-Fetch-Site", "same-origin")
-            .header("Sec-Fetch-Mode", "navigate")
-            .header("Sec-Fetch-Dest", "document")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("User-Agent", USER_AGENT)
             .header("X-Requested-With", "XMLHttpRequest")
             .form(&form);
@@ -205,6 +200,11 @@ impl AlibabaTokenPlanProvider {
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
+            .header("Referer", dashboard_referer(region))
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("User-Agent", USER_AGENT)
             .send()
             .await
@@ -465,6 +465,10 @@ pub(super) fn cookie_value(name: &str, cookie_header: &str) -> Option<String> {
             .then(|| value.trim().to_string())
             .filter(|value| !value.is_empty())
     })
+}
+
+fn dashboard_referer(region: Region) -> String {
+    format!("{}/", region.gateway_base_url().trim_end_matches('/'))
 }
 
 fn extract_sec_token(html: &str) -> Option<String> {
@@ -1064,6 +1068,18 @@ mod tests {
         assert_eq!(
             cookie_value("sec_token", "foo=bar; sec_token=xyz"),
             Some("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn sec_token_shell_referer_uses_same_origin_root() {
+        assert_eq!(
+            dashboard_referer(Region::CnPersonal),
+            "https://bailian.console.aliyun.com/"
+        );
+        assert_eq!(
+            dashboard_referer(Region::IntlPersonal),
+            "https://modelstudio.console.alibabacloud.com/"
         );
     }
 

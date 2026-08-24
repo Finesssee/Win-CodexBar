@@ -383,6 +383,15 @@ impl AntigravityProvider {
 
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
+            if process_info.source == ProcessSource::Cli
+                && (status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::FORBIDDEN
+                    || text.to_ascii_lowercase().contains("not logged")
+                    || text.to_ascii_lowercase().contains("login method")
+                    || text.to_ascii_lowercase().contains("keyring"))
+            {
+                return Err(ProviderError::AuthRequired);
+            }
             return Err(ProviderError::Other(format!(
                 "API error {}: {}",
                 status, text

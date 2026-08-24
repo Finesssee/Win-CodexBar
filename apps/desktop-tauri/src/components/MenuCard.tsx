@@ -78,9 +78,11 @@ function localizeWindowLabel(
   const normalized = raw?.trim().toLowerCase();
   // Upstream 0.55.0 #3070: quota windows in Simplified Chinese use their
   // actual duration instead of the conversational Session wording.
-  if (language === "chinese" && normalized === "session") {
-    if (windowMinutes === 5 * 60) return "5 小时";
+  if (language === "chinese" && normalized === "session" && windowMinutes != null) {
     if (windowMinutes === 7 * 24 * 60) return t("ProviderWeeklyLabel");
+    if (windowMinutes >= 60 && windowMinutes <= 12 * 60 && windowMinutes % 60 === 0) {
+      return `${windowMinutes / 60} 小时`;
+    }
   }
   if (normalized === "weekly") {
     return t("ProviderWeeklyLabel");

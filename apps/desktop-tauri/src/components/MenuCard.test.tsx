@@ -375,6 +375,31 @@ describe("MenuCard", () => {
     expect(screen.queryByText("Session")).not.toBeInTheDocument();
   });
 
+  it("uses explicit hourly quota labels in Simplified Chinese", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({}, "chinese"));
+    const snapshot = provider(null, 31);
+    snapshot.primary = rateWindow(31, { windowMinutes: 3 * 60 });
+    snapshot.selectedMetric = snapshot.primary;
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("3 小时")).toBeInTheDocument();
+    expect(screen.queryByText("Session")).not.toBeInTheDocument();
+  });
+
+  it("maps a Simplified Chinese session-labelled weekly window to Weekly", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({ ProviderWeeklyLabel: "本周" }, "chinese"),
+    );
+    const snapshot = provider(null, 31);
+    snapshot.primary = rateWindow(31, { windowMinutes: 7 * 24 * 60 });
+    snapshot.selectedMetric = snapshot.primary;
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("本周")).toBeInTheDocument();
+  });
+
   it("notifies the tray panel after async local usage data loads", async () => {
     const onLayoutChange = vi.fn();
 

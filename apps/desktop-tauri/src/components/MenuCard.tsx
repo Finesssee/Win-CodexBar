@@ -72,8 +72,16 @@ export function maskEmail(email: string): string {
 function localizeWindowLabel(
   raw: string | undefined,
   t: (key: LocaleKey) => string,
+  language?: string,
+  windowMinutes?: number | null,
 ): string {
   const normalized = raw?.trim().toLowerCase();
+  // Upstream 0.55.0 #3070: quota windows in Simplified Chinese use their
+  // actual duration instead of the conversational Session wording.
+  if (language === "chinese" && normalized === "session") {
+    if (windowMinutes === 5 * 60) return "5 小时";
+    if (windowMinutes === 7 * 24 * 60) return t("ProviderWeeklyLabel");
+  }
   if (normalized === "weekly") {
     return t("ProviderWeeklyLabel");
   }
@@ -127,7 +135,7 @@ export default function MenuCard({
     compactMetrics = false,
     costSummaryDisplayStyle,
   } = display;
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
   const [pricingStatus, setPricingStatus] = useState<DeepSeekPricingStatus | null>(null);
 
@@ -179,7 +187,7 @@ export default function MenuCard({
       : [
           {
             id: "primary",
-            label: provider.primaryLabel ?? t("DetailWindowPrimary"),
+            label: localizeWindowLabel(provider.primaryLabel, t, language, provider.primary.windowMinutes) || t("DetailWindowPrimary"),
             snap: provider.primary,
           },
         ]),

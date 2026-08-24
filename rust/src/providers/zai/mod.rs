@@ -3,6 +3,7 @@
 //! Fetches usage data from z.ai's quota API
 //! Uses API token stored in Windows Credential Manager
 
+mod balance;
 pub mod mcp_details;
 pub mod region;
 pub mod settings;
@@ -19,7 +20,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Url;
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -245,9 +245,10 @@ impl ZaiProvider {
 
         let team_context = Self::team_context(ctx)?;
         let request_url = Self::request_url(&env, region, team_context.as_ref())?;
+        let authorization = authorization_header(&api_token);
         let mut request = client
             .get(request_url)
-            .header("Authorization", authorization_header(&api_token))
+            .header("Authorization", authorization.as_str())
             .header("Accept", "application/json");
         if let Some(team) = &team_context {
             request = request
@@ -284,37 +285,13 @@ impl ZaiProvider {
 
         let mut usage = self.parse_quota_response(&quota)?;
         if region == ZaiRegion::BigModelCn
-            && let Some(balance) = Self::fetch_cn_balance(&client, &api_token).await
+            && let Some(balance) = balance::fetch_cn_balance(&client, &authorization).await
         {
             let mut row = RateWindow::informational(format!("¥{balance:.2}"));
             row.reset_description = Some(format!("¥{balance:.2} available"));
             usage = usage.with_extra_rate_window("zai-account-balance", "Account balance", row);
         }
         Ok(usage)
-    }
-
-    async fn fetch_cn_balance(client: &reqwest::Client, api_token: &str) -> Option<f64> {
-        const BALANCE_URL: &str =
-            "https://www.bigmodel.cn/api/biz/account/query-customer-account-report";
-        let response = client
-            .get(BALANCE_URL)
-            .header("Authorization", authorization_header(api_token))
-            .header("Accept", "application/json")
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await
-            .ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        let body: Value = response.json().await.ok()?;
-        if body.get("success").and_then(Value::as_bool) != Some(true) {
-            return None;
-        }
-        let data = body.get("data")?;
-        ["availableBalance", "balance"]
-            .into_iter()
-            .find_map(|key| finite_nonnegative_number(data.get(key)))
     }
 
     fn parse_quota_response(
@@ -573,16 +550,6 @@ fn parse_team_context_pair(raw: &str) -> Option<ZaiTeamContext> {
     })
 }
 
-fn finite_nonnegative_number(value: Option<&Value>) -> Option<f64> {
-    value
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-        })
-        .filter(|value| value.is_finite() && *value >= 0.0)
-}
-
 fn authorization_header(token: &str) -> String {
     let trimmed = token.trim();
     if trimmed.to_ascii_lowercase().starts_with("bearer ") {
@@ -664,31 +631,6 @@ mod tests {
             url.as_str(),
             "https://api.z.ai/api/monitor/usage/quota/limit?type=2"
         );
-    }
-
-    #[test]
-    fn cn_balance_parser_prefers_available_balance_and_rejects_null() {
-        let payload = serde_json::json!({
-            "availableBalance": 12.5,
-            "balance": 99.0
-        });
-        assert_eq!(
-            finite_nonnegative_number(payload.get("availableBalance")),
-            Some(12.5)
-        );
-        let null_payload = serde_json::json!({"availableBalance": null});
-        assert_eq!(
-            finite_nonnegative_number(null_payload.get("availableBalance")),
-            None
-        );
-    }
-
-    #[test]
-    fn cn_balance_parser_accepts_numeric_strings_but_rejects_negative() {
-        let numeric = serde_json::json!("42.25");
-        let negative = serde_json::json!(-1.0);
-        assert_eq!(finite_nonnegative_number(Some(&numeric)), Some(42.25));
-        assert_eq!(finite_nonnegative_number(Some(&negative)), None);
     }
 
     #[test]

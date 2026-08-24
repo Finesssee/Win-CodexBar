@@ -285,11 +285,13 @@ impl CodexParserState {
     }
 
     fn process_line(&mut self, line: &str, range: &CostUsageDayRange) {
-        if !is_candidate_codex_line(line) {
+        let event_candidate = is_candidate_codex_line(line);
+        let bare_candidate = !event_candidate && line.contains("\"usage\"");
+        if !event_candidate && !bare_candidate {
             return;
         }
 
-        if let Some(event) = parse_codex_fast_event(line) {
+        if event_candidate && let Some(event) = parse_codex_fast_event(line) {
             self.process_fast_event(event, range);
             return;
         }
@@ -297,27 +299,38 @@ impl CodexParserState {
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
             return;
         };
+
+        if bare_candidate {
+            if obj.get("type").is_some() {
+                return;
+            }
+            let Some(day_key) = codex_line_day_key(&obj, range)
+                .or_else(|| self.records.last().map(|record| record.day_key.clone()))
+            else {
+                return;
+            };
+            if let Some((totals, model)) = bare_usage_totals(&obj) {
+                let model = self
+                    .current_model
+                    .as_deref()
+                    .and_then(model_evidence)
+                    .or(model.as_deref().and_then(model_evidence))
+                    .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
+                    .to_string();
+                self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
+            }
+            return;
+        }
+
         let Some(day_key) = codex_line_day_key(&obj, range) else {
             return;
         };
-
         if obj.get("type").and_then(|v| v.as_str()) == Some("turn_context") {
             self.update_current_model(&obj);
         }
 
         if token_count_payload(&obj).is_some() {
             self.record_token_count(&obj, day_key);
-        } else if let Some((totals, model)) = bare_usage_totals(&obj)
-            && (totals.input != 0 || totals.cached != 0 || totals.output != 0)
-        {
-            let model = self
-                .current_model
-                .as_deref()
-                .and_then(model_evidence)
-                .or(model.as_deref().and_then(model_evidence))
-                .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
-                .to_string();
-            self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
         }
     }
 
@@ -1458,6 +1471,56 @@ mod tests {
         assert_eq!(totals.output, 30);
         assert_eq!(totals.cached, 55);
         assert_eq!(model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn process_line_accepts_type_less_bare_usage_row() {
+        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(None, None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01Z","model":"gpt-5.6-sol","usage":{"prompt_tokens":120,"completion_tokens":30,"cache_read_input_tokens":55}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 1);
+        assert_eq!(parser.records[0].model, "gpt-5.6-sol");
+        assert_eq!(
+            (
+                parser.records[0].input,
+                parser.records[0].cached,
+                parser.records[0].output
+            ),
+            (120, 55, 30)
+        );
+    }
+
+    #[test]
+    fn timestamp_less_bare_usage_uses_last_accepted_usage_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(Some("gpt-5.6-sol".to_string()), None);
+
+        parser.process_line(
+            r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":1}}}}"#,
+            &range,
+        );
+        parser.process_line(
+            r#"{"usage":{"prompt_tokens":20,"completion_tokens":4,"cache_read_input_tokens":3}}"#,
+            &range,
+        );
+
+        assert_eq!(parser.records.len(), 2);
+        assert_eq!(parser.records[1].day_key, "2026-05-31");
+        assert_eq!(
+            (
+                parser.records[1].input,
+                parser.records[1].cached,
+                parser.records[1].output
+            ),
+            (20, 3, 4)
+        );
     }
 
     #[test]

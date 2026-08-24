@@ -48,7 +48,7 @@ pub(crate) fn build_fetch_context(
     } else {
         match cookie_source {
             _ if active_token_env.is_some() => (SourceMode::OAuth, None),
-            "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
+            "off" if provider_uses_oauth_without_cookies(id, usage_source) => {
                 (SourceMode::OAuth, None)
             }
             "off"
@@ -69,7 +69,7 @@ pub(crate) fn build_fetch_context(
                     SourceMode::Auto
                 } else if cookie_header.is_some() {
                     SourceMode::Web
-                } else if id == ProviderId::Claude && usage_source != SourceMode::Cli {
+                } else if provider_uses_oauth_without_cookies(id, usage_source) {
                     SourceMode::OAuth
                 } else {
                     SourceMode::Cli
@@ -132,6 +132,14 @@ pub(crate) fn build_fetch_context(
         gateway_url,
         auto_prefer_web,
         ..FetchContext::default()
+    }
+}
+
+fn provider_uses_oauth_without_cookies(id: ProviderId, usage_source: SourceMode) -> bool {
+    match id {
+        ProviderId::Claude => usage_source != SourceMode::Cli,
+        ProviderId::Grok => matches!(usage_source, SourceMode::Auto | SourceMode::OAuth),
+        _ => false,
     }
 }
 

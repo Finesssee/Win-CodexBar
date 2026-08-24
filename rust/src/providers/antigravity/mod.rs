@@ -763,12 +763,28 @@ fn model_label(config: &ModelConfig) -> &str {
     }
 }
 
+fn canonical_model_id(raw: &str) -> &str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "gemini-3.6-flash"
+        | "gemini-3.6-flash-low"
+        | "gemini-3.6-flash-medium"
+        | "gemini-3.6-flash-high"
+        | "gemini-3.5-flash-extra-low"
+        | "gemini-3.5-flash-low"
+        | "gemini-3.5-flash-mid"
+        | "gemini-3.5-flash-high"
+        | "gemini-3-flash-agent" => "gemini-3.7-flash",
+        _ => raw,
+    }
+}
+
 fn model_window_id(config: &ModelConfig) -> String {
     let raw = config
         .model_id
         .as_deref()
         .or(config.id.as_deref())
         .unwrap_or_else(|| model_label(config));
+    let raw = canonical_model_id(raw);
     let slug = raw
         .chars()
         .map(|ch| {

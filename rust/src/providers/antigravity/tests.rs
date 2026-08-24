@@ -23,6 +23,19 @@ fn test_classify_model_families() {
 }
 
 #[test]
+fn retired_flash_ids_collapse_to_current_wire_id() {
+    for id in [
+        "gemini-3.6-flash",
+        "gemini-3.6-flash-high",
+        "gemini-3.5-flash-extra-low",
+        "gemini-3-flash-agent",
+    ] {
+        assert_eq!(canonical_model_id(id), "gemini-3.7-flash");
+    }
+    assert_eq!(canonical_model_id("gemini-3.7-flash"), "gemini-3.7-flash");
+}
+
+#[test]
 fn parses_current_language_server_process() {
     let output = r"4242	C:\Users\test\AppData\Local\Programs\Antigravity\resources\bin\language_server.exe --csrf_token 11111111-2222-3333-4444-555555555555 --extension_server_port 54123";
 

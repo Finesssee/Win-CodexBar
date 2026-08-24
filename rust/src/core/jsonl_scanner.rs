@@ -307,17 +307,17 @@ impl CodexParserState {
 
         if token_count_payload(&obj).is_some() {
             self.record_token_count(&obj, day_key);
-        } else if let Some((totals, model)) = bare_usage_totals(&obj) {
-            if totals.input != 0 || totals.cached != 0 || totals.output != 0 {
-                let model = self
-                    .current_model
-                    .as_deref()
-                    .and_then(model_evidence)
-                    .or(model.as_deref().and_then(model_evidence))
-                    .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
-                    .to_string();
-                self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
-            }
+        } else if let Some((totals, model)) = bare_usage_totals(&obj)
+            && (totals.input != 0 || totals.cached != 0 || totals.output != 0)
+        {
+            let model = self
+                .current_model
+                .as_deref()
+                .and_then(model_evidence)
+                .or(model.as_deref().and_then(model_evidence))
+                .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
+                .to_string();
+            self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
         }
     }
 

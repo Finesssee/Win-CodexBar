@@ -671,28 +671,14 @@ fn selected_tray_percents(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (f64, Option<f64>) {
-    let selected = crate::usage_metric::selected_usage_window(snapshot, settings);
-    let primary = display_metric_percent(selected.used_percent, settings.show_as_used);
-
-    let meaningful_count = std::iter::once(&snapshot.primary)
-        .chain(snapshot.secondary.iter())
-        .chain(snapshot.tertiary.iter())
-        .filter(|window| !window.is_informational)
-        .count();
-    if meaningful_count <= 1 {
-        // Upstream #3155: one meaningful quota should occupy the full meter instead
-        // of being rendered beside a reserved/duplicated empty lane. This also
-        // covers providers whose sole real quota arrives in the secondary slot.
-        return (primary, None);
-    }
-
-    let secondary = snapshot
-        .secondary
-        .as_ref()
-        .filter(|window| !window.is_informational)
-        .map(|window| display_metric_percent(window.used_percent, settings.show_as_used));
-
-    (primary, secondary)
+    let (selected, companion) =
+        crate::usage_metric::selected_usage_icon_windows(snapshot, settings);
+    (
+        display_metric_percent(selected.used_percent, settings.show_as_used),
+        companion
+            .as_ref()
+            .map(|window| display_metric_percent(window.used_percent, settings.show_as_used)),
+    )
 }
 
 fn display_metric_percent(used_percent: f64, show_as_used: bool) -> f64 {
@@ -1407,6 +1393,19 @@ mod tests {
 
         assert_eq!(primary, 42.0);
         assert_eq!(secondary, None);
+    }
+
+    #[test]
+    fn selected_secondary_quota_is_not_duplicated_when_tertiary_is_meaningful() {
+        let settings = Settings::default();
+        let mut snapshot =
+            fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, Some(30.0));
     }
 
     #[test]

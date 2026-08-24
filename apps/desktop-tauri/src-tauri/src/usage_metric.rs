@@ -21,6 +21,42 @@ pub(crate) fn selected_usage_window(
         .unwrap_or_else(|| snapshot.primary.clone())
 }
 
+/// Select the primary tray metric and, when there are multiple meaningful core
+/// quotas, one distinct companion lane. Keeping this policy beside canonical
+/// metric selection prevents tray rendering from duplicating the selected lane.
+pub(crate) fn selected_usage_icon_windows(
+    snapshot: &ProviderUsageSnapshot,
+    settings: &Settings,
+) -> (RateWindowSnapshot, Option<RateWindowSnapshot>) {
+    let selected = selected_usage_window(snapshot, settings);
+    let meaningful_count = std::iter::once(&snapshot.primary)
+        .chain(snapshot.secondary.iter())
+        .chain(snapshot.tertiary.iter())
+        .filter(|window| !window.is_informational)
+        .count();
+    if meaningful_count <= 1 {
+        return (selected, None);
+    }
+
+    let companion = snapshot
+        .secondary
+        .iter()
+        .chain(std::iter::once(&snapshot.primary))
+        .chain(snapshot.tertiary.iter())
+        .filter(|window| !window.is_informational)
+        .find(|window| !same_window(window, &selected))
+        .cloned();
+    (selected, companion)
+}
+
+fn same_window(left: &RateWindowSnapshot, right: &RateWindowSnapshot) -> bool {
+    left.used_percent.to_bits() == right.used_percent.to_bits()
+        && left.window_minutes == right.window_minutes
+        && left.resets_at == right.resets_at
+        && left.reset_description == right.reset_description
+        && left.is_informational == right.is_informational
+}
+
 fn preferred_window(
     snapshot: &ProviderUsageSnapshot,
     provider: Option<ProviderId>,

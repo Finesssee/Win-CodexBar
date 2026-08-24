@@ -180,12 +180,28 @@ fn build_usage_spend_summary(
         })
         .flatten();
 
-    // Scan the local-log sources once per canonical window; all downstream
-    // surfaces consume the same immutable row catalog built below.
-    let codex_7_summary = CostScanner::new(7).scan_codex();
-    let codex_30_summary = CostScanner::new(30).scan_codex();
-    let claude_7_summary = CostScanner::new(7).scan_claude();
-    let claude_30_summary = CostScanner::new(30).scan_claude();
+    // Upstream 0.55.0 #3105: independent provider baselines load in parallel.
+    // Keep each provider's 7d/30d scans serial so they can safely share that
+    // provider's incremental cache, while Codex and Claude run concurrently.
+    let ((codex_7_summary, codex_30_summary), (claude_7_summary, claude_30_summary)) =
+        std::thread::scope(|scope| {
+            let codex = scope.spawn(|| {
+                (
+                    CostScanner::new(7).scan_codex(),
+                    CostScanner::new(30).scan_codex(),
+                )
+            });
+            let claude = scope.spawn(|| {
+                (
+                    CostScanner::new(7).scan_claude(),
+                    CostScanner::new(30).scan_claude(),
+                )
+            });
+            (
+                codex.join().expect("Codex spend scan worker panicked"),
+                claude.join().expect("Claude spend scan worker panicked"),
+            )
+        });
 
     let codex_7_contract = build_local_spend_contract_from_summary(
         "codex",

@@ -208,10 +208,16 @@ impl Provider for CursorProvider {
             // instead of "Source mode 'Cli' not supported" (#212).
             SourceMode::Auto | SourceMode::Web | SourceMode::Cli => {
                 match self.fetch_web_usage(ctx).await {
-                    Ok((
-                        (primary, secondary, model_specific, cost, email, plan_type, grok_bot),
-                        token_report,
-                    )) => {
+                    Ok((result, token_report)) => {
+                        let api::CursorUsageResult {
+                            primary,
+                            secondary,
+                            model_specific,
+                            cost,
+                            email,
+                            plan_type,
+                            grok_bot,
+                        } = result;
                         let mut usage = Self::build_usage_snapshot(
                             primary,
                             secondary,

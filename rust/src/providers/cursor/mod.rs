@@ -4,6 +4,7 @@
 
 mod api;
 mod app_auth;
+pub mod local_csv;
 mod token_cost;
 
 use async_trait::async_trait;

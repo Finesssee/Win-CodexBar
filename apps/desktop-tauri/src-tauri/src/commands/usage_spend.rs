@@ -311,6 +311,23 @@ fn build_usage_spend_summary(
                     cached_spend(cached_snapshot)
                 }
             }
+            "cursor" => {
+                let seven = codexbar::providers::cursor::local_csv::summarize(7);
+                let thirty = codexbar::providers::cursor::local_csv::summarize(30);
+                if thirty.row_count > 0 {
+                    SpendValues {
+                        seven_day: (seven.row_count > 0).then_some(seven.total_cost_usd),
+                        thirty_day: Some(thirty.total_cost_usd),
+                        seven_day_tokens: (seven.row_count > 0).then_some(seven.total_tokens),
+                        thirty_day_tokens: Some(thirty.total_tokens),
+                        source: "local Cursor tokscale cache".to_string(),
+                        refreshing: false,
+                        stale_updated_at: None,
+                    }
+                } else {
+                    cached_spend(cached_snapshot)
+                }
+            }
             "grok" => {
                 let seven = codexbar::providers::grok::local_sessions::summarize(7);
                 let thirty = codexbar::providers::grok::local_sessions::summarize(30);

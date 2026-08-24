@@ -53,7 +53,9 @@ pub(super) async fn fetch(
                     .map(str::to_string)
             })
             .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(ProviderError::Other(format!("OpenCode Go API error: {message}")));
+        return Err(ProviderError::Other(format!(
+            "OpenCode Go API error: {message}"
+        )));
     }
     let usage = parse_usage_text(&body, Utc::now())?;
     Ok(ProviderFetchResult::new(usage, source_label))
@@ -65,10 +67,20 @@ fn parse_usage_text(text: &str, now: DateTime<Utc>) -> Result<UsageSnapshot, Pro
     let usage = value.get("usage").unwrap_or(&value);
     let rolling = api_window(usage, &["rolling", "rollingUsage", "rolling_usage"], now)
         .ok_or_else(|| ProviderError::Parse("Missing rolling usage window".to_string()))?;
-    let mut snapshot = UsageSnapshot::new(RateWindow::with_details(rolling.0, Some(300), Some(rolling.1), None))
-        .with_login_method("OpenCode Go");
+    let mut snapshot = UsageSnapshot::new(RateWindow::with_details(
+        rolling.0,
+        Some(300),
+        Some(rolling.1),
+        None,
+    ))
+    .with_login_method("OpenCode Go");
     if let Some(weekly) = api_window(usage, &["weekly", "weeklyUsage", "weekly_usage"], now) {
-        snapshot = snapshot.with_secondary(RateWindow::with_details(weekly.0, Some(10080), Some(weekly.1), None));
+        snapshot = snapshot.with_secondary(RateWindow::with_details(
+            weekly.0,
+            Some(10080),
+            Some(weekly.1),
+            None,
+        ));
     }
     if let Some(monthly) = api_window(usage, &["monthly", "monthlyUsage", "monthly_usage"], now) {
         snapshot = snapshot.with_tertiary(RateWindow::with_details(
@@ -81,24 +93,53 @@ fn parse_usage_text(text: &str, now: DateTime<Utc>) -> Result<UsageSnapshot, Pro
     Ok(snapshot)
 }
 
-fn api_window(usage: &serde_json::Value, names: &[&str], now: DateTime<Utc>) -> Option<(f64, DateTime<Utc>)> {
+fn api_window(
+    usage: &serde_json::Value,
+    names: &[&str],
+    now: DateTime<Utc>,
+) -> Option<(f64, DateTime<Utc>)> {
     let object = names.iter().find_map(|name| usage.get(*name))?;
-    let mut percent = ["percent", "usagePercent", "usedPercent", "percentUsed", "utilization"]
-        .into_iter()
-        .find_map(|key| object.get(key).and_then(|value| value.as_f64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))))?;
-    if (0.0..=1.0).contains(&percent) { percent *= 100.0; }
+    let mut percent = [
+        "percent",
+        "usagePercent",
+        "usedPercent",
+        "percentUsed",
+        "utilization",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        object.get(key).and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        })
+    })?;
+    if (0.0..=1.0).contains(&percent) {
+        percent *= 100.0;
+    }
     percent = percent.clamp(0.0, 100.0);
-    let reset = ["resetInSec", "resetInSeconds", "resetSeconds", "reset_in_sec"]
-        .into_iter()
-        .find_map(|key| object.get(key).and_then(|value| value.as_i64().or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))))
-        .map(|seconds| now + chrono::Duration::seconds(seconds.max(0)))
-        .or_else(|| {
-            ["resetsAt", "resetAt", "resets_at", "reset_at"]
-                .into_iter()
-                .find_map(|key| object.get(key).and_then(serde_json::Value::as_str))
-                .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                .map(|timestamp| timestamp.with_timezone(&Utc))
-        })?;
+    let reset = [
+        "resetInSec",
+        "resetInSeconds",
+        "resetSeconds",
+        "reset_in_sec",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        object.get(key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        })
+    })
+    .map(|seconds| now + chrono::Duration::seconds(seconds.max(0)))
+    .or_else(|| {
+        ["resetsAt", "resetAt", "resets_at", "reset_at"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(serde_json::Value::as_str))
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            .map(|timestamp| timestamp.with_timezone(&Utc))
+    })?;
     Some((percent, reset))
 }
 
@@ -108,14 +149,22 @@ mod tests {
 
     #[test]
     fn api_key_normalization_matches_upstream_settings_reader() {
-        assert_eq!(normalized_api_key(Some("  go_test  ")).as_deref(), Some("go_test"));
-        assert_eq!(normalized_api_key(Some("'go_quoted'")).as_deref(), Some("go_quoted"));
+        assert_eq!(
+            normalized_api_key(Some("  go_test  ")).as_deref(),
+            Some("go_test")
+        );
+        assert_eq!(
+            normalized_api_key(Some("'go_quoted'")).as_deref(),
+            Some("go_quoted")
+        );
         assert_eq!(normalized_api_key(Some("   ")), None);
     }
 
     #[test]
     fn parses_public_usage_api_windows() {
-        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:00Z").unwrap().with_timezone(&Utc);
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let text = r#"{"usage":{"rolling":{"percent":12,"resetsAt":"2026-08-12T02:00:00.000Z"},"weekly":{"percent":8,"resetsAt":"2026-08-18T00:00:00.000Z"},"monthly":{"percent":35,"resetsAt":"2026-09-01T00:00:00.000Z"}}}"#;
         let snapshot = parse_usage_text(text, now).unwrap();
         assert!((snapshot.primary.used_percent - 12.0).abs() < 0.001);

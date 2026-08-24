@@ -1,9 +1,14 @@
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use serde_json::Value;
+
+const MAX_SESSION_FILES: usize = 2048;
+const MAX_SESSION_FILE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSessionSummary {
@@ -80,6 +85,9 @@ fn tokscale_paths(home: Option<&Path>) -> Vec<PathBuf> {
         .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
         .collect();
     paths.sort();
+    if paths.len() > MAX_SESSION_FILES {
+        paths.drain(..paths.len() - MAX_SESSION_FILES);
+    }
     paths
 }
 
@@ -90,17 +98,18 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> LocalSes
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();
 
-    for path in paths {
-        let Ok(text) = fs::read_to_string(path) else {
+    for path in paths.iter().take(MAX_SESSION_FILES) {
+        let Ok(file) = File::open(path) else {
             continue;
         };
+        let mut reader = BufReader::new(file);
+        let mut remaining = MAX_SESSION_FILE_BYTES;
         let mut path_had_usage = false;
-        for line in text.lines() {
-            let line = line.trim();
+        while let Ok(Some(line)) = read_bounded_jsonl_line(&mut reader, &mut remaining) {
             if line.is_empty() {
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<Value>(line) else {
+            let Ok(value) = serde_json::from_slice::<Value>(&line) else {
                 continue;
             };
             let kind = value.get("type").and_then(Value::as_str);
@@ -151,6 +160,51 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> LocalSes
     LocalSessionSummary {
         total_tokens,
         session_count: sessions_with_usage.len(),
+    }
+}
+
+fn read_bounded_jsonl_line<R: BufRead>(
+    reader: &mut R,
+    remaining_file_bytes: &mut usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    if *remaining_file_bytes == 0 {
+        return Ok(None);
+    }
+    let mut line = Vec::new();
+    let mut saw_input = false;
+    let mut discarding = false;
+
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(saw_input.then_some(if discarding { Vec::new() } else { line }));
+        }
+        let bounded_len = chunk.len().min(*remaining_file_bytes);
+        if bounded_len == 0 {
+            return Ok(None);
+        }
+        let bounded = &chunk[..bounded_len];
+        let newline = bounded.iter().position(|byte| *byte == b'\n');
+        let segment_end = newline.unwrap_or(bounded.len());
+        let segment = &bounded[..segment_end];
+        saw_input = saw_input || !segment.is_empty() || newline.is_some();
+        if !discarding {
+            if line.len().saturating_add(segment.len()) <= MAX_JSONL_LINE_BYTES {
+                line.extend_from_slice(segment);
+            } else {
+                line.clear();
+                discarding = true;
+            }
+        }
+        let consumed = segment_end + usize::from(newline.is_some());
+        reader.consume(consumed);
+        *remaining_file_bytes = remaining_file_bytes.saturating_sub(consumed);
+        if newline.is_some() {
+            return Ok(Some(if discarding { Vec::new() } else { line }));
+        }
+        if *remaining_file_bytes == 0 {
+            return Ok(Some(Vec::new()));
+        }
     }
 }
 
@@ -221,6 +275,24 @@ mod tests {
             ),
         )
         .unwrap();
+        let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
+        let summary = summarize_paths(&[path], now, 7);
+        assert_eq!(summary.total_tokens, 15);
+        assert_eq!(summary.session_count, 1);
+    }
+
+    #[test]
+    fn oversized_jsonl_line_is_discarded_and_next_usage_row_is_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-a.jsonl");
+        let mut text = format!(
+            r#"{{"type":"usage","padding":"{}"}}"#,
+            "x".repeat(MAX_JSONL_LINE_BYTES + 32)
+        );
+        text.push('\n');
+        text.push_str(r#"{"type":"usage","timestamp":1787572800000,"input":10,"output":5}"#);
+        text.push('\n');
+        fs::write(&path, text).unwrap();
         let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
         let summary = summarize_paths(&[path], now, 7);
         assert_eq!(summary.total_tokens, 15);

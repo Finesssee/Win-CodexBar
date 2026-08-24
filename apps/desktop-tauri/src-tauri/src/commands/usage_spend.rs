@@ -141,7 +141,18 @@ fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -
             let cost = snapshot
                 .cost
                 .as_ref()
-                .map(|cost| format!("{:.8}:{}", cost.used, cost.period))
+                .map(|cost| {
+                    let daily = cost
+                        .daily
+                        .iter()
+                        .map(|point| format!("{}:{:.8}", point.day, point.amount))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        "{:.8}:{:?}:{:?}:{}:{}:{}",
+                        cost.used, cost.limit, cost.balance, cost.currency_code, cost.period, daily
+                    )
+                })
                 .unwrap_or_default();
             format!(
                 "{}:{}:{}:{}",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getSettingsSnapshot,
@@ -180,6 +181,33 @@ export default function UsageSpendTab(_props: TabProps) {
   useEffect(() => {
     load(false);
   }, [load]);
+
+  // Upstream 0.55.0 #3106 parity: provider token/cost publications refresh
+  // Usage & Spend silently while the pane is open. Coalesce bursts so a
+  // multi-provider refresh does not trigger one dashboard rebuild per event.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    void listen("provider-updated", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void getUsageSpendSummary({ historyDays: selectedDays })
+          .then((data) => {
+            if (!cancelled) setSummary(data);
+          })
+          .catch(() => {});
+      }, 200);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      unlisten?.();
+    };
+  }, [selectedDays]);
 
   const onShare = useCallback(() => {
     setShareError(null);

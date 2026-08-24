@@ -68,7 +68,7 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> CursorLo
                     .saturating_add(r.write)
                     .saturating_add(r.output),
             );
-            out.total_tokens = out.total_tokens + t;
+            out.total_tokens += t;
             out.total_cost_usd += r.cost;
             out.row_count += 1;
         }
@@ -150,7 +150,7 @@ fn money(s: &str) -> f64 {
     {
         0.0
     } else {
-        s.replace('$', "").replace(',', "").parse().unwrap_or(0.0)
+        s.replace(['$', ','], "").parse().unwrap_or(0.0)
     }
 }
 fn date(s: &str) -> Option<DateTime<Utc>> {

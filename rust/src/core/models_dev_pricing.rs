@@ -213,14 +213,14 @@ struct ModelsDevCatalog {
 /// Loading this once avoids repeating cache metadata checks for every row.
 #[derive(Debug, Clone)]
 pub struct ModelsDevPricingSnapshot {
-    catalog: Option<ModelsDevCatalog>,
+    artifact: Option<Arc<ModelsDevCacheArtifact>>,
 }
 
 impl ModelsDevPricingSnapshot {
     pub fn lookup(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
-        self.catalog
+        self.artifact
             .as_ref()
-            .and_then(|catalog| catalog.lookup(provider_id, model_id))
+            .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
     }
 }
 
@@ -732,11 +732,8 @@ static REFRESH_COORDINATOR: LazyLock<ModelsDevRefreshCoordinator> =
 /// Loads the cached models.dev catalog once for bulk-pricing callers.
 pub fn pricing_snapshot() -> ModelsDevPricingSnapshot {
     let load = ModelsDevCache::load(SystemTime::now(), None);
-    let catalog = (!load.is_stale)
-        .then_some(load.artifact)
-        .flatten()
-        .map(|artifact| artifact.catalog.clone());
-    ModelsDevPricingSnapshot { catalog }
+    let artifact = (!load.is_stale).then_some(load.artifact).flatten();
+    ModelsDevPricingSnapshot { artifact }
 }
 
 /// Looks up a cached models.dev price for a provider/model pair.

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -76,97 +76,191 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> CursorLo
     out
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CsvSchema {
+    date: usize,
+    model: usize,
+    input_with_cache: usize,
+    input_without_cache: usize,
+    cache_read: usize,
+    output: usize,
+    total_tokens: Option<usize>,
+    cost: usize,
+}
+
+impl CsvSchema {
+    fn from_header(header: &[String]) -> Option<Self> {
+        let index = |name: &str| {
+            header
+                .iter()
+                .position(|column| normalize_header(column) == name)
+        };
+        Some(Self {
+            date: index("date")?,
+            model: index("model")?,
+            input_with_cache: index("inputwithcache")?,
+            input_without_cache: index("inputwithoutcache")?,
+            cache_read: index("cacheread")?,
+            output: index("output")?,
+            total_tokens: index("totaltokens"),
+            cost: index("cost")?,
+        })
+    }
+
+    fn max_required_index(self) -> usize {
+        [
+            self.date,
+            self.model,
+            self.input_with_cache,
+            self.input_without_cache,
+            self.cache_read,
+            self.output,
+            self.cost,
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+    }
+}
+
 fn parse_file(path: &Path) -> Vec<Row> {
     let Ok(text) = fs::read_to_string(path) else {
         return vec![];
     };
-    let mut ls = text.lines().filter(|l| !l.trim().is_empty());
-    let Some(h) = ls.next() else { return vec![] };
-    let hdr = csv(h);
-    let kind = hdr.iter().any(|c| c.eq_ignore_ascii_case("kind"));
-    let (model, iw, io, read, out, cost) = if kind && hdr.len() >= 12 {
-        (4, 6, 7, 8, 9, 11)
-    } else if kind {
-        (2, 4, 5, 6, 7, 9)
-    } else {
-        (1, 2, 3, 4, 5, 7)
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let Some(header_line) = lines.next() else {
+        return vec![];
     };
-    let ti = cost - 1;
-    let authoritative = hdr
-        .get(ti)
-        .is_some_and(|c| c.to_ascii_lowercase().contains("total"));
-    ls.filter_map(|l| {
-        let c = csv(l);
-        if c.len() <= cost || c.get(model)?.trim().is_empty() {
-            return None;
-        }
-        let iw = n(c.get(iw)?);
-        let input = n(c.get(io)?);
-        let read = n(c.get(read)?);
-        let output = n(c.get(out)?);
-        let write = iw.saturating_sub(input);
-        if input == 0 && read == 0 && write == 0 && output == 0 {
-            return None;
-        }
-        Some(Row {
-            at: date(c.first()?)?,
-            input,
-            read,
-            write,
-            output,
-            total: authoritative.then(|| n(c.get(ti).map(String::as_str).unwrap_or("0"))),
-            cost: money(c.get(cost)?),
-        })
-    })
-    .collect()
+    let Some(header) = parse_csv_line(header_line) else {
+        return vec![];
+    };
+    let Some(schema) = CsvSchema::from_header(&header) else {
+        return vec![];
+    };
+    lines.filter_map(|line| parse_row(line, schema)).collect()
 }
 
-fn csv(line: &str) -> Vec<String> {
-    let mut v = vec![];
-    let mut s = String::new();
-    let mut q = false;
-    for ch in line.chars() {
-        match ch {
-            '"' => q = !q,
-            ',' if !q => {
-                v.push(s.trim().to_string());
-                s.clear()
-            }
-            _ => s.push(ch),
-        }
-    }
-    v.push(s.trim().to_string());
-    v
-}
-fn n(s: &str) -> u64 {
-    s.trim().replace(',', "").parse().unwrap_or(0)
-}
-fn money(s: &str) -> f64 {
-    let s = s.trim();
-    if s.is_empty()
-        || s == "-"
-        || s.eq_ignore_ascii_case("included")
-        || s.eq_ignore_ascii_case("nan")
+fn parse_row(line: &str, schema: CsvSchema) -> Option<Row> {
+    let columns = parse_csv_line(line)?;
+    if columns.len() <= schema.max_required_index() || columns.get(schema.model)?.trim().is_empty()
     {
-        0.0
-    } else {
-        s.replace(['$', ','], "").parse().unwrap_or(0.0)
+        return None;
     }
+    let input_with_cache = parse_u64(columns.get(schema.input_with_cache)?)?;
+    let input = parse_u64(columns.get(schema.input_without_cache)?)?;
+    let read = parse_u64(columns.get(schema.cache_read)?)?;
+    let output = parse_u64(columns.get(schema.output)?)?;
+    let write = input_with_cache.saturating_sub(input);
+    if input == 0 && read == 0 && write == 0 && output == 0 {
+        return None;
+    }
+    let total = match schema.total_tokens {
+        Some(index) => parse_optional_u64(columns.get(index)?)?,
+        None => None,
+    };
+    Some(Row {
+        at: parse_date(columns.get(schema.date)?)?,
+        input,
+        read,
+        write,
+        output,
+        total,
+        cost: parse_cost(columns.get(schema.cost)?)?,
+    })
 }
-fn date(s: &str) -> Option<DateTime<Utc>> {
-    let s = s.trim();
-    if let Ok(v) = DateTime::parse_from_rfc3339(s) {
-        return Some(v.with_timezone(&Utc));
-    }
-    for f in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
-        if let Ok(v) = NaiveDateTime::parse_from_str(s, f) {
-            return Some(v.and_utc());
+
+fn normalize_header(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn parse_csv_line(line: &str) -> Option<Vec<String>> {
+    let mut columns = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+    let mut closed_quote = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                current.push('"');
+            }
+            '"' if quoted => {
+                quoted = false;
+                closed_quote = true;
+            }
+            '"' if current.trim().is_empty() && !closed_quote => quoted = true,
+            ',' if !quoted => {
+                columns.push(current.trim().to_string());
+                current.clear();
+                closed_quote = false;
+            }
+            ch if closed_quote && !ch.is_whitespace() => return None,
+            ch => current.push(ch),
         }
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+    if quoted {
+        return None;
+    }
+    columns.push(current.trim().to_string());
+    Some(columns)
+}
+
+fn parse_u64(raw: &str) -> Option<u64> {
+    let normalized = raw.trim().replace(',', "");
+    (!normalized.is_empty())
+        .then(|| normalized.parse::<u64>().ok())
+        .flatten()
+}
+
+fn parse_optional_u64(raw: &str) -> Option<Option<u64>> {
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        return Some(None);
+    }
+    parse_u64(normalized).map(Some)
+}
+
+fn parse_cost(raw: &str) -> Option<f64> {
+    let normalized = raw.trim();
+    if normalized.is_empty()
+        || normalized == "-"
+        || normalized.eq_ignore_ascii_case("included")
+        || normalized.eq_ignore_ascii_case("nan")
+    {
+        return Some(0.0);
+    }
+    normalized
+        .replace(['$', ','], "")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn parse_date(raw: &str) -> Option<DateTime<Utc>> {
+    let raw = raw.trim();
+    if let Ok(value) = DateTime::parse_from_rfc3339(raw) {
+        return Some(value.with_timezone(&Utc));
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(value) = NaiveDateTime::parse_from_str(raw, format) {
+            return Some(value.and_utc());
+        }
+    }
+    let noon = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
         .ok()?
-        .and_hms_opt(12, 0, 0)
-        .map(|v| v.and_utc())
+        .and_hms_opt(12, 0, 0)?;
+    Some(
+        Local
+            .from_local_datetime(&noon)
+            .single()
+            .map(|value| value.with_timezone(&Utc))
+            .unwrap_or_else(|| noon.and_utc()),
+    )
 }
 
 #[cfg(test)]
@@ -203,5 +297,36 @@ mod tests {
         assert_eq!(x.row_count, 1);
         assert_eq!(x.total_tokens, 20);
         assert!((x.total_cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn header_names_drive_schema_and_quoted_fields_are_decoded() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("usage.csv");
+        fs::write(
+            &p,
+            r#"Cost,Output,Model,Date,Cache Read,Input Without Cache,Input With Cache,Total Tokens
+1.50,2,"model, ""quoted""",2026-08-24T10:00:00Z,1,8,10,20
+"#,
+        )
+        .unwrap();
+        let rows = parse_file(&p);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].total, Some(20));
+        assert!((rows[0].cost - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn malformed_required_numeric_field_rejects_row_instead_of_becoming_zero() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("usage.csv");
+        fs::write(
+            &p,
+            "Date,Model,Input With Cache,Input Without Cache,Cache Read,Output,Total Tokens,Cost
+2026-08-24,test-model,not-a-number,8,1,2,20,0.50
+",
+        )
+        .unwrap();
+        assert!(parse_file(&p).is_empty());
     }
 }

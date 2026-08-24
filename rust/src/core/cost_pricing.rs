@@ -757,6 +757,24 @@ impl CostUsagePricing {
         output_tokens: u64,
         pricing_date: NaiveDate,
     ) -> Option<f64> {
+        Self::codex_cost_usd_at_date_with_pricing_snapshot(
+            model,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            pricing_date,
+            None,
+        )
+    }
+
+    pub fn codex_cost_usd_at_date_with_pricing_snapshot(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: NaiveDate,
+        pricing_snapshot: Option<&models_dev_pricing::ModelsDevPricingSnapshot>,
+    ) -> Option<f64> {
         let key = Self::normalize_codex_model(model);
         let cutoff = NaiveDate::from_ymd_opt(2026, 7, 30).expect("valid pricing cutoff");
         if pricing_date < cutoff {
@@ -779,7 +797,13 @@ impl CostUsagePricing {
                 ));
             }
         }
-        Self::codex_cost_usd(model, input_tokens, cached_input_tokens, output_tokens)
+        Self::codex_cost_usd_with_pricing_snapshot(
+            model,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            pricing_snapshot,
+        )
     }
 
     pub fn codex_fast_cost_usd_at_date(
@@ -810,6 +834,22 @@ impl CostUsagePricing {
         input_tokens: u64,
         cached_input_tokens: u64,
         output_tokens: u64,
+    ) -> Option<f64> {
+        Self::codex_cost_usd_with_pricing_snapshot(
+            model,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            None,
+        )
+    }
+
+    pub fn codex_cost_usd_with_pricing_snapshot(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_snapshot: Option<&models_dev_pricing::ModelsDevPricingSnapshot>,
     ) -> Option<f64> {
         let key = Self::normalize_codex_model(model);
         // Model-less / deliberately unattributed usage stays unpriced even if a
@@ -861,7 +901,10 @@ impl CostUsagePricing {
             }
             None => ("openai", model),
         };
-        let pricing = models_dev_pricing::lookup(provider_id, lookup_model)?;
+        let pricing = match pricing_snapshot {
+            Some(snapshot) => snapshot.lookup(provider_id, lookup_model),
+            None => models_dev_pricing::lookup(provider_id, lookup_model),
+        }?;
         let use_tier = pricing
             .threshold_tokens
             .is_some_and(|threshold| input_tokens > threshold);

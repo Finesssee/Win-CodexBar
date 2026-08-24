@@ -149,6 +149,9 @@ fn aggregate(
     let mut daily: BTreeMap<String, DailyAccumulator> = BTreeMap::new();
     let mut known_cost = 0.0;
     let mut saw_known_cost = false;
+    // Upstream 0.55.0 #3136: resolve the dynamic pricing catalog once per
+    // aggregate instead of re-checking its cache metadata for every usage row.
+    let pricing_snapshot = crate::core::pricing_snapshot();
 
     for entry in &entries {
         if let Some(conversation) = entry.conversation_id.as_ref() {
@@ -163,7 +166,7 @@ fn aggregate(
         token_mix.reasoning_tokens =
             add_optional(token_mix.reasoning_tokens, entry.reasoning_tokens);
 
-        let cost = entry_cost(entry, custom);
+        let cost = entry_cost(entry, custom, &pricing_snapshot);
         match entry.usage_status.as_str() {
             "reported" if cost.is_some() => coverage.priced = coverage.priced.saturating_add(1),
             "estimated" if cost.is_some() => {
@@ -273,7 +276,11 @@ fn aggregate(
     })
 }
 
-fn entry_cost(entry: &OpenCodexEntry, custom: &CustomPricing) -> Option<f64> {
+fn entry_cost(
+    entry: &OpenCodexEntry,
+    custom: &CustomPricing,
+    pricing_snapshot: &crate::core::ModelsDevPricingSnapshot,
+) -> Option<f64> {
     if !matches!(entry.usage_status.as_str(), "reported" | "estimated") {
         return None;
     }
@@ -293,12 +300,13 @@ fn entry_cost(entry: &OpenCodexEntry, custom: &CustomPricing) -> Option<f64> {
         return rates.cost_parts(input, output, cache_read, cache_write);
     }
     let pricing_model = pricing_model(entry)?;
-    CostUsagePricing::codex_cost_usd_at_date(
+    CostUsagePricing::codex_cost_usd_at_date_with_pricing_snapshot(
         &pricing_model,
         input,
         cache_read,
         output,
         entry.timestamp.date_naive(),
+        Some(pricing_snapshot),
     )
 }
 
@@ -625,7 +633,8 @@ mod tests {
     #[test]
     fn opencodex_uses_request_day_for_historical_gpt56_pricing() {
         let entry = entry("openai", "gpt-5.6-terra");
-        let cost = entry_cost(&entry, &CustomPricing::default()).unwrap();
+        let pricing_snapshot = crate::core::pricing_snapshot();
+        let cost = entry_cost(&entry, &CustomPricing::default(), &pricing_snapshot).unwrap();
         let expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
         assert!((cost - expected).abs() < 1e-12);
     }

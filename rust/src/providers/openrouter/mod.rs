@@ -194,11 +194,13 @@ impl OpenRouterProvider {
     async fn fetch_activity_cost(management_key: &str) -> Result<CostSnapshot, ProviderError> {
         let client = Self::build_client(OPENROUTER_KEY_TIMEOUT)?;
         let now = Utc::now();
-        let today = now.date_naive().format("%Y-%m-%d").to_string();
+        let latest_completed = (now.date_naive() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
         let history = Self::fetch_activity_payload(&client, management_key, None).await?;
-        let today_payload =
-            Self::fetch_activity_payload(&client, management_key, Some(&today)).await?;
-        activity::parse_activity_cost(&[history, today_payload], now)
+        let latest_completed_payload =
+            Self::fetch_activity_payload(&client, management_key, Some(&latest_completed)).await?;
+        activity::parse_activity_cost(&[history, latest_completed_payload], now)
     }
 
     async fn fetch_activity_payload(

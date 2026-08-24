@@ -11,8 +11,8 @@ pub(super) fn parse_activity_cost(
     payloads: &[Value],
     now: DateTime<Utc>,
 ) -> Result<CostSnapshot, ProviderError> {
-    let today = now.date_naive();
-    let cutoff = today - Duration::days(29);
+    let latest_completed = now.date_naive() - Duration::days(1);
+    let cutoff = latest_completed - Duration::days(29);
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut daily: BTreeMap<String, f64> = BTreeMap::new();
     let mut total = 0.0;
@@ -52,7 +52,7 @@ pub(super) fn parse_activity_cost(
                     "OpenRouter activity.data[{index}].date must be YYYY-MM-DD"
                 ))
             })?;
-            if parsed_day > today || parsed_day < cutoff {
+            if parsed_day > latest_completed || parsed_day < cutoff {
                 continue;
             }
             let model = object
@@ -180,16 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn aggregates_metered_and_byok_spend_without_double_counting_today() {
+    fn aggregates_metered_and_byok_spend_without_double_counting_latest_completed_day() {
         let history = serde_json::json!({"data":[
-            {"date":"2026-08-21","model":"m1","prompt_tokens":10,"completion_tokens":5,"reasoning_tokens":2,"requests":1,"usage":1.25,"byok_usage_inference":0.25},
-            {"date":"2026-08-22","model":"m2","prompt_tokens":20,"completion_tokens":10,"reasoning_tokens":0,"requests":2,"usage":2.0,"byok_usage_inference":null}
+            {"date":"2026-08-20","model":"m0","prompt_tokens":5,"completion_tokens":2,"reasoning_tokens":0,"requests":1,"usage":0.5,"byok_usage_inference":0.0},
+            {"date":"2026-08-21","model":"m1","prompt_tokens":10,"completion_tokens":5,"reasoning_tokens":2,"requests":1,"usage":1.25,"byok_usage_inference":0.25}
         ]});
-        let today = serde_json::json!({"data":[
-            {"date":"2026-08-22","model":"m2","prompt_tokens":20,"completion_tokens":10,"reasoning_tokens":0,"requests":2,"usage":2.0,"byok_usage_inference":null}
+        let latest_completed = serde_json::json!({"data":[
+            {"date":"2026-08-21","model":"m1","prompt_tokens":10,"completion_tokens":5,"reasoning_tokens":2,"requests":1,"usage":1.25,"byok_usage_inference":0.25}
         ]});
-        let cost = parse_activity_cost(&[history, today], now()).unwrap();
-        assert!((cost.used - 3.5).abs() < 1e-12);
+        let cost = parse_activity_cost(&[history, latest_completed], now()).unwrap();
+        assert!((cost.used - 2.0).abs() < 1e-12);
         assert_eq!(cost.daily.len(), 2);
         assert_eq!(cost.period, "Last 30 days (UTC)");
     }
@@ -197,10 +197,10 @@ mod tests {
     #[test]
     fn rejects_conflicting_duplicate_activity_rows() {
         let a = serde_json::json!({"data":[
-            {"date":"2026-08-22","model":"m","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
+            {"date":"2026-08-21","model":"m","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
         ]});
         let b = serde_json::json!({"data":[
-            {"date":"2026-08-22","model":"m","prompt_tokens":11,"completion_tokens":5,"requests":1,"usage":1.0}
+            {"date":"2026-08-21","model":"m","prompt_tokens":11,"completion_tokens":5,"requests":1,"usage":1.0}
         ]});
         assert!(parse_activity_cost(&[a, b], now()).is_err());
     }
@@ -208,8 +208,9 @@ mod tests {
     #[test]
     fn filters_rows_outside_exact_30_day_window() {
         let payload = serde_json::json!({"data":[
-            {"date":"2026-07-23","model":"old","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":99.0},
-            {"date":"2026-07-24","model":"in","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
+            {"date":"2026-07-22","model":"old","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":99.0},
+            {"date":"2026-07-23","model":"in","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0},
+            {"date":"2026-08-22","model":"today","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":99.0}
         ]});
         let cost = parse_activity_cost(&[payload], now()).unwrap();
         assert_eq!(cost.used, 1.0);

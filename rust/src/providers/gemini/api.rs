@@ -55,7 +55,17 @@ impl GeminiApi {
             .clone()
             .ok_or_else(|| ProviderError::AuthRequired)?;
 
+        let hosted_domain = creds
+            .id_token
+            .as_deref()
+            .and_then(extract_hosted_domain_from_jwt);
         let code_assist = self.load_code_assist_status(&access_token).await;
+        if is_consumer_client_unsupported(&code_assist, hosted_domain.as_deref()) {
+            return Err(ProviderError::Other(
+                "Gemini consumer-tier access has been retired by Google. Enable the Antigravity provider or switch to a supported Gemini Code Assist account."
+                    .to_string(),
+            ));
+        }
 
         // Fetch quota
         let response = self
@@ -87,10 +97,6 @@ impl GeminiApi {
         // Since we use OAuth, we can use the credentials we already loaded for email extraction
         let (primary, model_specific, email) =
             self.parse_quota_response(quota_response, Some(&creds))?;
-        let hosted_domain = creds
-            .id_token
-            .as_deref()
-            .and_then(extract_hosted_domain_from_jwt);
         let plan = resolve_account_plan(&code_assist, hosted_domain.as_deref());
 
         Ok((primary, model_specific, email, plan))
@@ -536,6 +542,7 @@ struct QuotaBucket {
 struct CodeAssistStatus {
     tier: Option<GeminiUserTier>,
     paid_tier_name: Option<String>,
+    consumer_client_unsupported: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -568,10 +575,39 @@ fn parse_code_assist_status(body: &str) -> CodeAssistStatus {
         .map(str::to_owned)
         .filter(|name| !name.is_empty());
 
+    let consumer_client_unsupported = json
+        .get("ineligibleTiers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tiers| {
+            tiers.iter().any(|entry| {
+                let tier_id = entry
+                    .get("tier")
+                    .or_else(|| entry.get("id"))
+                    .and_then(|tier| tier.get("id").or(Some(tier)))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let reason = entry
+                    .get("reason")
+                    .or_else(|| entry.get("ineligibilityReason"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                tier_id.eq_ignore_ascii_case("free-tier")
+                    && reason.eq_ignore_ascii_case("UNSUPPORTED_CLIENT")
+            })
+        });
+
     CodeAssistStatus {
         tier,
         paid_tier_name,
+        consumer_client_unsupported,
     }
+}
+
+fn is_consumer_client_unsupported(status: &CodeAssistStatus, hosted_domain: Option<&str>) -> bool {
+    status.consumer_client_unsupported
+        && status.paid_tier_name.is_none()
+        && hosted_domain.is_none()
+        && !matches!(status.tier, Some(GeminiUserTier::Standard))
 }
 
 fn resolve_account_plan(status: &CodeAssistStatus, hosted_domain: Option<&str>) -> Option<String> {
@@ -668,6 +704,42 @@ mod tests {
             resolve_account_plan(&standard, None),
             Some("Plus".to_string())
         );
+    }
+
+    #[test]
+    fn consumer_shutdown_signal_excludes_paid_and_workspace_accounts() {
+        let shutdown = parse_code_assist_status(
+            r#"{
+                "ineligibleTiers": [
+                    {"tier":{"id":"free-tier"},"reason":"UNSUPPORTED_CLIENT"}
+                ]
+            }"#,
+        );
+        assert!(is_consumer_client_unsupported(&shutdown, None));
+        assert!(!is_consumer_client_unsupported(
+            &shutdown,
+            Some("example.com")
+        ));
+
+        let paid = parse_code_assist_status(
+            r#"{
+                "paidTier":{"name":"Gemini Code Assist Standard"},
+                "ineligibleTiers":[
+                    {"tier":{"id":"free-tier"},"reason":"UNSUPPORTED_CLIENT"}
+                ]
+            }"#,
+        );
+        assert!(!is_consumer_client_unsupported(&paid, None));
+
+        let standard = parse_code_assist_status(
+            r#"{
+                "currentTier":{"id":"standard-tier"},
+                "ineligibleTiers":[
+                    {"tier":{"id":"free-tier"},"reason":"UNSUPPORTED_CLIENT"}
+                ]
+            }"#,
+        );
+        assert!(!is_consumer_client_unsupported(&standard, None));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 
 use crate::core::{ProviderError, RateWindow, UsageSnapshot};
@@ -244,12 +244,11 @@ fn read_identity(path: &Path) -> Result<KiroIdentity, ProviderError> {
             path.display()
         )));
     }
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let connection = Connection::open_with_flags(path, flags)
-        .map_err(|error| ProviderError::Other(format!("Kiro state database: {error}")))?;
-    connection
-        .busy_timeout(std::time::Duration::from_millis(250))
-        .ok();
+    let connection = crate::core::open_readonly_sqlite_connection(
+        path,
+        crate::core::DEFAULT_SQLITE_BUSY_TIMEOUT,
+    )
+    .map_err(|error| ProviderError::Other(format!("Kiro state database: {error}")))?;
     let token_json: Option<String> = connection
         .query_row(
             "SELECT value FROM auth_kv WHERE key = ?1",

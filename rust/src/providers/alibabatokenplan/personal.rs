@@ -34,8 +34,6 @@ pub(super) async fn fetch_personal_usage(
         sec_token,
         fetch_context,
     };
-    let usage_body = post_personal_api(&context, PERSONAL_USAGE_API, Map::new()).await?;
-
     let mut subscription_params = Map::new();
     subscription_params.insert(
         "commodityCode".into(),
@@ -47,11 +45,65 @@ pub(super) async fn fetch_personal_usage(
     let quota_config_body =
         post_personal_api_optional(&context, PERSONAL_QUOTA_CONFIG_API, Map::new()).await;
 
-    parse_personal_usage(
-        &usage_body,
-        subscription_body.as_deref(),
-        quota_config_body.as_deref(),
-    )
+    const MAX_USAGE_ATTEMPTS: usize = 3;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+    for attempt in 0..MAX_USAGE_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(RETRY_DELAY).await;
+        }
+        let usage_body = post_personal_api(&context, PERSONAL_USAGE_API, Map::new()).await?;
+        match parse_personal_usage(
+            &usage_body,
+            subscription_body.as_deref(),
+            quota_config_body.as_deref(),
+        ) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) if personal_usage_success_without_windows(&usage_body) => {
+                tracing::info!(
+                    attempt = attempt + 1,
+                    max_attempts = MAX_USAGE_ATTEMPTS,
+                    "Alibaba Token Plan Personal usage returned no windows; retrying"
+                );
+                if attempt + 1 == MAX_USAGE_ATTEMPTS {
+                    return Err(ProviderError::Other(
+                        "Alibaba Token Plan usage is temporarily unavailable; it will refresh automatically."
+                            .into(),
+                    ));
+                }
+                let _ = error;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded usage retry loop always returns")
+}
+
+fn personal_usage_success_without_windows(data: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(data) else {
+        return false;
+    };
+    let expanded = expand_json_strings(value);
+    let has_windows =
+        find_object_containing_any_of(&expanded, &["per5HourPercentage", "per1WeekPercentage"])
+            .is_some();
+    if has_windows {
+        return false;
+    }
+    let code_success = expanded
+        .get("code")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|code| code.eq_ignore_ascii_case("SUCCESS") || code == "200");
+    let response_success = expanded
+        .get("successResponse")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error_empty = expanded
+        .get("errorCode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_none_or(str::is_empty);
+    code_success && response_success && error_empty
 }
 
 async fn post_personal_api(
@@ -398,6 +450,32 @@ mod tests {
         assert!(matches!(
             error,
             ProviderError::Other(message) if message.contains("quota service unavailable")
+        ));
+    }
+
+    #[test]
+    fn success_envelope_without_windows_is_transient() {
+        let payload = json!({
+            "code": "SUCCESS",
+            "successResponse": true,
+            "errorCode": "",
+            "data": {"success": true, "httpStatus": 200}
+        });
+        assert!(personal_usage_success_without_windows(
+            payload.to_string().as_bytes()
+        ));
+    }
+
+    #[test]
+    fn success_envelope_with_windows_is_not_transient() {
+        let payload = json!({
+            "code": "SUCCESS",
+            "successResponse": true,
+            "errorCode": "",
+            "data": {"per5HourPercentage": 0.5}
+        });
+        assert!(!personal_usage_success_without_windows(
+            payload.to_string().as_bytes()
         ));
     }
 

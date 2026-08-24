@@ -671,17 +671,28 @@ fn selected_tray_percents(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (f64, Option<f64>) {
-    let primary = crate::usage_metric::selected_usage_window(snapshot, settings).used_percent;
+    let selected = crate::usage_metric::selected_usage_window(snapshot, settings);
+    let primary = display_metric_percent(selected.used_percent, settings.show_as_used);
+
+    let meaningful_count = std::iter::once(&snapshot.primary)
+        .chain(snapshot.secondary.iter())
+        .chain(snapshot.tertiary.iter())
+        .filter(|window| !window.is_informational)
+        .count();
+    if meaningful_count <= 1 {
+        // Upstream #3155: one meaningful quota should occupy the full meter instead
+        // of being rendered beside a reserved/duplicated empty lane. This also
+        // covers providers whose sole real quota arrives in the secondary slot.
+        return (primary, None);
+    }
 
     let secondary = snapshot
         .secondary
         .as_ref()
-        .map(|w| display_metric_percent(w.used_percent, settings.show_as_used));
+        .filter(|window| !window.is_informational)
+        .map(|window| display_metric_percent(window.used_percent, settings.show_as_used));
 
-    (
-        display_metric_percent(primary, settings.show_as_used),
-        secondary,
-    )
+    (primary, secondary)
 }
 
 fn display_metric_percent(used_percent: f64, show_as_used: bool) -> f64 {
@@ -1384,6 +1395,30 @@ mod tests {
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
 
         assert_eq!(primary, 72.0);
+    }
+
+    #[test]
+    fn single_meaningful_secondary_quota_uses_full_single_meter() {
+        let settings = Settings::default();
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), None, None);
+        snapshot.primary.is_informational = true;
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, None);
+    }
+
+    #[test]
+    fn two_meaningful_quotas_keep_two_meter_layout() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::Session);
+        let snapshot = fake_snapshot_with("cursor", "Cursor", 15.0, Some(40.0), None, None);
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 15.0);
+        assert_eq!(secondary, Some(40.0));
     }
 
     #[test]

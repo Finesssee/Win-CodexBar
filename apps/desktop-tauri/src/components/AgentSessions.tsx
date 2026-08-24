@@ -61,7 +61,10 @@ export default function AgentSessions() {
           onClick={() => focus(session)}
         >
           <span>{sessionLabel(session)}</span>
-          <span>
+          <span
+            className="agent-sessions__name"
+            title={session.sessionName ?? session.workspace.projectName ?? session.host}
+          >
             {session.sessionName ?? session.workspace.projectName ?? session.host}
           </span>
           <span>{session.state}</span>

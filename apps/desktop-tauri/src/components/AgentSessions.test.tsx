@@ -83,7 +83,10 @@ describe("AgentSessions", () => {
     expect(await screen.findByText("AgentSessionsProviderPi")).toBeTruthy();
     expect(await screen.findByText("AgentSessionsProviderOmp")).toBeTruthy();
     // sessionName shown when present; project fallback otherwise.
-    expect(await screen.findByText("OMP fixture")).toBeTruthy();
+    const ompName = await screen.findByText("OMP fixture");
+    expect(ompName).toBeTruthy();
+    expect(ompName.getAttribute("title")).toBe("OMP fixture");
+    expect(ompName.className).toContain("agent-sessions__name");
     expect(
       (await screen.findAllByText("proj")).length > 0,
     ).toBeTruthy();

@@ -51,8 +51,9 @@ pub(crate) fn build_fetch_context(
             "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
                 (SourceMode::OAuth, None)
             }
-            "off" if (has_kimi_code_api_key || has_opencodego_api_key)
-                && usage_source == SourceMode::Auto =>
+            "off"
+                if (has_kimi_code_api_key || has_opencodego_api_key)
+                    && usage_source == SourceMode::Auto =>
             {
                 (SourceMode::Auto, None)
             }

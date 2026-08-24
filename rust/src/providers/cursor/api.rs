@@ -2,13 +2,22 @@
 //!
 //! Uses browser cookies to authenticate with cursor.com API
 
-use crate::core::{CostSnapshot, ProviderError, RateWindow};
+use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow};
 use crate::providers::browser_cookie_header;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 const BASE_URL: &str = "https://cursor.com";
 const COOKIE_DOMAINS: [&str; 2] = ["cursor.com", "cursor.sh"];
+
+type CursorBaseUsageResult = (
+    RateWindow,
+    Option<RateWindow>,
+    Option<RateWindow>,
+    Option<CostSnapshot>,
+    Option<String>,
+    Option<String>,
+);
 
 pub(super) type CursorUsageResult = (
     RateWindow,
@@ -17,6 +26,7 @@ pub(super) type CursorUsageResult = (
     Option<CostSnapshot>,
     Option<String>,
     Option<String>,
+    Option<NamedRateWindow>,
 );
 
 /// Cursor API client
@@ -49,15 +59,26 @@ impl CursorApi {
         cookie_header: &str,
     ) -> Result<CursorUsageResult, ProviderError> {
         // Fetch usage summary and user info in parallel
-        let (usage_result, user_result) = tokio::join!(
+        let (usage_result, user_result, sand_result) = tokio::join!(
             self.fetch_usage_summary(cookie_header),
-            self.fetch_user_info(cookie_header)
+            self.fetch_user_info(cookie_header),
+            self.fetch_sand_usage(cookie_header)
         );
 
         let usage_summary = usage_result?;
         let user_info = user_result.ok();
-
-        self.build_result(usage_summary, user_info)
+        let sand_usage = sand_result.ok().flatten();
+        let (primary, secondary, model_specific, cost, email, plan_type) =
+            self.build_result(usage_summary, user_info)?;
+        Ok((
+            primary,
+            secondary,
+            model_specific,
+            cost,
+            email,
+            plan_type,
+            sand_usage,
+        ))
     }
 
     fn get_cookie_header(&self) -> Result<String, ProviderError> {
@@ -104,6 +125,32 @@ impl CursorApi {
         })
     }
 
+    async fn fetch_sand_usage(
+        &self,
+        cookie_header: &str,
+    ) -> Result<Option<NamedRateWindow>, ProviderError> {
+        let url = format!("{}/api/dashboard/get-sand-usage-status", BASE_URL);
+        let response = self
+            .client
+            .post(&url)
+            .header("Cookie", cookie_header)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .header("Origin", BASE_URL)
+            .body("{}")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let status: SandUsageStatus = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(e.to_string()))?;
+        Ok(status.to_window())
+    }
+
     async fn fetch_user_info(&self, cookie_header: &str) -> Result<UserInfo, ProviderError> {
         let url = format!("{}/api/auth/me", BASE_URL);
 
@@ -132,7 +179,7 @@ impl CursorApi {
         &self,
         summary: UsageSummary,
         user_info: Option<UserInfo>,
-    ) -> Result<CursorUsageResult, ProviderError> {
+    ) -> Result<CursorBaseUsageResult, ProviderError> {
         let billing_end = summary
             .billing_cycle_end
             .as_ref()
@@ -364,6 +411,41 @@ struct TeamUsage {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SandUsageStatus {
+    current_period_start: Option<String>,
+    next_reset_timestamp_utc: Option<String>,
+    usage_percent: Option<f64>,
+    has_non_zero_included_limit: Option<bool>,
+}
+
+impl SandUsageStatus {
+    fn to_window(&self) -> Option<NamedRateWindow> {
+        if self.has_non_zero_included_limit != Some(true) {
+            return None;
+        }
+        let used = clamp_percent(self.usage_percent?);
+        let start = self
+            .current_period_start
+            .as_deref()
+            .and_then(parse_iso_date);
+        let reset = self
+            .next_reset_timestamp_utc
+            .as_deref()
+            .and_then(parse_iso_date);
+        let minutes = start.zip(reset).and_then(|(start, reset)| {
+            let minutes = (reset - start).num_minutes();
+            (minutes > 0).then_some(minutes as u32)
+        });
+        Some(NamedRateWindow::new(
+            "cursor-grok-bot",
+            "Grok Bot",
+            RateWindow::with_details(used, minutes, reset, None),
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UserInfo {
     email: Option<String>,
     email_verified: Option<bool>,
@@ -408,6 +490,32 @@ mod tests {
 
     fn parse_summary(json: &str) -> UsageSummary {
         serde_json::from_str(json).expect("fixture should parse")
+    }
+
+    #[test]
+    fn sand_usage_maps_to_weekly_extra_window() {
+        let status = SandUsageStatus {
+            current_period_start: Some("2026-08-18T00:00:00Z".into()),
+            next_reset_timestamp_utc: Some("2026-08-25T00:00:00Z".into()),
+            usage_percent: Some(37.5),
+            has_non_zero_included_limit: Some(true),
+        };
+        let row = status.to_window().expect("grok bot window");
+        assert_eq!(row.id, "cursor-grok-bot");
+        assert_eq!(row.title, "Grok Bot");
+        assert!((row.window.used_percent - 37.5).abs() < 0.001);
+        assert_eq!(row.window.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn sand_usage_hides_accounts_without_included_allowance() {
+        let status = SandUsageStatus {
+            current_period_start: None,
+            next_reset_timestamp_utc: None,
+            usage_percent: Some(0.0),
+            has_non_zero_included_limit: Some(false),
+        };
+        assert!(status.to_window().is_none());
     }
 
     #[test]

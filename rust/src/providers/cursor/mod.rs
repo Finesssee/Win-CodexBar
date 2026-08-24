@@ -209,10 +209,10 @@ impl Provider for CursorProvider {
             SourceMode::Auto | SourceMode::Web | SourceMode::Cli => {
                 match self.fetch_web_usage(ctx).await {
                     Ok((
-                        (primary, secondary, model_specific, cost, email, plan_type),
+                        (primary, secondary, model_specific, cost, email, plan_type, grok_bot),
                         token_report,
                     )) => {
-                        let usage = Self::build_usage_snapshot(
+                        let mut usage = Self::build_usage_snapshot(
                             primary,
                             secondary,
                             model_specific,
@@ -220,6 +220,9 @@ impl Provider for CursorProvider {
                             plan_type,
                             token_report.as_ref(),
                         );
+                        if let Some(grok_bot) = grok_bot {
+                            usage.extra_rate_windows.push(grok_bot);
+                        }
                         Ok(Self::build_fetch_result(
                             usage,
                             cost,

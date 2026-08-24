@@ -164,19 +164,20 @@ export default function UsageSpendTab(_props: TabProps) {
       });
   }, []);
 
-  const load = useCallback((forceRefresh = false) => {
-    setLoading(true);
-    setError(null);
-    void getUsageSpendSummary({ historyDays: selectedDays, forceRefresh })
-      .then((data) => {
-        setSummary(data);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      });
-  }, [includeOpenCodex, selectedDays]);
+  const load = useCallback(async (forceRefresh = false, silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const data = await getUsageSpendSummary({ historyDays: selectedDays, forceRefresh });
+      setSummary(data);
+    } catch (err: unknown) {
+      if (!silent) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [hideNativeCodex, includeOpenCodex, selectedDays]);
 
   useEffect(() => {
     load(false);
@@ -192,11 +193,7 @@ export default function UsageSpendTab(_props: TabProps) {
     void listen("provider-updated", () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        void getUsageSpendSummary({ historyDays: selectedDays })
-          .then((data) => {
-            if (!cancelled) setSummary(data);
-          })
-          .catch(() => {});
+        if (!cancelled) void load(false, true);
       }, 200);
     }).then((fn) => {
       if (cancelled) fn();
@@ -207,7 +204,7 @@ export default function UsageSpendTab(_props: TabProps) {
       if (timer) clearTimeout(timer);
       unlisten?.();
     };
-  }, [selectedDays]);
+  }, [load]);
 
   const onShare = useCallback(() => {
     setShareError(null);

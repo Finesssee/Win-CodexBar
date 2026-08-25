@@ -164,7 +164,9 @@ fn read_json_config<T>(path: &Path) -> Result<(), ConfigFileError>
 where
     T: DeserializeOwned,
 {
-    let content = std::fs::read_to_string(path).map_err(ConfigFileError::Read)?;
+    // Match the application loaders so validation supports DPAPI-protected
+    // config files without materializing plaintext on disk.
+    let content = crate::secure_file::read_string(path).map_err(ConfigFileError::Read)?;
     serde_json::from_str::<T>(&content)
         .map(|_| ())
         .map_err(ConfigFileError::Parse)
@@ -476,8 +478,46 @@ async fn show_paths() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_settings_for_dump;
+    use super::{ConfigFileError, read_json_config, sanitize_settings_for_dump};
+    #[cfg(windows)]
+    use crate::secure_file;
+    use crate::settings::ManualCookies;
     use serde_json::json;
+
+    #[cfg(windows)]
+    #[test]
+    fn validates_dpapi_protected_manual_cookies_without_plaintext() {
+        let dir = tempfile::tempdir().expect("create temporary directory");
+        let path = dir.path().join("manual_cookies.json");
+        let expected = r#"{"cookies":{}}"#;
+
+        secure_file::write_string(&path, expected).expect("write protected cookies");
+
+        let raw = std::fs::read_to_string(&path).expect("read protected wrapper");
+        assert!(raw.contains("\"format\": \"codexbar.secure-file\""));
+        assert!(!raw.contains(expected));
+        read_json_config::<ManualCookies>(&path).expect("validate protected cookies");
+    }
+
+    #[test]
+    fn rejects_malformed_secure_wrapper_without_echoing_payload() {
+        let dir = tempfile::tempdir().expect("create temporary directory");
+        let path = dir.path().join("manual_cookies.json");
+        let payload = "AA==";
+        let malformed = format!(
+            r#"{{"format":"codexbar.secure-file","version":1,"protection":"unsupported","payload":"{payload}"}}"#
+        );
+        std::fs::write(&path, malformed).expect("write malformed wrapper");
+
+        let error = read_json_config::<ManualCookies>(&path)
+            .expect_err("reject malformed protected wrapper");
+        let ConfigFileError::Read(error) = error else {
+            panic!("malformed protected wrapper must be a read error");
+        };
+        let message = error.to_string();
+        assert!(message.contains("unsupported secure file protection"));
+        assert!(!message.contains(payload));
+    }
 
     #[test]
     fn sanitize_settings_for_dump_redacts_secret_fields() {

@@ -496,7 +496,10 @@ mod tests {
         let raw = std::fs::read_to_string(&path).expect("read protected wrapper");
         assert!(raw.contains("\"format\": \"codexbar.secure-file\""));
         assert!(!raw.contains(expected));
-        read_json_config::<ManualCookies>(&path).expect("validate protected cookies");
+        assert!(
+            read_json_config::<ManualCookies>(&path).is_ok(),
+            "valid protected cookies should validate"
+        );
     }
 
     #[test]

@@ -8,7 +8,6 @@ interface Props {
   onSwitchAccount: () => void;
   onOpenDashboard: () => void;
   onOpenStatusPage: () => void;
-  onCopyError: () => void;
   onBuyCredits: () => void;
   t: (key: LocaleKey) => string;
 }
@@ -26,7 +25,6 @@ export function QuickActionsSection({
   onSwitchAccount,
   onOpenDashboard,
   onOpenStatusPage,
-  onCopyError,
   onBuyCredits,
   t,
 }: Props) {
@@ -68,15 +66,6 @@ export function QuickActionsSection({
             onClick={onOpenStatusPage}
           >
             {t("ActionStatusPage")}
-          </button>
-        )}
-        {provider.lastError && (
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onCopyError}
-          >
-            {t("ActionCopyError")}
           </button>
         )}
         {provider.buyCreditsUrl && (

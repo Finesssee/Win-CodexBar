@@ -103,6 +103,14 @@ body.floatbar-window #root {
 .floatbar__empty * {
   pointer-events: none;
 }
+
+.floatbar__cost-estimate {
+  color: rgba(24, 42, 54, 0.72);
+  font-size: calc(8px * var(--floatbar-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
 .floatbar__provider-icon {
   display: inline-flex;
   align-items: center;

@@ -19,6 +19,7 @@ import {
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
+import { describeProviderState } from "../lib/providerState";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -98,11 +99,13 @@ function CostPill({
   scale,
   todayLabel,
   thirtyDayLabel,
+  estimateLabel,
 }: {
   summary: FloatBarCostSummary;
   scale: number;
   todayLabel: string;
   thirtyDayLabel: string;
+  estimateLabel: string;
 }) {
   const today = formatUsd(summary.todayCost);
   const thirtyDay = formatUsd(summary.thirtyDayCost);
@@ -118,7 +121,7 @@ function CostPill({
   return (
     <div
       className="floatbar__cost-pill"
-      title={`${summary.displayName}: ${title}`}
+      title={`${summary.displayName}: ${title} (${estimateLabel})`}
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
     >
@@ -147,6 +150,9 @@ function CostPill({
           </span>
         )}
       </span>
+      <span className="floatbar__cost-estimate" data-tauri-drag-region>
+        {estimateLabel}
+      </span>
     </div>
   );
 }
@@ -167,6 +173,7 @@ function ProviderPill({
   resetRelative,
   usedSuffix,
   remainingSuffix,
+  stateLabel,
 }: {
   provider: ProviderUsageSnapshot;
   highRemaining: number;
@@ -177,19 +184,21 @@ function ProviderPill({
   resetRelative: boolean;
   usedSuffix: string;
   remainingSuffix: string;
+  stateLabel: string;
 }) {
   const rateWindow = provider.selectedMetric;
   const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const exhausted = rateWindow.isExhausted || provider.error;
+  const state = describeProviderState(provider.error);
+  const exhausted = rateWindow.isExhausted || state.isProblem;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || remaining <= critRemaining) tone = "crit";
   else if (remaining <= highRemaining) tone = "warn";
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
+  const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
     rateWindow.resetDescription,
@@ -203,7 +212,11 @@ function ProviderPill({
   return (
     <div
       className={`floatbar__pill floatbar__pill--${tone}`}
-      title={`${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`}
+      title={
+        state.isProblem
+          ? `${provider.displayName}: ${stateLabel}`
+          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+      }
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
     >
@@ -478,6 +491,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               resetRelative={settings.resetTimeRelative}
               usedSuffix={t("PanelUsedSuffix")}
               remainingSuffix={t("FloatBarRemainingSuffix")}
+              stateLabel={t(describeProviderState(p.error).labelKey)}
             />
           ))}
           {visibleCosts.map((summary) => (
@@ -487,6 +501,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               scale={scale}
               todayLabel={t("PanelToday")}
               thirtyDayLabel={t("FloatBarThirtyDayShort")}
+              estimateLabel={t("OverviewSpendEstimate")}
             />
           ))}
         </>

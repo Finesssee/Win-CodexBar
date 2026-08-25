@@ -254,11 +254,6 @@ export function ProviderDetailPane({
   const handleOpenStatusPage = () => {
     void openProviderStatusPage(detail.id).catch(setErr);
   };
-  const handleCopyError = () => {
-    if (detail.lastError && navigator.clipboard) {
-      void navigator.clipboard.writeText(detail.lastError);
-    }
-  };
   const handleBuyCredits = () => {
     if (detail.buyCreditsUrl) {
       void openProviderDashboard(detail.id).catch(setErr);
@@ -272,8 +267,7 @@ export function ProviderDetailPane({
       {detail.lastError && (
         <ProviderIssueNotice
           detail={detail}
-          message={detail.lastError}
-          onCopy={handleCopyError}
+          rawError={detail.lastError}
           t={t}
         />
       )}
@@ -368,7 +362,6 @@ export function ProviderDetailPane({
         onSwitchAccount={handleSwitchAccount}
         onOpenDashboard={handleOpenDashboard}
         onOpenStatusPage={handleOpenStatusPage}
-        onCopyError={handleCopyError}
         onBuyCredits={handleBuyCredits}
         t={t}
       />

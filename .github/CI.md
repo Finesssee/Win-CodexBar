@@ -70,7 +70,7 @@ Both jobs use CircleCI's hosted Windows executor (`circleci/windows@5.0`).
 2. The credential-free build validates the canonical remote, full tag SHA,
    tag-to-SHA identity, protected `main` ancestry, and every project version
    file. It provisions/asserts Node 24.x via the `OpenJS.NodeJS.LTS` winget
-   package, pnpm 10.18.1, the Rust MSVC target, Git, and Inno Setup 6.
+   package, pnpm 11.24.0, the Rust MSVC target, Git, and Inno Setup 6.
 3. It uses a new temporary `WorkRoot`, runs `release-doctor.ps1`, then runs
    `windows-release-build.ps1` with the immutable SHA and `-SmokeInstall`.
    It never uploads. Four assets, `release-manifest.json`, and build logs are

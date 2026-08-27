@@ -19,7 +19,7 @@ gets the restricted `GH_TOKEN` context.
    branches, PRs, non-semver tags, non-canonical remotes, tag/SHA mismatch,
    and commits whose tag is not reachable from protected `origin/main`.
 2. The build job provisions/asserts Node 24.x via the `OpenJS.NodeJS.LTS`
-   winget package, pnpm 10.18.1, the Windows MSVC Rust target, Git, and Inno
+   winget package, pnpm 11.24.0, the Windows MSVC Rust target, Git, and Inno
    Setup 6. It validates every committed project version against the tag.
 3. The build invokes `scripts/release-doctor.ps1 -SkipGitHub`, then
    `scripts/windows-release-build.ps1 -Ref <full-SHA> -SmokeInstall` with a

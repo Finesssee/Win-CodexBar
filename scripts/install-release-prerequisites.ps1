@@ -471,8 +471,8 @@ if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
 }
 $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
 $expectedPnpm = [string]$packageJson.packageManager -replace '^pnpm@', ''
-if ($expectedPnpm -notmatch '^10\.18\.1$') {
-    throw "Unexpected packageManager '$($packageJson.packageManager)'; release pipeline pins pnpm 10.18.1."
+if ($expectedPnpm -notmatch '^11\.24\.0$') {
+    throw "Unexpected packageManager '$($packageJson.packageManager)'; release pipeline pins pnpm 11.24.0."
 }
 
 Require-PrerequisiteCommand 'git' 'Git.Git' 'git' | Out-Null
@@ -586,4 +586,4 @@ if ($innoVersion -notmatch '^6\.') {
 Write-Host "[ok] Inno Setup $innoVersion ($iscc)"
 
 Write-Host ''
-Write-Host "Release prerequisites passed (Git, Node $requiredNodeMajor, pnpm 10.18.1, Rust MSVC target, Inno Setup 6)."
+Write-Host "Release prerequisites passed (Git, Node $requiredNodeMajor, pnpm 11.24.0, Rust MSVC target, Inno Setup 6)."

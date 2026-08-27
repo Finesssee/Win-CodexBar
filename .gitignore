@@ -105,3 +105,26 @@ codexbar-desktop-tauri.exe
 # Local git worktrees
 .worktrees/
 .atl/
+
+# --- Local proof-run / CI debris (untracked, keep off disk-tracking) ---
+window-state-cua-*.json
+cua-*.png
+issue241-*.png
+proof-*.png
+proof-abc-*.py
+codexbar-proof-*/
+proof-*/
+.ai-bridge/
+.freebuff/
+.zcode/
+.review/
+manifests/
+.circleci/info.yml
+target-port054/
+final-port054/
+build.log
+build-output.log
+clippy_*.txt
+fmt_*.txt
+rust_test*.txt
+tauri_test*.txt

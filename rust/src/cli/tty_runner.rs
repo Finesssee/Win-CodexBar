@@ -312,6 +312,9 @@ impl TtyCommandRunner {
     ///
     /// Uses the platform pseudo-terminal implementation, including Windows
     /// ConPTY, so interactive programs see a real terminal.
+    ///
+    /// run() may block up to `settle_after_stop_secs` after child exit to
+    /// drain remaining output.
     pub fn run(
         &self,
         binary: &str,
@@ -463,9 +466,25 @@ impl TtyCommandRunner {
 
             // Check if process has exited
             if let Ok(Some(_)) = child.try_wait() {
-                // Process exited, drain remaining output
-                while let Ok(chunk) = rx.try_recv() {
-                    buffer.push_str(&chunk);
+                // Process exited; the reader thread may still be forwarding
+                // the final bytes, so drain with bounded blocking receives
+                // instead of one nonblocking sweep that can race the reader
+                // and lose them. Disconnected ends the drain immediately;
+                // the overall deadline bounds it so a reader held open by
+                // inherited handles cannot hang.
+                let drain_deadline = Instant::now() + settle;
+                loop {
+                    let remaining = drain_deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match rx.recv_timeout(remaining.min(Duration::from_millis(25))) {
+                        Ok(chunk) => buffer.push_str(&chunk),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        // Quiet slice: keep waiting until the deadline so
+                        // slowly forwarded tail output is not lost.
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
                 }
                 break;
             }

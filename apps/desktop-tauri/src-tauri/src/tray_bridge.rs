@@ -1082,6 +1082,7 @@ mod tests {
             source_label: String::new(),
             updated_at: "2025-01-01T00:00:00Z".into(),
             error: None,
+            error_state: codexbar::core::ProviderStateKind::Ready,
             pace: None,
             account_organization: None,
             tray_status_label: None,

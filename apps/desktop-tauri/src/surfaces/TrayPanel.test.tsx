@@ -96,6 +96,7 @@ function provider(id: string, displayName: string, used = 20): ProviderUsageSnap
     sourceLabel: "auto",
     updatedAt: "2026-05-24T00:00:00Z",
     error: null,
+    errorState: "ready",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,

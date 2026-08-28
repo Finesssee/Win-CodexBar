@@ -31,6 +31,8 @@ pub struct ProviderDetail {
 
     // Error / state.
     pub last_error: Option<String>,
+    /// Backend-classified availability state for the latest refresh.
+    pub error_state: Option<codexbar::core::ProviderStateKind>,
 
     // URLs for quick-actions (button visibility).
     pub dashboard_url: Option<String>,
@@ -87,6 +89,7 @@ pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail,
         cost: None,
         pace: None,
         last_error: None,
+        error_state: None,
         dashboard_url: dashboard_url.clone(),
         status_page_url: metadata.status_page_url.map(|s| s.to_string()),
         // Buy-credits currently mirrors the dashboard URL for providers that
@@ -142,6 +145,7 @@ pub fn get_provider_detail(
             detail.pace = snapshot.pace.clone();
         }
         detail.last_error = snapshot.error.clone();
+        detail.error_state = Some(snapshot.error_state);
         detail.has_snapshot = true;
     }
 

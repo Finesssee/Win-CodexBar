@@ -78,6 +78,7 @@ export function providerPlaceholder(
     sourceLabel: "pending",
     updatedAt: new Date(0).toISOString(),
     error: "Loading provider data...",
+    errorState: "unknown",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,

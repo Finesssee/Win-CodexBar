@@ -542,7 +542,6 @@ ProviderIssueCopy = Копировать
 ProviderIssueUnsupportedSourceModePrefix = Режим источника не поддерживается для этого провайдера
 ProviderIssueAuthRequired = Требуется вход
 ProviderIssueSessionExpired = Срок действия сеанса истёк
-ProviderIssueLegacyTelemetry = Устаревшая телеметрия недоступна
 ProviderIssueLocalRuntimeOffline = Локальная среда не в сети
 ProviderIssueUnknown = Данные об использовании недоступны
 ProviderIssuePrivacySafeDetail = Детали скрыты для защиты данных учётной записи. Обновите провайдера или проверьте настройки входа и источника.

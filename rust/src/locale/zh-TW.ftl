@@ -557,7 +557,6 @@ ProviderIssueCopy = 複製
 ProviderIssueUnsupportedSourceModePrefix = 該提供者不支援此資料來源模式
 ProviderIssueAuthRequired = 需要登入
 ProviderIssueSessionExpired = 工作階段已過期
-ProviderIssueLegacyTelemetry = 舊版遙測無法使用
 ProviderIssueLocalRuntimeOffline = 本機執行階段離線
 ProviderIssueUnknown = 無法取得使用量
 ProviderIssuePrivacySafeDetail = 為保護帳戶資料，此處不顯示詳細資訊。請重新整理服務提供者或檢查登入與資料來源設定。

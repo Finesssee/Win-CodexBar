@@ -70,6 +70,7 @@ describe("ProvidersTab", () => {
       sourceLabel: "auto",
       updatedAt: new Date().toISOString(),
       error: null,
+      errorState: "ready",
       pace: null,
       accountOrganization: null,
       trayStatusLabel: null,

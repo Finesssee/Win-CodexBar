@@ -558,7 +558,6 @@ ProviderIssueCopy = コピー
 ProviderIssueUnsupportedSourceModePrefix = このプロバイダーではソースモード未サポート
 ProviderIssueAuthRequired = サインインが必要です
 ProviderIssueSessionExpired = セッションの有効期限が切れました
-ProviderIssueLegacyTelemetry = レガシーテレメトリは利用できません
 ProviderIssueLocalRuntimeOffline = ローカルランタイムはオフラインです
 ProviderIssueUnknown = 使用状況を取得できません
 ProviderIssuePrivacySafeDetail = アカウントデータを保護するため詳細は表示されません。プロバイダーを更新するか、サインインとソースの設定を確認してください。

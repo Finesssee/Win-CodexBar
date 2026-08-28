@@ -4,12 +4,11 @@ import { describeProviderState } from "../../../../lib/providerState";
 
 interface Props {
   detail: ProviderDetail;
-  rawError: string;
   t: (key: LocaleKey) => string;
 }
 
-export function ProviderIssueNotice({ detail, rawError, t }: Props) {
-  const state = describeProviderState(rawError);
+export function ProviderIssueNotice({ detail, t }: Props) {
+  const state = describeProviderState(detail.errorState ?? "unknown");
   const title = `${detail.displayName}: ${t(state.labelKey)}`;
 
   return (

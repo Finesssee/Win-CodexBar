@@ -576,7 +576,6 @@ ProviderIssueCopy = Copiar
 ProviderIssueUnsupportedSourceModePrefix = Modo de origen no soportado para este proveedor
 ProviderIssueAuthRequired = Se requiere iniciar sesión
 ProviderIssueSessionExpired = La sesión expiró
-ProviderIssueLegacyTelemetry = Telemetría heredada no disponible
 ProviderIssueLocalRuntimeOffline = Runtime local sin conexión
 ProviderIssueUnknown = Uso no disponible
 ProviderIssuePrivacySafeDetail = Los detalles se ocultan para proteger los datos de la cuenta. Actualiza el proveedor o revisa la configuración de inicio de sesión y origen.

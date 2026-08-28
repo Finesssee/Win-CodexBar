@@ -265,11 +265,7 @@ export function ProviderDetailPane({
       <IdentitySection provider={detail} subtitle={subtitle} t={t} />
 
       {detail.lastError && (
-        <ProviderIssueNotice
-          detail={detail}
-          rawError={detail.lastError}
-          t={t}
-        />
+        <ProviderIssueNotice detail={detail} t={t} />
       )}
 
       <UsageSection

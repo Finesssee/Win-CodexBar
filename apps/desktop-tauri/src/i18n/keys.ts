@@ -643,7 +643,6 @@ export const ALL_LOCALE_KEYS = [
   "ProviderIssueUnsupportedSourceModePrefix",
   "ProviderIssueAuthRequired",
   "ProviderIssueSessionExpired",
-  "ProviderIssueLegacyTelemetry",
   "ProviderIssueLocalRuntimeOffline",
   "ProviderIssueUnknown",
   "ProviderIssuePrivacySafeDetail",

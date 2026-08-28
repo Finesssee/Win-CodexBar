@@ -73,6 +73,7 @@ function snapshot(
   opts: {
     exhausted?: boolean;
     error?: string | null;
+    errorState?: ProviderUsageSnapshot["errorState"];
     resetsAt?: string | null;
     resetDescription?: string | null;
     informational?: boolean;
@@ -117,6 +118,7 @@ function snapshot(
     sourceLabel: "auto",
     updatedAt: "2026-05-15T00:00:00Z",
     error: opts.error ?? null,
+    errorState: opts.errorState ?? "ready",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,
@@ -224,7 +226,6 @@ describe("FloatBar", () => {
         OverviewSpendEstimate: "Estimate",
         ProviderIssueAuthRequired: "Sign-in required",
         ProviderIssueSessionExpired: "Session expired",
-        ProviderIssueLegacyTelemetry: "Legacy telemetry unavailable",
         ProviderIssueLocalRuntimeOffline: "Local runtime offline",
         ProviderIssueUnknown: "Usage unavailable",
         FloatBarThirtyDayShort: "30d",
@@ -442,7 +443,7 @@ describe("FloatBar", () => {
   it("uses a safe state label instead of a raw provider error", async () => {
     const raw = "legacy telemetry failed for https://private.example.test; cookie=super-secret";
     tauriMocks.getCachedProviders.mockResolvedValue([
-      snapshot("gemini", "Gemini", 12, { error: raw }),
+      snapshot("gemini", "Gemini", 12, { error: raw, errorState: "unknown" }),
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ enabledProviders: ["gemini"] }));
 
@@ -450,10 +451,29 @@ describe("FloatBar", () => {
 
     await waitFor(() => {
       const pill = container.querySelector(".floatbar__pill");
-      expect(pill?.textContent).toContain("Legacy telemetry unavailable");
-      expect(pill?.getAttribute("title")).toBe("Gemini: Legacy telemetry unavailable");
+      expect(pill?.textContent).toContain("Usage unavailable");
+      expect(pill?.getAttribute("title")).toBe("Gemini: Usage unavailable");
       expect(pill?.textContent).not.toContain("super-secret");
       expect(pill?.getAttribute("title")).not.toContain("private.example.test");
+    });
+  });
+
+  it("renders the sign-in label when the backend classifies needsAuthentication", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("copilot", "GitHub Copilot", 12, {
+        error: "GitHub Copilot token not found. Sign in with GitHub.",
+        errorState: "needsAuthentication",
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ enabledProviders: ["copilot"] }));
+
+    const { container } = renderFloatBar(bootstrap({ enabledProviders: ["copilot"] }));
+
+    await waitFor(() => {
+      const pill = container.querySelector(".floatbar__pill");
+      expect(pill?.textContent).toContain("Sign-in required");
+      expect(pill?.textContent).not.toContain("12%");
+      expect(pill?.getAttribute("title")).toBe("GitHub Copilot: Sign-in required");
     });
   });
 

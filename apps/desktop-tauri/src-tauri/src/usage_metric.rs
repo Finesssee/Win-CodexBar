@@ -213,6 +213,7 @@ mod tests {
             source_label: "test".to_string(),
             updated_at: "2026-08-16T00:00:00Z".to_string(),
             error: None,
+            error_state: codexbar::core::ProviderStateKind::Ready,
             pace: None,
             account_organization: None,
             tray_status_label: None,

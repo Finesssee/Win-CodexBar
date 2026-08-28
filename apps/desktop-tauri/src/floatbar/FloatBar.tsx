@@ -191,7 +191,7 @@ function ProviderPill({
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const state = describeProviderState(provider.error);
+  const state = describeProviderState(provider.errorState);
   const exhausted = rateWindow.isExhausted || state.isProblem;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (exhausted || remaining <= critRemaining) tone = "crit";
@@ -491,7 +491,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               resetRelative={settings.resetTimeRelative}
               usedSuffix={t("PanelUsedSuffix")}
               remainingSuffix={t("FloatBarRemainingSuffix")}
-              stateLabel={t(describeProviderState(p.error).labelKey)}
+              stateLabel={t(describeProviderState(p.errorState).labelKey)}
             />
           ))}
           {visibleCosts.map((summary) => (

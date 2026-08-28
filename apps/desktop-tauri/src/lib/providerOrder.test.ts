@@ -42,6 +42,7 @@ function snapshot(providerId: string, displayName: string): ProviderUsageSnapsho
     sourceLabel: "test",
     updatedAt: "2026-01-01T00:00:00Z",
     error: null,
+    errorState: "ready",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,

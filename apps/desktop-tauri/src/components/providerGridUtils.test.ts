@@ -44,6 +44,7 @@ function provider(id: string): ProviderUsageSnapshot {
     sourceLabel: "oauth",
     updatedAt: "2026-07-31T00:00:00Z",
     error: null,
+    errorState: "ready",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,

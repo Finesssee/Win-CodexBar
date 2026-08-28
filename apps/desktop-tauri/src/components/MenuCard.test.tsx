@@ -71,6 +71,7 @@ function provider(
     sourceLabel: "oauth",
     updatedAt: "2026-05-24T00:00:00Z",
     error,
+    errorState: "unknown",
     pace: null,
     accountOrganization: null,
     trayStatusLabel: null,

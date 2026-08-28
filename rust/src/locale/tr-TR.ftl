@@ -577,7 +577,6 @@ ProviderIssueCopy = Kopyala
 ProviderIssueUnsupportedSourceModePrefix = Bu sağlayıcı için kaynak modu desteklenmiyor
 ProviderIssueAuthRequired = Oturum açma gerekli
 ProviderIssueSessionExpired = Oturumun süresi doldu
-ProviderIssueLegacyTelemetry = Eski telemetri kullanılamıyor
 ProviderIssueLocalRuntimeOffline = Yerel çalışma zamanı çevrimdışı
 ProviderIssueUnknown = Kullanım kullanılamıyor
 ProviderIssuePrivacySafeDetail = Hesap verilerini korumak için ayrıntılar gizlenir. Sağlayıcıyı yenileyin veya oturum açma ve kaynak ayarlarını gözden geçirin.

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::ProviderFetchResult;
+use super::provider_state::ProviderStateKind;
 
 /// Unique identifier for a provider
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -672,6 +673,14 @@ pub trait Provider: Send + Sync {
     /// Detect the version of the CLI tool (if applicable)
     fn detect_version(&self) -> Option<String> {
         None
+    }
+
+    /// Presentation-safe availability state for a refresh error. The default
+    /// maps `ProviderError` variants; override only when one of this
+    /// provider's error variants carries provider-specific meaning (e.g. a
+    /// local language-server probe that reports "not installed").
+    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
+        error.state_kind()
     }
 }
 

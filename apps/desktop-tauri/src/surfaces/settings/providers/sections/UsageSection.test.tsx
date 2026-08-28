@@ -54,6 +54,7 @@ function provider(): ProviderDetail {
     cost: null,
     pace: null,
     lastError: null,
+    errorState: null,
     dashboardUrl: null,
     statusPageUrl: null,
     buyCreditsUrl: null,

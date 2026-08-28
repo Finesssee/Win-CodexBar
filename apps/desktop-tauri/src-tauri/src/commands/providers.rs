@@ -635,9 +635,15 @@ async fn fetch_provider_snapshot(
             Ok(Err(e)) => ProviderUsageSnapshot::from_error(
                 id,
                 &metadata,
-                codexbar::logging::safe_error_message(e),
+                codexbar::logging::safe_error_message(&e),
+                e.state_kind(),
             ),
-            Err(_) => ProviderUsageSnapshot::from_error(id, &metadata, "Timeout".to_string()),
+            Err(_) => ProviderUsageSnapshot::from_error(
+                id,
+                &metadata,
+                "Timeout".to_string(),
+                codexbar::core::ProviderStateKind::Unknown,
+            ),
         };
 
     record_provider_fetch_duration(id, &mut snapshot, started);
@@ -1057,7 +1063,12 @@ mod predictive_warning_tests {
         let metadata = codexbar::core::instantiate_provider(ProviderId::Claude)
             .metadata()
             .clone();
-        ProviderUsageSnapshot::from_error(ProviderId::Claude, &metadata, "unused".to_string())
+        ProviderUsageSnapshot::from_error(
+            ProviderId::Claude,
+            &metadata,
+            "unused".to_string(),
+            codexbar::core::ProviderStateKind::Unknown,
+        )
     }
 
     #[test]
@@ -1163,6 +1174,7 @@ mod reset_backfill_tests {
             source_label: String::new(),
             updated_at: "2026-01-01T00:00:00Z".into(),
             error: None,
+            error_state: codexbar::core::ProviderStateKind::Ready,
             pace: None,
             account_organization: None,
             tray_status_label: None,

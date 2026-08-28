@@ -571,6 +571,14 @@ export interface SessionEquivalentForecastSnapshot {
   weeklyUsedPercent: number;
 }
 
+/** Backend-classified provider availability state (camelCase serde on the bridge). */
+export type ProviderStateKind =
+  | "ready"
+  | "needsAuthentication"
+  | "expiredSession"
+  | "localRuntimeOffline"
+  | "unknown";
+
 export interface ProviderUsageSnapshot {
   providerId: string;
   displayName: string;
@@ -595,6 +603,7 @@ export interface ProviderUsageSnapshot {
   sourceLabel: string;
   updatedAt: string;
   error: string | null;
+  errorState: ProviderStateKind;
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
@@ -861,6 +870,7 @@ export interface ProviderDetail {
   pace: PaceSnapshot | null;
 
   lastError: string | null;
+  errorState: ProviderStateKind | null;
 
   dashboardUrl: string | null;
   statusPageUrl: string | null;

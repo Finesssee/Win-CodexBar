@@ -379,3 +379,15 @@ fn models_in_distinct_quota_buckets_keep_separate_lanes() {
     let snap = provider.parse_user_status(resp).unwrap();
     assert_eq!(snap.extra_rate_windows.len(), 3);
 }
+
+#[test]
+fn not_installed_maps_to_local_runtime_offline() {
+    // Antigravity's `NotInstalled` reports the local language-server probe
+    // finding nothing to talk to: a runtime that is not running, not a
+    // credential problem.
+    assert_eq!(
+        AntigravityProvider::new()
+            .error_state_kind(&ProviderError::NotInstalled(NOT_RUNNING_MESSAGE.into())),
+        crate::core::ProviderStateKind::LocalRuntimeOffline
+    );
+}

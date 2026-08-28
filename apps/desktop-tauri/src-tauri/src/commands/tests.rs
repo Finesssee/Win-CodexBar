@@ -952,6 +952,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
         ProviderId::Claude,
         &metadata,
         "Unauthorized".to_string(),
+        codexbar::core::ProviderStateKind::NeedsAuthentication,
     );
     let mut state = crate::state::AppState::new();
     state.provider_cache.push(good.clone());
@@ -981,6 +982,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
         ProviderId::Claude,
         &metadata,
         "Unauthorized".to_string(),
+        codexbar::core::ProviderStateKind::NeedsAuthentication,
     );
     let second_error = first_error.clone();
     let mut state = crate::state::AppState::new();
@@ -1015,6 +1017,7 @@ fn claude_cli_parse_failure_keeps_last_good_every_time() {
         ProviderId::Claude,
         &metadata,
         "Parse error: Empty output from Claude CLI".to_string(),
+        codexbar::core::ProviderStateKind::Unknown,
     );
     let mut state = crate::state::AppState::new();
     state.provider_cache.push(good.clone());
@@ -1050,6 +1053,7 @@ fn claude_hard_credentials_missing_does_not_preserve_stale() {
         &metadata,
         "OAuth error: Claude OAuth credentials not found. Run `claude` to authenticate."
             .to_string(),
+        codexbar::core::ProviderStateKind::NeedsAuthentication,
     );
     let mut state = crate::state::AppState::new();
     state.provider_cache.push(good);
@@ -1057,6 +1061,11 @@ fn claude_hard_credentials_missing_does_not_preserve_stale() {
     let out =
         super::providers::preserve_last_good_transient_failure(&mut state, ProviderId::Claude, err);
     assert!(out.error.is_some());
+    assert_eq!(
+        out.error_state,
+        codexbar::core::ProviderStateKind::NeedsAuthentication,
+        "hard auth failure must carry its classification on the snapshot"
+    );
 }
 
 #[test]

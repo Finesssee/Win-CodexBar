@@ -897,7 +897,6 @@ locale_keys! {
     ProviderIssueUnsupportedSourceModePrefix,
     ProviderIssueAuthRequired,
     ProviderIssueSessionExpired,
-    ProviderIssueLegacyTelemetry,
     ProviderIssueLocalRuntimeOffline,
     ProviderIssueUnknown,
     ProviderIssuePrivacySafeDetail,

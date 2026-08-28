@@ -615,7 +615,6 @@ ProviderIssueCopy = Copy
 ProviderIssueUnsupportedSourceModePrefix = Source mode not supported for this provider
 ProviderIssueAuthRequired = Sign-in required
 ProviderIssueSessionExpired = Session expired
-ProviderIssueLegacyTelemetry = Legacy telemetry unavailable
 ProviderIssueLocalRuntimeOffline = Local runtime offline
 ProviderIssueUnknown = Usage unavailable
 ProviderIssuePrivacySafeDetail = Details are hidden here to protect account data. Refresh the provider or review its sign-in and source settings.

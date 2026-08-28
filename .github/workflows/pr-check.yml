@@ -1,5 +1,6 @@
 name: PR check
 
+# Blacksmith CI only: PR validation. Release assets stay in CircleCI.
 on:
   push:
     branches: [main, master]

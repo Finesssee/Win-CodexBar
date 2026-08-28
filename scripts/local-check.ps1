@@ -38,6 +38,7 @@ if (-not ($Rust -or $Tauri -or $Frontend -or $Format -or $Clippy -or $ReleaseDoc
 
 Push-Location $RepoRoot
 try {
+    Invoke-Step "GitHub write-safety tests" "bash" @("scripts/gh-safe.tests.sh")
     if ($All -or $Format) {
         Invoke-Step "Rust format" "cargo" @("fmt", "--all", "--check")
     }

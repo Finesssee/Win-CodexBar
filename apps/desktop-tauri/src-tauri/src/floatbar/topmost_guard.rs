@@ -44,7 +44,9 @@ mod platform {
     static SECONDARY_CLASS: OnceLock<Vec<u16>> = OnceLock::new();
 
     pub fn install(app: &tauri::AppHandle) {
-        let _ = APP_HANDLE.set(app.clone());
+        // One-time install; a redundant second install is intentionally
+        // ignored (the first handle wins).
+        let _install = APP_HANDLE.set(app.clone());
     }
 
     pub fn set_active(active: bool) {
@@ -71,7 +73,10 @@ mod platform {
                 }
                 let dispatcher = app.clone();
                 let app_for_work = app.clone();
-                let _ = dispatcher.run_on_main_thread(move || {
+                // Best-effort main-thread dispatch; on failure the poll
+                // loop re-evaluates on the next tick, so the result is
+                // discarded.
+                let _dispatch = dispatcher.run_on_main_thread(move || {
                     reassert_if_needed(&app_for_work);
                 });
             }
@@ -106,10 +111,12 @@ mod platform {
         };
 
         let mut floatbar_rect = Rect::default();
+        // SAFETY: `handle.hwnd.get()` is a valid HWND owned by the live
+        // floatbar window, and `floatbar_rect` is a `Rect` out-param that
+        // outlives the call. GetWindowRect only writes through the pointer.
         if unsafe { GetWindowRect(handle.hwnd.get(), &mut floatbar_rect) } == 0 {
             return false;
         }
-
         taskbar_rects()
             .into_iter()
             .any(|taskbar_rect| rects_overlap(floatbar_rect, taskbar_rect))
@@ -120,11 +127,19 @@ mod platform {
         let secondary_class = SECONDARY_CLASS.get_or_init(|| wide("Shell_SecondaryTrayWnd"));
         let mut rects = Vec::new();
 
+        // SAFETY: `primary_class` is a NUL-terminated UTF-16 buffer from
+        // `wide()` that outlives the call; a null window-name pointer is
+        // valid. The returned HWND is treated as an opaque handle (0 = not
+        // found), never dereferenced unsafely.
         let primary = unsafe { FindWindowW(primary_class.as_ptr(), std::ptr::null()) };
         push_window_rect(primary, &mut rects);
 
         let mut previous = 0;
         loop {
+            // SAFETY: 0 and `previous` (a prior FindWindowExW handle or 0)
+            // are valid HWND arguments; `secondary_class` is a
+            // NUL-terminated UTF-16 buffer outliving the call, and a null
+            // window name is valid. The handle is opaque (0 = none).
             let taskbar =
                 unsafe { FindWindowExW(0, previous, secondary_class.as_ptr(), std::ptr::null()) };
             if taskbar == 0 {
@@ -136,17 +151,19 @@ mod platform {
 
         rects
     }
-
     fn push_window_rect(hwnd: isize, rects: &mut Vec<Rect>) {
+        // SAFETY: `hwnd` is an opaque HWND (possibly 0); IsWindowVisible
+        // safely returns 0 for invalid handles without dereferencing.
         if hwnd == 0 || unsafe { IsWindowVisible(hwnd) } == 0 {
             return;
         }
         let mut rect = Rect::default();
+        // SAFETY: `hwnd` is a nonzero, possibly-stale handle; GetWindowRect
+        // only writes through the `rect` out-param that outlives the call.
         if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
             rects.push(rect);
         }
     }
-
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }

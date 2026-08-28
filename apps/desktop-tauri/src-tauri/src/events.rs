@@ -1,3 +1,8 @@
+//! Tauri event emit helpers for the desktop shell.
+//!
+//! Every `emit_*` function here is fire-and-forget: emissions are non-fatal
+//! and each call site discards the emit result. A failed emit leaves the UI
+//! stale, but the next refresh corrects it.
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -57,7 +62,7 @@ pub fn emit_surface_mode_changed(
     to: SurfaceMode,
     target: SurfaceTarget,
 ) {
-    let _ = app.emit(
+    let _emit_surface_mode = app.emit(
         SURFACE_MODE_CHANGED,
         SurfaceModePayload {
             mode: to.as_str(),
@@ -75,15 +80,15 @@ pub fn emit_provider_updated(app: &AppHandle, snapshot: &ProviderUsageSnapshot) 
         settings.codex_spark_usage_visible(),
     );
     let presentation = crate::commands::ProviderUsagePresentationSnapshot::new(snapshot, &settings);
-    let _ = app.emit(PROVIDER_UPDATED, presentation);
+    let _emit_provider = app.emit(PROVIDER_UPDATED, presentation);
 }
 
 pub fn emit_refresh_started(app: &AppHandle, provider_ids: Vec<String>) {
-    let _ = app.emit(REFRESH_STARTED, RefreshStartedPayload { provider_ids });
+    let _emit_refresh_started = app.emit(REFRESH_STARTED, RefreshStartedPayload { provider_ids });
 }
 
 pub fn emit_refresh_complete(app: &AppHandle, provider_count: usize, error_count: usize) {
-    let _ = app.emit(
+    let _emit_refresh_complete = app.emit(
         REFRESH_COMPLETE,
         RefreshCompletePayload {
             provider_count,
@@ -96,11 +101,11 @@ pub fn emit_refresh_complete(app: &AppHandle, provider_count: usize, error_count
 /// multi-account lanes). Payload-less; listeners re-fetch via
 /// `get_codex_accounts_state`.
 pub fn emit_codex_accounts_updated(app: &AppHandle) {
-    let _ = app.emit(CODEX_ACCOUNTS_UPDATED, ());
+    let _emit_codex_accounts = app.emit(CODEX_ACCOUNTS_UPDATED, ());
 }
 
 pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) {
-    let _ = app.emit(UPDATE_STATE_CHANGED, payload);
+    let _emit_update_state = app.emit(UPDATE_STATE_CHANGED, payload);
 }
 
 /// Broadcast to every window that persisted settings changed, so surfaces in
@@ -108,11 +113,11 @@ pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) 
 /// the detached Settings window and the main window are separate webviews and
 /// do not share React state. Payload-less; listeners re-fetch the snapshot.
 pub fn emit_settings_changed(app: &AppHandle) {
-    let _ = app.emit(SETTINGS_CHANGED, ());
+    let _emit_settings = app.emit(SETTINGS_CHANGED, ());
 }
 
 pub fn emit_login_phase(app: &AppHandle, provider_id: &str, phase: &str, auth_link: Option<&str>) {
-    let _ = app.emit(
+    let _emit_login_phase = app.emit(
         LOGIN_PHASE,
         LoginPhasePayload {
             provider_id: provider_id.to_string(),

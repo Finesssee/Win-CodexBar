@@ -193,8 +193,10 @@ fn proof_window_position(app: &AppHandle) -> Option<(i32, i32)> {
         return Some((x, y));
     };
     let work_area = m.work_area();
+    // Monitor physical dimensions are bounded well below i32::MAX on Windows.
     let work_bottom = work_area.position.y + work_area.size.height as i32;
     let scale = m.scale_factor().max(1.0);
+    // 920px logical * scale is a whole pixel count by design.
     let max_settle = (PROOF_MAX_SETTLE_HEIGHT_LOGICAL * scale) as i32;
     let justified_y = proof_anchor_y(y, work_bottom, max_settle);
     if justified_y != y {
@@ -221,11 +223,13 @@ fn proof_window_position_unjustified(app: &AppHandle) -> Option<(i32, i32)> {
         // Return coordinates in Tauri physical space (same as
         // monitor.size/work_area). transition.rs divides by scale before
         // calling set_position.
+        // Monitor physical dimensions are bounded well below i32::MAX.
         let screen_w = m.size().width as i32;
         let work_area = m.work_area();
         let work_bottom = work_area.position.y + work_area.size.height as i32;
         let scale = m.scale_factor().max(1.0);
         let props = SurfaceMode::TrayPanel.window_properties();
+        // Layout dimensions in whole physical px by design.
         let panel_w = (props.width * scale) as i32;
         let panel_h = (props.height * scale) as i32;
         let margin = (12.0 * scale) as i32;
@@ -396,14 +400,21 @@ mod tests {
         let prev = std::env::var("CODEXBAR_PROOF_MODE").ok();
 
         match value {
+            // SAFETY: `ENV_LOCK` is held for the whole `with_proof_mode_env`
+            // scope, serializing this env mutation against other proof-mode
+            // tests so no other thread reads or writes `CODEXBAR_PROOF_MODE`.
             Some(value) => unsafe { std::env::set_var("CODEXBAR_PROOF_MODE", value) },
+            // SAFETY: same `ENV_LOCK` guard; the variable is unset only here.
             None => unsafe { std::env::remove_var("CODEXBAR_PROOF_MODE") },
         }
 
         test();
 
         match prev {
+            // SAFETY: `ENV_LOCK` is still held, restoring the prior value so
+            // no other proof-mode test observes the temporary mutation.
             Some(prev) => unsafe { std::env::set_var("CODEXBAR_PROOF_MODE", prev) },
+            // SAFETY: same `ENV_LOCK` guard; restores the unset state.
             None => unsafe { std::env::remove_var("CODEXBAR_PROOF_MODE") },
         }
     }

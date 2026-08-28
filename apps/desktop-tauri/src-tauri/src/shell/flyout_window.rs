@@ -70,7 +70,9 @@ pub fn is_open(app: &AppHandle) -> bool {
 pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
         if let Some((x, y)) = position {
-            let _ = window.set_position(PhysicalPosition::new(x, y));
+            // Best-effort reposition before show; the subsequent show/focus
+            // is what the user sees, so the position result is non-fatal.
+            let _set_position = window.set_position(PhysicalPosition::new(x, y));
         } else {
             reanchor(app)?;
         }
@@ -124,7 +126,9 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     let target_position =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
     if let Some((x, y)) = target_position {
-        let _ = win.set_position(PhysicalPosition::new(x, y));
+        // Best-effort initial placement; the frontend re-reveals the
+        // window, so a failed set_position here is non-fatal.
+        let _set_initial = win.set_position(PhysicalPosition::new(x, y));
     }
 
     // Left `.visible(false)` above — the frontend reveals the window itself
@@ -168,9 +172,13 @@ pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
     }
 
     if is_open(app) {
-        let _ = hide(app);
+        // Tray-toggle is fire-and-forget; a hide error leaves the window
+        // closed from the user's perspective and is non-fatal.
+        let _hide = hide(app);
     } else {
-        let _ = open_or_focus(app, position);
+        // Tray-toggle is fire-and-forget; open_or_focus surfaces its own
+        // errors via tracing, so the toggle call site discards the result.
+        let _open = open_or_focus(app, position);
     }
 }
 
@@ -256,12 +264,12 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
         // Position is never persisted (always re-anchored above the tray).
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => true,
         tauri::WindowEvent::CloseRequested { api, .. } => {
-            // Hide-not-close, matching Settings/FloatBar lifecycle handling —
-            // the flyout must survive a native close (Alt+F4-equivalent from
-            // a screen reader, etc.) so it can be reopened without rebuilding
-            // the WebView2 instance.
+            // Hide-not-close on a native close request (Alt+F4-equivalent from
+            // a screen reader): the flyout survives so it can be reopened without
+            // rebuilding the WebView2 instance. A hide failure is non-fatal and
+            // the window stays for reuse.
             api.prevent_close();
-            let _ = hide(app);
+            let _hide_on_close = hide(app);
             true
         }
         _ => true,
@@ -283,6 +291,7 @@ pub fn reanchor(app: &AppHandle) -> Result<(), String> {
 
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let panel_size = PanelSize {
+        // Rounded logical px fit u32 by design (whole physical px / scale).
         width: (outer.width as f64 / scale).round() as u32,
         height: (outer.height as f64 / scale).round() as u32,
     };
@@ -337,7 +346,9 @@ pub fn reanchor(app: &AppHandle) -> Result<(), String> {
         pos.x,
         pos.y
     );
-    let _ = window.set_position(pos);
+    // Best-effort re-anchor after resize; the position result is non-fatal
+    // and the next geometry event re-anchors again.
+    let _set_position = window.set_position(pos);
     Ok(())
 }
 

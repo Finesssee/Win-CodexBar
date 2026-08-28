@@ -218,7 +218,7 @@ pub fn initial_size(orientation: &str) -> (f64, f64) {
 /// Convert a 0..=100 opacity value to a Win32 SetLayeredWindowAttributes
 /// alpha byte (0..=255). Values below 30 are clamped so the bar is never
 /// fully invisible — that would be a usability footgun.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code, reason = "opacity_to_alpha drives the Win32 layered-window alpha byte and is unused on non-Windows targets"))]
 pub fn opacity_to_alpha(opacity: u8) -> u8 {
     let clamped = opacity.clamp(30, 100);
     ((clamped as u32) * 255 / 100) as u8

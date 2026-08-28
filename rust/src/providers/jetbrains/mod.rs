@@ -258,4 +258,32 @@ impl Provider for JetBrainsProvider {
     fn supports_cli(&self) -> bool {
         true
     }
+    /// JetBrains' local IDE probe raises `NotInstalled` when the AI
+    /// Assistant plugin is not found in any IDE configuration — an
+    /// installation gap, not a credential problem — so it surfaces as an
+    /// offline local runtime (matching the pre-backend classifier's
+    /// treatment of plugin-presence failures). This is the provider's only
+    /// `NotInstalled` producer, so the variant maps wholesale.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::NotInstalled(_) => crate::core::ProviderStateKind::LocalRuntimeOffline,
+            _ => error.state_kind(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_presence_maps_to_local_runtime_offline() {
+        assert_eq!(
+            JetBrainsProvider::new().error_state_kind(&ProviderError::NotInstalled(
+                "JetBrains AI Assistant not found. Install from JetBrains IDE Marketplace."
+                    .to_string(),
+            )),
+            crate::core::ProviderStateKind::LocalRuntimeOffline
+        );
+    }
 }

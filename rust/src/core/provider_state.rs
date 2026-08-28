@@ -11,9 +11,10 @@
 //! Variant meanings are provider-relative: most providers raise
 //! `NotInstalled` for a missing API key or auth file — a sign-in gate, not an
 //! offline runtime — so the default maps it to
-//! [`ProviderStateKind::NeedsAuthentication`]. Probes that genuinely mean a
-//! local runtime is not running override via `Provider::error_state_kind`
-//! (see `AntigravityProvider`).
+//! [`ProviderStateKind::NeedsAuthentication`]. Probes whose `NotInstalled`
+//! genuinely means a local runtime or CLI binary is missing (language-server
+//! probes, CLI/binary/plugin presence checks) override via
+//! `Provider::error_state_kind` (e.g. `AntigravityProvider`, `ClaudeProvider`).
 
 use serde::{Deserialize, Serialize};
 
@@ -49,13 +50,13 @@ impl ProviderError {
     /// Classify this error into a presentation-safe state. Default mapping is
     /// variant-based; providers whose `ProviderError` variants carry
     /// provider-specific meaning override the pieces they must reinterpret
-    /// (see `AntigravityProvider::error_state_kind`).
+    /// (see `Provider::error_state_kind` implementations).
     pub fn state_kind(&self) -> ProviderStateKind {
         match self {
             // `NotInstalled` mostly reports missing credentials/keys (API
             // key or auth file absent) — a sign-in gate. Providers whose
-            // probe genuinely means a local runtime is not running override
-            // via `error_state_kind`.
+            // probe genuinely means a local runtime or CLI binary is
+            // missing override via `error_state_kind`.
             ProviderError::NotInstalled(_) => ProviderStateKind::NeedsAuthentication,
             // Expired tokens are "expired session"; other OAuth failures
             // (missing credentials, revoked, consent off) are sign-in gates.

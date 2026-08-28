@@ -476,4 +476,43 @@ impl Provider for KiroProvider {
     fn supports_cli(&self) -> bool {
         true
     }
+    /// Kiro's CLI probes raise `NotInstalled` when the `kiro-cli` binary is
+    /// missing ("kiro-cli not found. Install from https://kiro.dev") — an
+    /// installation gap, not a credential problem — so it surfaces as an
+    /// offline local runtime (matching the pre-backend classifier's
+    /// treatment of CLI-presence failures). The guard is message-scoped:
+    /// the state-database token lookup ("Kiro CLI state database not found
+    /// at ...") is auth-flavored and keeps the default mapping.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::NotInstalled(msg) if msg.contains("kiro-cli not found") => {
+                crate::core::ProviderStateKind::LocalRuntimeOffline
+            }
+            _ => error.state_kind(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_presence_maps_to_local_runtime_offline_but_state_db_stays_default() {
+        assert_eq!(
+            KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
+                "kiro-cli not found. Install from https://kiro.dev".to_string(),
+            )),
+            crate::core::ProviderStateKind::LocalRuntimeOffline
+        );
+        // The state-database token lookup is auth-flavored and keeps the
+        // default mapping.
+        assert_eq!(
+            KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
+                "Kiro CLI state database not found at C:\\Users\\x\\Kiro-Cli\\data.sqlite3"
+                    .to_string(),
+            )),
+            crate::core::ProviderStateKind::NeedsAuthentication
+        );
+    }
 }

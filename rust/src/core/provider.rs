@@ -679,8 +679,10 @@ pub trait Provider: Send + Sync {
     /// maps `ProviderError` variants, treating `NotInstalled` as a missing
     /// credential (most providers raise it for a missing API key or auth
     /// file). Override only when a variant carries provider-specific meaning
-    /// that differs — e.g. a local language-server probe whose
-    /// "not installed" means the runtime is simply not running.
+    /// that differs — e.g. a local language-server probe or CLI/binary
+    /// presence check whose "not installed" means the runtime is simply
+    /// not running; prefer a message-contains guard when the provider also
+    /// raises credential-flavored `NotInstalled` errors.
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
         error.state_kind()
     }

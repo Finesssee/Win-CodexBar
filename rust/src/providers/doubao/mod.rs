@@ -917,6 +917,22 @@ impl Provider for DoubaoProvider {
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth, SourceMode::Cli]
     }
+
+    /// Doubao's arkcli probe raises `NotInstalled` when the `arkcli`
+    /// binary is missing from PATH/`ARKCLI_PATH` ("arkcli was not found.
+    /// Install arkcli, ...") — an installation gap, not a credential
+    /// problem — so it surfaces as an offline local runtime (matching the
+    /// pre-backend classifier's treatment of CLI-presence failures). The
+    /// guard is message-scoped: the shared "API key not found" producer
+    /// keeps the default sign-in mapping.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::NotInstalled(msg) if msg.contains("arkcli was not found") => {
+                crate::core::ProviderStateKind::LocalRuntimeOffline
+            }
+            _ => error.state_kind(),
+        }
+    }
 }
 
 fn resolve_api_key(
@@ -1140,5 +1156,24 @@ mod tests {
         let raw = br#"{ "viewer": { "auth_method": "none" }, "items": [] }"#;
         let err = decode_arkcli_usage(raw).unwrap_err();
         assert!(matches!(err, ProviderError::AuthRequired));
+    }
+
+    #[test]
+    fn arkcli_presence_maps_to_local_runtime_offline_but_api_key_stays_default() {
+        assert_eq!(
+            DoubaoProvider::new().error_state_kind(&ProviderError::NotInstalled(
+                "arkcli was not found. Install arkcli, run 'arkcli auth login', or configure \
+                 Doubao API credentials."
+                    .into(),
+            )),
+            crate::core::ProviderStateKind::LocalRuntimeOffline
+        );
+        // The shared API-key producer keeps the default mapping.
+        assert_eq!(
+            DoubaoProvider::new().error_state_kind(&ProviderError::NotInstalled(
+                "API key not found. Set ARK_API_KEY in Preferences or environment.".into(),
+            )),
+            crate::core::ProviderStateKind::NeedsAuthentication
+        );
     }
 }

@@ -636,7 +636,7 @@ async fn fetch_provider_snapshot(
                 id,
                 &metadata,
                 codexbar::logging::safe_error_message(&e),
-                e.state_kind(),
+                provider.error_state_kind(&e),
             ),
             Err(_) => ProviderUsageSnapshot::from_error(
                 id,

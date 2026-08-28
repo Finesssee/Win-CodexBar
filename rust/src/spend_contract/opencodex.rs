@@ -693,4 +693,71 @@ mod tests {
         assert_eq!(entry.cache_read_tokens, Some(3));
         assert_eq!(entry.reasoning_tokens, Some(2));
     }
+
+    #[test]
+    fn parser_normalizes_defaults_and_rejects_malformed_lines() {
+        let minimal = serde_json::json!({
+            "requestId": "  r1  ", "model": "gpt-test", "timestamp": "2026-08-18T10:00:00Z",
+            "usageStatus": "  REPORTED ", "usage": {"cacheCreationInputTokens": 7}
+        });
+        let entry = parse_line(&minimal.to_string()).expect("entry");
+        assert_eq!(entry.request_id, "r1", "ids are trimmed");
+        assert_eq!(
+            entry.provider, "openai",
+            "missing provider defaults to openai"
+        );
+        assert_eq!(
+            entry.usage_status, "reported",
+            "status is lowercased and trimmed"
+        );
+        assert_eq!(entry.conversation_id, None);
+        assert_eq!(entry.cache_creation_tokens, Some(7));
+
+        for malformed in [
+            "{}",
+            r#"{"requestId": "", "model": "m", "timestamp": "2026-08-18T10:00:00Z"}"#,
+            r#"{"requestId": "r1", "model": "   ", "timestamp": "2026-08-18T10:00:00Z"}"#,
+            r#"{"requestId": "r1", "model": "m"}"#,
+            "not json at all",
+        ] {
+            assert!(parse_line(malformed).is_none(), "rejected: {malformed}");
+        }
+    }
+
+    #[test]
+    fn timestamps_parse_rfc3339_epoch_seconds_and_millis() {
+        let expected = Utc.with_ymd_and_hms(2026, 8, 18, 10, 0, 0).unwrap();
+        let rfc3339 = serde_json::json!("2026-08-18T10:00:00Z");
+        assert_eq!(parse_timestamp(&rfc3339), Some(expected));
+        let epoch_seconds = serde_json::json!(1_787_047_200i64);
+        assert_eq!(parse_timestamp(&epoch_seconds), Some(expected));
+        let epoch_millis = serde_json::json!(1_787_047_200_000f64);
+        assert_eq!(parse_timestamp(&epoch_millis), Some(expected));
+        let numeric_string = serde_json::json!("1787047200.0");
+        assert_eq!(parse_timestamp(&numeric_string), Some(expected));
+        for invalid in [
+            serde_json::json!("not a date"),
+            serde_json::json!(0),
+            serde_json::json!(-5.0),
+            serde_json::Value::Null,
+            serde_json::json!(true),
+        ] {
+            assert!(parse_timestamp(&invalid).is_none(), "rejected: {invalid}");
+        }
+    }
+
+    #[test]
+    fn nonnegative_u64_accepts_json_numbers_and_bounded_floats() {
+        assert_eq!(nonnegative_u64(Some(&serde_json::json!(42))), Some(42));
+        assert_eq!(nonnegative_u64(Some(&serde_json::json!(12.0))), Some(12));
+        // Fractional floats are accepted via `as u64` truncation.
+        assert_eq!(nonnegative_u64(Some(&serde_json::json!(1.5))), Some(1));
+        // `u64::MAX as f64` rounds up to 2^64; f64 spacing there is 4096, so
+        // +2048.0 rounds back into range. First out-of-range step is +4096.0.
+        assert_eq!(
+            nonnegative_u64(Some(&serde_json::json!(u64::MAX as f64 + 4096.0))),
+            None
+        );
+        assert_eq!(nonnegative_u64(None), None);
+    }
 }

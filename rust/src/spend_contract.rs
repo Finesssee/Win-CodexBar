@@ -690,4 +690,120 @@ mod tests {
         assert_eq!(free.cost(&counts), Some(0.0));
         assert_eq!(missing.cost(&counts), None);
     }
+
+    #[test]
+    fn sum_optional_cost_propagates_unknown_and_rejects_non_finite() {
+        assert_eq!(sum_optional_cost(Some(1.5), Some(2.25)), Some(3.75));
+        assert_eq!(sum_optional_cost(Some(1.5), None), Some(1.5));
+        assert_eq!(sum_optional_cost(None, Some(2.0)), Some(2.0));
+        assert_eq!(sum_optional_cost(None, None), None);
+        assert_eq!(sum_optional_cost(Some(f64::INFINITY), Some(1.0)), None);
+    }
+
+    #[test]
+    fn add_optional_token_counts_guard_against_overflow() {
+        assert_eq!(add_optional(Some(2), Some(3)), Some(5));
+        assert_eq!(add_optional(Some(2), None), Some(2));
+        assert_eq!(add_optional(None, None), None);
+        assert_eq!(add_optional(Some(u64::MAX), Some(1)), None);
+    }
+
+    #[test]
+    fn merge_models_combines_duplicate_models_and_sorts_priced_first() {
+        let make_row = |model: &str, cost: Option<f64>, input: u64, custom: bool| SpendModelRow {
+            model: model.to_string(),
+            cost_usd: cost,
+            input_tokens: input,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            total_tokens: input,
+            custom_pricing: custom,
+        };
+        let merged = merge_models(
+            vec![
+                make_row("beta", Some(1.0), 10, false),
+                make_row("alpha", None, 5, false),
+                make_row("zzz", Some(1.0), 1, false),
+                make_row("aaa", Some(1.0), 1, false),
+            ],
+            &[make_row("beta", Some(2.0), 7, true)],
+        );
+        let names: Vec<&str> = merged.iter().map(|row| row.model.as_str()).collect();
+        assert_eq!(
+            names,
+            ["beta", "aaa", "zzz", "alpha"],
+            "cost desc, then name asc for ties, unknown cost last"
+        );
+        let beta = &merged[0];
+        assert_eq!(beta.cost_usd, Some(3.0));
+        assert_eq!(beta.input_tokens, 17);
+        assert_eq!(beta.total_tokens, 17);
+        assert!(beta.custom_pricing, "custom pricing flags are OR-ed");
+    }
+
+    #[test]
+    fn merge_daily_sums_matching_days_and_keeps_iso_day_ordering() {
+        let make_point = |day: &str, cost: Option<f64>, tokens: Option<u64>| SpendDailyPoint {
+            day: day.to_string(),
+            cost_usd: cost,
+            total_tokens: tokens,
+        };
+        let merged = merge_daily(
+            vec![
+                make_point("2026-08-02", Some(1.0), Some(10)),
+                make_point("2026-08-01", None, None),
+            ],
+            &[
+                make_point("2026-08-02", Some(2.5), Some(15)),
+                make_point("2026-08-03", Some(4.0), None),
+            ],
+        );
+        let days: Vec<&str> = merged.iter().map(|point| point.day.as_str()).collect();
+        assert_eq!(days, ["2026-08-01", "2026-08-02", "2026-08-03"]);
+        assert_eq!(merged[1].cost_usd, Some(3.5));
+        assert_eq!(merged[1].total_tokens, Some(25));
+        assert_eq!(merged[0].cost_usd, None, "unknown stays unknown");
+        assert_eq!(merged[0].total_tokens, None);
+        assert_eq!(merged[2].total_tokens, None);
+    }
+
+    #[test]
+    fn known_subtotal_sums_known_costs_only_and_needs_known_zero_for_empty() {
+        let make_row = |cost: Option<f64>| SpendModelRow {
+            model: String::new(),
+            cost_usd: cost,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            total_tokens: 0,
+            custom_pricing: false,
+        };
+        let mut summary = CostSummary::default();
+        assert_eq!(known_subtotal(&[], &summary), None);
+        summary.known_zero = true;
+        assert_eq!(known_subtotal(&[], &summary), Some(0.0));
+        summary.known_zero = false;
+        let mixed = [make_row(Some(1.5)), make_row(None), make_row(Some(2.25))];
+        assert_eq!(known_subtotal(&mixed, &summary), Some(3.75));
+        let all_unknown = [make_row(None)];
+        assert_eq!(known_subtotal(&all_unknown, &summary), None);
+    }
+
+    #[test]
+    fn coverage_for_models_counts_priced_rows_as_estimated() {
+        let make_row = |cost: Option<f64>| SpendModelRow {
+            model: String::new(),
+            cost_usd: cost,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            total_tokens: 0,
+            custom_pricing: false,
+        };
+        let coverage =
+            coverage_for_models(&[make_row(Some(0.0)), make_row(None), make_row(Some(3.0))]);
+        assert_eq!(coverage.estimated, 2);
+        assert_eq!(coverage.unpriced, 1);
+        assert_eq!(coverage.total(), 3);
+    }
 }

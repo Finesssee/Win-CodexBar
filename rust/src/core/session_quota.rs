@@ -4,8 +4,14 @@
 //! - Quota becomes depleted (0% remaining)
 //! - Quota is restored (becomes available again)
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![allow(
+    dead_code,
+    reason = "quota types reserved for future session-limit enforcement"
+)]
+#![allow(
+    unused_imports,
+    reason = "imports needed for future session-limit enforcement wiring"
+)]
 
 use crate::core::ProviderId;
 

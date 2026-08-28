@@ -275,6 +275,11 @@ fn credentials_from_oauth_data(oauth: OAuthData) -> Result<ClaudeOAuthCredential
 
     // Convert milliseconds to DateTime
     let expires_at = oauth.expires_at.map(|millis| {
+        // OAuth expiry is stored in whole seconds; sub-second precision is dropped.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "expiry is tracked at whole-second granularity"
+        )]
         let secs = (millis / 1000.0) as i64;
         DateTime::from_timestamp(secs, 0).unwrap_or_else(Utc::now)
     });

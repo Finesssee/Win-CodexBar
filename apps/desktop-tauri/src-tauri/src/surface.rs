@@ -108,7 +108,10 @@ pub struct WindowProperties {
     pub min_height: Option<f64>,
     pub always_on_top: bool,
     /// Whether the window should auto-hide when it loses focus.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "surface helper reserved for future window management integration"
+    )]
     pub blur_dismiss: bool,
     /// Whether the window should be hidden from the Windows taskbar. Widget
     /// surfaces (TrayPanel) stay hidden; the PopOut window mode shows there.

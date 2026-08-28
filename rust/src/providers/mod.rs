@@ -1,6 +1,9 @@
 //! Provider implementations
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "provider traits and helpers are shared across modules; not all are consumed in every build"
+)]
 
 pub mod abacus;
 pub mod aiand;
@@ -276,7 +279,13 @@ pub(crate) fn extract_renewal(text: &str) -> Option<chrono::DateTime<chrono::Utc
         } else {
             number
         };
-        return chrono::DateTime::<chrono::Utc>::from_timestamp(seconds as i64, 0);
+        // Epoch seconds; the sub-second fraction is below timestamp resolution.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "epoch seconds; sub-second fraction below timestamp resolution"
+        )]
+        let whole_seconds = seconds as i64;
+        return chrono::DateTime::<chrono::Utc>::from_timestamp(whole_seconds, 0);
     }
     chrono::DateTime::parse_from_rfc3339(raw)
         .ok()

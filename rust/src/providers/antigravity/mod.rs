@@ -589,7 +589,10 @@ struct UserStatusResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserStatus {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field mirrors the Antigravity API user payload; deserialized for round-trip fidelity but not read yet"
+    )]
     email: Option<String>,
     plan_status: Option<PlanStatus>,
     cascade_model_config_data: Option<ModelConfigData>,

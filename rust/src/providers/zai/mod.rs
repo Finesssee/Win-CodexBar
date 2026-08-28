@@ -9,7 +9,10 @@ pub mod region;
 pub mod settings;
 
 // Re-exports for MCP details menu
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "imports needed for future ZAI provider wiring"
+)]
 pub use mcp_details::{
     McpDetailsMenu, ZaiLimitEntry, ZaiLimitType, ZaiLimitUnit, ZaiUsageDetail, ZaiUsageSnapshot,
 };

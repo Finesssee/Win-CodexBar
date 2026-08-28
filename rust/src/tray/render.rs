@@ -42,6 +42,11 @@ pub fn render_bar_icon_rgba(
     let color_for = |percent: f64| -> (u8, u8, u8) {
         let (r, g, b) = UsageLevel::from_percent(percent).color();
         if has_error {
+            // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "mean of three u8 channels; r+g+b ≤ 765, divided by 3 is ≤ 255 and fits u8"
+            )]
             let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
             (gray, gray, gray)
         } else {
@@ -53,6 +58,11 @@ pub fn render_bar_icon_rgba(
     let bar_right = SZ - 4;
     let bar_width = bar_right - bar_left;
 
+    // pct is clamped to 0–100, scaled by bar_width (≤ SZ = 32), so the result fits u32.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "pct clamped to 0–100 and scaled by bar_width ≤ 32; result is a small pixel count that fits u32"
+    )]
     let fill_px = |pct: f64| ((pct.clamp(0.0, 100.0) / 100.0) * bar_width as f64) as u32;
 
     let mut draw_bar = |y_start: u32, y_end: u32, pct: f64| {
@@ -99,6 +109,11 @@ pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32,
         }
     }
 
+    // percent clamped to 0–100 before rounding, so the cast to u32 cannot truncate.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "percent is clamped to 0–100 and rounded; the integer fits u32"
+    )]
     let pct = percent.clamp(0.0, 100.0).round() as u32;
     let text = if pct >= 100 {
         "100".to_string()
@@ -108,13 +123,24 @@ pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32,
     let glyph_width = 3u32;
     let glyph_gap = 1u32;
     let scale = if text.len() >= 3 { 2u32 } else { 3u32 };
-    let text_width = text.len() as u32 * glyph_width * scale + (text.len() as u32 - 1) * glyph_gap;
+    // text is "100" or at most "NN%", so its length is ≤ 4 and fits u32.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "text is \"100\" or \"NN%\", so len ≤ 4 and fits u32"
+    )]
+    let text_len = text.len() as u32;
+    let text_width = text_len * glyph_width * scale + (text_len - 1) * glyph_gap;
     let text_height = 5 * scale;
     let start_x = (SZ.saturating_sub(text_width)) / 2;
     let start_y = (SZ.saturating_sub(text_height)) / 2;
 
     let (r, g, b) = UsageLevel::from_percent(percent).color();
     let color = if has_error {
+        // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "mean of three u8 channels; r+g+b ≤ 765, divided by 3 is ≤ 255 and fits u8"
+        )]
         let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
         Rgba([gray, gray, gray, 255])
     } else {
@@ -143,6 +169,11 @@ fn draw_glyph(img: &mut RgbaImage, ch: char, x: u32, y: u32, scale: u32, color: 
             for yy in 0..scale {
                 for xx in 0..scale {
                     let px = x + col * scale + xx;
+                    // row_idx is bounded by the 5-row glyph array, so it fits u32.
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "row_idx iterates over a fixed [u8; 5] glyph, so it is 0..5 and fits u32"
+                    )]
                     let py = y + row_idx as u32 * scale + yy;
                     if px < TRAY_ICON_SIZE && py < TRAY_ICON_SIZE {
                         img.put_pixel(px, py, color);
@@ -179,13 +210,13 @@ mod tests {
         let (rgba, w, h) = render_bar_icon_rgba(50.0, None, false);
         assert_eq!(w, TRAY_ICON_SIZE);
         assert_eq!(h, TRAY_ICON_SIZE);
-        assert_eq!(rgba.len() as u32, w * h * 4);
+        assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
     }
 
     #[test]
     fn render_two_bar_has_correct_size() {
         let (rgba, w, h) = render_bar_icon_rgba(30.0, Some(60.0), false);
-        assert_eq!(rgba.len() as u32, w * h * 4);
+        assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
     }
 
     #[test]
@@ -226,7 +257,7 @@ mod tests {
         let (rgba, w, h) = render_percent_icon_rgba(72.0, false);
         assert_eq!(w, TRAY_ICON_SIZE);
         assert_eq!(h, TRAY_ICON_SIZE);
-        assert_eq!(rgba.len() as u32, w * h * 4);
+        assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
     }
 
     #[test]
@@ -243,6 +274,6 @@ mod tests {
     #[test]
     fn percent_icon_clamps_to_hundred() {
         let (rgba, w, h) = render_percent_icon_rgba(125.0, false);
-        assert_eq!(rgba.len() as u32, w * h * 4);
+        assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
     }
 }

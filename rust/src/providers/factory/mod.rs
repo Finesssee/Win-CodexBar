@@ -150,7 +150,16 @@ impl FactoryBillingWindow {
         let resets_at = self
             .seconds_remaining
             .filter(|s| *s > 0.0 && s.is_finite())
-            .map(|s| Utc::now() + Duration::milliseconds((s * 1000.0) as i64));
+            .map(|s| {
+                // Seconds guarded finite and positive; the sub-millisecond
+                // fraction is below the reset-time display resolution.
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "seconds guarded finite and positive; sub-millisecond fraction dropped"
+                )]
+                let millis = (s * 1000.0) as i64;
+                Utc::now() + Duration::milliseconds(millis)
+            });
         let mut window = RateWindow::with_details(
             self.used_percent.clamp(0.0, 100.0),
             window_minutes,

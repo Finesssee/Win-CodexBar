@@ -45,7 +45,10 @@ struct QuotaInfo {
     resets_at: Option<String>,
     max_flows: f64,
     used_flows: f64,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field mirrors the ZenMux API payload; deserialized for round-trip fidelity but not read yet"
+    )]
     remaining_flows: f64,
 }
 

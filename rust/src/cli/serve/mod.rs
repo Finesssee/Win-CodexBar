@@ -109,8 +109,13 @@ struct ServeConfig {
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let mut config = validate_serve_args(&args)?;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "refresh interval is seconds; >u32::MAX secs is meaningless for a dashboard refresh"
+    )]
+    let refresh_interval = args.refresh_interval.max(1) as u32;
     config.dashboard = Some(dashboard::DashboardState::live(
-        args.refresh_interval.max(1) as u32,
+        refresh_interval,
         config.identity,
     ));
     let listener = TcpListener::bind((config.host.as_str(), config.port)).await?;
@@ -397,8 +402,10 @@ fn invalid_request_response() -> String {
 /// The drain is bounded independently of the head-read budget, so this cannot
 /// re-open the slow-trickle hold that #2684 closes.
 async fn respond_and_close_gracefully(stream: &mut TcpStream, response: &[u8]) {
-    let _ = stream.write_all(response).await;
-    let _ = stream.shutdown().await;
+    // Best-effort teardown: a failed error write still leaves the drain +
+    // half-close below to close the socket cleanly.
+    let _written = stream.write_all(response).await;
+    let _shutdown = stream.shutdown().await;
     let drain = async {
         let mut sink = [0_u8; 512];
         while let Ok(n) = stream.read(&mut sink).await {
@@ -407,7 +414,9 @@ async fn respond_and_close_gracefully(stream: &mut TcpStream, response: &[u8]) {
             }
         }
     };
-    let _ = tokio::time::timeout(Duration::from_secs(1), drain).await;
+    // Draining is best-effort; whether the 1s drain budget elapses or the
+    // client already closed, the socket is dropped right after either way.
+    let _drain_result = tokio::time::timeout(Duration::from_secs(1), drain).await;
 }
 
 /// Strongly typed route table for the serve surface.

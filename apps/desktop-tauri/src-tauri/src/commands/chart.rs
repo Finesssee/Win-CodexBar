@@ -381,7 +381,10 @@ fn record_local_usage_fetch_failure(provider_id: &str, failure: CostFetchFailure
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "chart command helper reserved for future dashboard integration"
+)]
 pub(crate) enum CostFetchFailure {
     Failed,
     TimedOut,

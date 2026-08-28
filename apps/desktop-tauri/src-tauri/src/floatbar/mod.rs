@@ -113,7 +113,8 @@ pub fn apply_state(app: &tauri::AppHandle, settings: &Settings) {
     } else if !settings.float_bar_enabled && open {
         let _hide = window::hide(app);
     } else if let Some(w) = app.get_webview_window(FLOATBAR_LABEL) {
-        let _ensure_visible = window::ensure_visible_on_active_monitor(&w, &settings.float_bar_style);
+        let _ensure_visible =
+            window::ensure_visible_on_active_monitor(&w, &settings.float_bar_style);
         window::apply_opacity(&w, settings.float_bar_opacity);
         window::apply_click_through(&w, settings.float_bar_click_through);
         // After possible unminimize/relocate, re-assert widget interaction flags.

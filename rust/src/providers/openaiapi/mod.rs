@@ -45,7 +45,10 @@ struct CostsResponse {
 #[derive(Debug, Deserialize)]
 struct CostBucket {
     start_time: i64,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field present in the OpenAI API billing payload; kept so serde preserves it"
+    )]
     end_time: i64,
     results: Vec<CostResult>,
 }
@@ -69,7 +72,10 @@ struct CompletionsUsageResponse {
 #[derive(Debug, Deserialize)]
 struct CompletionsUsageBucket {
     start_time: i64,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field present in the OpenAI API billing payload; kept so serde preserves it"
+    )]
     end_time: i64,
     results: Vec<CompletionsUsageResult>,
 }
@@ -547,7 +553,10 @@ fn resolve_api_key(
     )))
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "OpenAI API helper reserved for future dashboard integration"
+)]
 fn _assert_datetime_send(_: DateTime<Utc>) {}
 
 #[cfg(test)]

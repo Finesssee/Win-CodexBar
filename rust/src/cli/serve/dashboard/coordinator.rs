@@ -391,7 +391,8 @@ mod tests {
                         // Park until the test releases this generation to its error.
                         let gate = release_rx.lock().expect("poisoned").take();
                         let gate = gate.expect("attempt-1 gate released only once");
-                        let _ = gate.await;
+                        // Best-effort gate await; either outcome releases the parked build.
+                        let _released = gate.await;
                         Err("boom".to_string())
                     } else {
                         Ok(build_snapshot(&stub_input()))
@@ -428,7 +429,8 @@ mod tests {
             .collect();
 
         // Release attempt 1 to its error and drive the builder to completion.
-        let _ = release_tx.send(());
+        // Best-effort release; the receiver is dropped if the build already errored.
+        let _released = release_tx.send(());
         let std::task::Poll::Ready(Err(message)) = builder.as_mut().poll(&mut cx) else {
             panic!("builder must resolve with the attempt-1 error");
         };
@@ -627,7 +629,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         builder.abort(); // cancel the builder mid-build
-        let _ = builder.await;
+        // Reap the aborted builder task; its result is intentionally discarded.
+        let _aborted = builder.await;
 
         // The waiter and a fresh caller both complete via a rebuilt (attempt 2).
         let fresh = {

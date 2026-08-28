@@ -595,8 +595,10 @@ fn run_arkcli_usage_plan() -> Result<Vec<u8>, ProviderError> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                // Best-effort teardown of the timed-out child; the outcome is already
+                // reported as timed out.
+                let _killed = child.kill();
+                let _reaped = child.wait();
                 return Err(ProviderError::Other(
                     "arkcli usage timed out. Check arkcli authentication and try again.".into(),
                 ));
@@ -750,7 +752,14 @@ fn datetime_from_epoch(timestamp: f64) -> Option<DateTime<Utc>> {
     if !timestamp.is_finite() || timestamp <= 0.0 {
         return None;
     }
-    Utc.timestamp_opt(timestamp as i64, 0).single()
+    // Epoch seconds guarded finite and positive; the sub-second fraction is
+    // below timestamp resolution.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "epoch seconds; sub-second fraction below timestamp resolution"
+    )]
+    let whole_seconds = timestamp as i64;
+    Utc.timestamp_opt(whole_seconds, 0).single()
 }
 
 struct SignedVolcengineRequest {

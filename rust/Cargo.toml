@@ -110,3 +110,6 @@ panic = "abort"
 [[bin]]
 name = "codexbar"
 path = "src/main.rs"
+
+[lints]
+workspace = true

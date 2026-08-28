@@ -2,7 +2,10 @@
 //!
 //! Provides Windows toast notifications for usage alerts
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "notification helpers are reserved for future alert integration"
+)]
 
 use crate::core::ProviderId;
 use crate::core::{RateWindow, UsagePace};
@@ -579,6 +582,12 @@ impl NotificationManager {
 }
 
 fn format_duration(seconds: f64) -> String {
+    // Display-only duration label; the value is ceiled to whole minutes and
+    // clamped to at least 1, so only astronomically large inputs could truncate.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "whole-minutes display label; ceil/max bound the value to realistic durations"
+    )]
     let total_minutes = (seconds / 60.0).ceil().max(1.0) as i64;
     let days = total_minutes / 1440;
     let hours = (total_minutes % 1440) / 60;

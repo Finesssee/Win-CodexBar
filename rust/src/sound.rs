@@ -2,7 +2,10 @@
 //!
 //! Handles per-event custom WAV files, built-in CodexBar sounds, and Windows system sounds.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "sound playback types reserved for future alert audio integration"
+)]
 
 use crate::settings::{NotificationSoundPaths, NotificationSoundTheme, Settings};
 use serde::{Deserialize, Serialize};
@@ -266,6 +269,10 @@ fn perform_windows_system_sound(event: NotificationSoundEvent) -> Result<(), Sou
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
+    // SAFETY: `wide_alias` is a null-terminated UTF-16 buffer owned by this
+    // scope that outlives the synchronous call. `hmod` is the null handle
+    // (required when using SND_ALIAS with no module resource). The flags play
+    // the registered system alias synchronously with no default fallback.
     let played = unsafe {
         PlaySoundW(
             PCWSTR(wide_alias.as_ptr()),
@@ -302,6 +309,11 @@ fn perform_custom_wav(path: &str) -> Result<(), SoundError> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    // SAFETY: `wide_path` is a null-terminated UTF-16 buffer owned by this
+    // scope that outlives the synchronous call. `hmod` is the null handle
+    // (required for SND_FILENAME, which names a file rather than a module
+    // resource). Playback is synchronous, so the buffer stays valid through
+    // the whole call.
     let played = unsafe {
         PlaySoundW(
             PCWSTR(wide_path.as_ptr()),
@@ -333,6 +345,11 @@ fn perform_built_in_sound(event: NotificationSoundEvent) -> Result<(), SoundErro
     use windows::Win32::Media::Audio::{PlaySoundA, SND_MEMORY, SND_NODEFAULT};
     use windows::core::PCSTR;
 
+    // SAFETY: `wav` is static bytes embedded via `include_bytes!`, so its
+    // pointer is valid for the program's lifetime. `hmod` is the null handle
+    // (required with SND_MEMORY, which reads the sound from the memory
+    // buffer rather than a module resource). Playback is synchronous, so
+    // the buffer stays valid through the whole call.
     let played = unsafe {
         PlaySoundA(
             PCSTR(wav.as_ptr()),

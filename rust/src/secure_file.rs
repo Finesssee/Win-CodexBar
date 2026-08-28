@@ -143,7 +143,14 @@ fn protect_with_flags(plain: &[u8], flags: u32) -> io::Result<Vec<u8>> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData};
 
+    // SAFETY: input_blob borrows `plain` for the duration of the call and
+    // cbData is its exact length; output_blob is filled by CryptProtectData,
+    // copied out before LocalFree releases the API-allocated buffer.
     unsafe {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "credential payloads are small config blobs; a >4 GiB secret is not a real input"
+        )]
         let input_blob = CRYPT_INTEGER_BLOB {
             cbData: plain.len() as u32,
             pbData: plain.as_ptr() as *mut u8,
@@ -174,7 +181,14 @@ fn unprotect(encrypted: &[u8]) -> io::Result<Vec<u8>> {
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
     };
 
+    // SAFETY: same blob contract as protect_with_flags: input points at
+    // `encrypted` with its exact length; the returned buffer is fully copied
+    // before LocalFree, per the DPAPI allocation contract.
     unsafe {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "protected files were written by protect(); their size fits u32 by construction"
+        )]
         let input_blob = CRYPT_INTEGER_BLOB {
             cbData: encrypted.len() as u32,
             pbData: encrypted.as_ptr() as *mut u8,

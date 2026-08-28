@@ -3,7 +3,10 @@
 //! Data export structures for widgets and external integrations.
 //! Provides a serializable snapshot of all provider usage data.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "widget snapshot types reserved for future UI integration"
+)]
 
 use crate::core::{ProviderId, RateWindow};
 use chrono::{DateTime, Utc};
@@ -257,7 +260,8 @@ impl WidgetSnapshotStore {
     /// Clear widget snapshot
     pub fn clear() {
         if let Some(path) = Self::snapshot_path() {
-            let _ = fs::remove_file(path);
+            // Best-effort cleanup; a missing snapshot file is not an error.
+            let _cleared_snapshot = fs::remove_file(path);
         }
     }
 

@@ -280,7 +280,13 @@ fn subtract_entry_days(
 
 /// File size of the on-disk cache artifact, or 0 when unreadable.
 pub fn artifact_file_size(path: &Path) -> i64 {
-    fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0)
+    // Cache artifacts are bounded JSON blobs (320 MiB cap for Codex); sizes fit i64.
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "cache artifact file sizes fit i64"
+    )]
+    let len = fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+    len
 }
 
 /// True only for the Codex provider: only Codex persistence carries bounded

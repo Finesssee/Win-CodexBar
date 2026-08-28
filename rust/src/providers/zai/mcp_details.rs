@@ -333,6 +333,11 @@ impl ZaiLimitRaw {
 
         let next_reset = self.next_reset_time.map(|ms| {
             let secs = ms / 1000;
+            // ms % 1000 is at most 999, so nanoseconds stay below u32::MAX.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "remainder < 1000 keeps nanoseconds within u32"
+            )]
             let nsecs = ((ms % 1000) * 1_000_000) as u32;
             DateTime::from_timestamp(secs, nsecs).unwrap_or_else(Utc::now)
         });

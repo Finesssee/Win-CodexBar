@@ -398,7 +398,13 @@ fn parse_datetime(raw: String) -> Option<DateTime<Utc>> {
         } else {
             number
         };
-        return DateTime::<Utc>::from_timestamp(seconds as i64, 0);
+        // Epoch seconds (or ms normalized above); real dates are far below i64::MAX.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "normalized epoch seconds fit i64"
+        )]
+        let secs = seconds as i64;
+        return DateTime::<Utc>::from_timestamp(secs, 0);
     }
     DateTime::parse_from_rfc3339(&raw)
         .ok()

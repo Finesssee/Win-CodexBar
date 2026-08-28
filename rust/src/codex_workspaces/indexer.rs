@@ -163,6 +163,10 @@ impl CodexWorkspacesIndex {
         files.sort();
         files.dedup();
 
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "progress UI field is u32; a session file count above 4 billion is not realistic"
+        )]
         let total_file_count = files.len() as u32;
         progress(Progress {
             phase: ProgressPhase::ScanningLogs,
@@ -193,9 +197,14 @@ impl CodexWorkspacesIndex {
                 }
             }
             if idx == 0 || (idx + 1) % 25 == 0 || idx + 1 == files.len() {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "index within the same files list whose len fits u32"
+                )]
+                let processed = (idx + 1) as u32;
                 progress(Progress {
                     phase: ProgressPhase::IndexingProjects,
-                    processed_file_count: Some((idx + 1) as u32),
+                    processed_file_count: Some(processed),
                     total_file_count: Some(total_file_count),
                     indexed_file_count: indexed,
                     skipped_file_count: skipped,
@@ -412,6 +421,7 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 path: first.project_path.clone(),
                 totals,
                 cost_estimate: cost,
+                #[allow(clippy::cast_possible_truncation, reason = "session count per project fits u32; capped upstream by the files-list length")]
                 session_count: buckets.len() as u32,
                 latest_activity: latest,
                 top_model,
@@ -550,8 +560,11 @@ fn read_catalog_status(db_path: &Path) -> SourceStatus {
             };
         }
     };
-    let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
-    let _ = conn.execute_batch("PRAGMA query_only = ON;");
+    // Best-effort tuning of a read-only probe connection: a rejected
+    // busy_timeout or pragma still leaves the queries below to surface
+    // locked/corrupt states.
+    let _busy = conn.busy_timeout(std::time::Duration::from_millis(250));
+    let _pragma = conn.execute_batch("PRAGMA query_only = ON;");
 
     let has_threads: Result<bool, _> = conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'threads' LIMIT 1",

@@ -5,3 +5,10 @@ members = [
 ]
 default-members = ["apps/desktop-tauri/src-tauri"]
 resolver = "3"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+let_underscore_must_use = "deny"
+undocumented_unsafe_blocks = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"

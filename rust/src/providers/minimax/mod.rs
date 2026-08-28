@@ -9,7 +9,10 @@ mod local_storage;
 mod token_plan;
 
 // Re-exports for local storage import
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "imports needed for future MiniMax provider wiring"
+)]
 pub use local_storage::{ImportError, MiniMaxLocalStorageImporter, MiniMaxSession};
 
 use async_trait::async_trait;

@@ -49,7 +49,14 @@ impl RateWindowCadence {
         if seconds <= 0 {
             return Self::Unknown;
         }
-        Self::from_minutes(((seconds + 59) / 60) as u32)
+        // Window seconds are real reset deltas (session..monthly scale); the
+        // rounded-up minute count fits u32 with huge margin.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "window minutes from real reset deltas fit u32"
+        )]
+        let minutes = ((seconds + 59) / 60) as u32;
+        Self::from_minutes(minutes)
     }
 
     /// Human-readable label key for this cadence (matches upstream lane names).
@@ -145,7 +152,13 @@ impl RateWindow {
         let start = subtract_one_calendar_month(resets_at)?;
         let minutes = (resets_at - start).num_minutes();
         if minutes > 0 {
-            Some(minutes as u32)
+            // A real calendar month is 28-31 days (~45k minutes), far below u32::MAX.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "calendar month minutes fit u32"
+            )]
+            let minutes_u32 = minutes as u32;
+            Some(minutes_u32)
         } else {
             None
         }

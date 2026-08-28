@@ -417,7 +417,14 @@ impl SandUsageStatus {
             .and_then(parse_iso_date);
         let minutes = start.zip(reset).and_then(|(start, reset)| {
             let minutes = (reset - start).num_minutes();
-            (minutes > 0).then_some(minutes as u32)
+            // Guarded by the minutes > 0 check; rate windows are far
+            // shorter than u32::MAX minutes.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "guarded by the minutes > 0 check; rate windows are far shorter than u32::MAX minutes"
+            )]
+            let minutes_u32 = minutes as u32;
+            (minutes > 0).then_some(minutes_u32)
         });
         Some(NamedRateWindow::new(
             "cursor-grok-bot",

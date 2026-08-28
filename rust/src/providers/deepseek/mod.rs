@@ -553,6 +553,12 @@ fn category_label(category: &str) -> String {
 fn format_count(value: f64) -> String {
     let rounded = value.round();
     if (value - rounded).abs() < 0.01 {
+        // Guarded above: value is within 0.01 of a whole number, so the
+        // fractional part is zero.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "whole-number guard above; fractional part is zero"
+        )]
         let raw = (rounded as i64).to_string();
         let mut output = String::new();
         for (idx, ch) in raw.chars().rev().enumerate() {

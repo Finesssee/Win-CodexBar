@@ -3,7 +3,10 @@
 //! On native Windows, uses standard AppData paths.
 //! On WSL, resolves browser paths via /mnt/c/ to access Windows browser data.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "browser detection types reserved for future cookie-based session management"
+)]
 
 use std::path::{Path, PathBuf};
 

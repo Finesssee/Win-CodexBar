@@ -186,7 +186,8 @@ fn cleanup_probe_session_jsonl(probe_dir: &std::path::Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            let _ = std::fs::remove_file(&path);
+            // Best-effort cleanup: a locked or missing probe file just stays.
+            let _removed = std::fs::remove_file(&path);
         }
     }
 }

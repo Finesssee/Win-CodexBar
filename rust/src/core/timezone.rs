@@ -74,9 +74,9 @@ fn pin_globalization_dll() -> bool {
         Ok(module) => module,
         Err(_) => return false,
     };
+    let mut pinned = HMODULE::default();
     // SAFETY: an HMODULE is the module's base address, i.e. an address
     // inside its own mapping, satisfying GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS.
-    let mut pinned = HMODULE::default();
     let pinned_ok = unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -95,7 +95,7 @@ fn pin_globalization_dll() -> bool {
     // SAFETY: `module` is a live module handle owned by this scope and is
     // released at most once, here.
     unsafe {
-        let _ = FreeLibrary(module);
+        let _released = FreeLibrary(module);
     }
     pinned_ok
 }

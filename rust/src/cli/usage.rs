@@ -714,6 +714,11 @@ fn render_progress_bar(percent: f64, width: usize, use_color: bool) -> String {
     } else {
         0.0
     };
+    // percent is clamped to 0..=100, so the rounded product cannot exceed width.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "percent clamped to 0..=100, so the product cannot exceed width"
+    )]
     let filled = ((percent / 100.0) * width as f64).round() as usize;
     let empty = width.saturating_sub(filled);
 

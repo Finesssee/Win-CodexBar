@@ -469,7 +469,13 @@ fn ascii_header_value(raw: &str) -> String {
 
 fn format_usage_amount(value: f64) -> String {
     if (value.fract()).abs() < f64::EPSILON {
-        format!("{}", value as i64)
+        // Value verified integral to f64 precision; the i64 cast loses nothing.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "guarded by the fract() == 0 check above"
+        )]
+        let integral = value as i64;
+        format!("{integral}")
     } else {
         format!("{value:.2}")
     }

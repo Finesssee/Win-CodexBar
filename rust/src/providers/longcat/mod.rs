@@ -256,7 +256,14 @@ fn build_snapshot(
 
     let primary = if total > 0.0 {
         let mut w = RateWindow::new(((used / total) * 100.0).clamp(0.0, 100.0));
-        w.reset_description = Some(format!("{}/{}", used as i64, total as i64));
+        // Display-only rendering of token counts; values beyond i64 are
+        // unrealistic quota sizes and would only affect this label.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "display-only quota label; token counts beyond i64 are unrealistic"
+        )]
+        let desc = format!("{}/{}", used as i64, total as i64);
+        w.reset_description = Some(desc);
         w
     } else {
         RateWindow::informational("No token quota")
@@ -280,10 +287,13 @@ fn build_snapshot(
             let mut secondary =
                 RateWindow::new(((used_fuel / total_fuel) * 100.0).clamp(0.0, 100.0));
             secondary.resets_at = expiry;
-            secondary.reset_description = Some(format!(
-                "Fuel pack: {}/{}",
-                remaining_fuel as i64, total_fuel as i64
-            ));
+            // Same display-only label for fuel-pack counts.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "display-only fuel label; fuel counts beyond i64 are unrealistic"
+            )]
+            let fuel_desc = format!("Fuel pack: {}/{}", remaining_fuel as i64, total_fuel as i64);
+            secondary.reset_description = Some(fuel_desc);
             snap = snap.with_secondary(secondary);
         }
     }

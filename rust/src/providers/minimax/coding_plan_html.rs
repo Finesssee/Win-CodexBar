@@ -168,18 +168,25 @@ fn parse_available_usage(text: &str) -> Option<(i64, u32)> {
 
 /// Convert a duration + unit to minutes (upstream `minutes(from:unit:)`).
 fn minutes_from_duration(value: f64, unit: &str) -> u32 {
+    // Window lengths come from the provider's own dashboard text and are
+    // minutes-scale; u32 overflow would need a >8000-year window.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "dashboard window durations are minutes-scale; u32 is far beyond any real window"
+    )]
+    let to_minutes = |scaled: f64| -> u32 { scaled.round() as u32 };
     let lower = unit.to_lowercase();
     if lower.starts_with('d') {
-        return (value * 24.0 * 60.0).round() as u32;
+        return to_minutes(value * 24.0 * 60.0);
     }
     if lower.starts_with('h') {
-        return (value * 60.0).round() as u32;
+        return to_minutes(value * 60.0);
     }
     if lower.starts_with('m') {
-        return value.round() as u32;
+        return to_minutes(value);
     }
     if lower.starts_with('s') {
-        return ((value / 60.0).round() as u32).max(1);
+        return to_minutes(value / 60.0).max(1);
     }
     0
 }
@@ -211,7 +218,14 @@ fn parse_resets_at_from_text(text: &str, now: DateTime<Utc>) -> Option<DateTime<
     {
         let unit = &caps[1];
         let seconds = seconds_from_duration(value, unit);
-        return Some(now + Duration::seconds(seconds as i64));
+        // "Resets in N <unit>" values are parsed from dashboard text and
+        // rounded to whole seconds.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "reset countdown truncated to whole seconds by design"
+        )]
+        let total_seconds = seconds as i64;
+        return Some(now + Duration::seconds(total_seconds));
     }
 
     // "Resets at HH:mm (zone hint)"

@@ -12,7 +12,8 @@ fn launch_log_path() -> PathBuf {
 }
 
 fn append_launch_log(log_path: &Path, message: &str) {
-    let _ = std::fs::OpenOptions::new()
+    // Best-effort launch diagnostics; failure to append is not fatal.
+    let _logged = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)

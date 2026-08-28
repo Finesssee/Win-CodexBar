@@ -216,6 +216,10 @@ impl OpenCodeGoProvider {
 
             let percent = super::extract_number(&percent_pattern, text);
             if let Some(p) = percent {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "resetInSec values are whole-second counts scraped as integral numbers"
+                )]
                 let reset = super::extract_number(&reset_pattern, text)
                     .map(|n| n as i64)
                     .unwrap_or(0);
@@ -237,6 +241,10 @@ impl OpenCodeGoProvider {
                 super::extract_number(&limit_pattern, text),
             ) && limit > 0.0
             {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "resetInSec values are whole-second counts scraped as integral numbers"
+                )]
                 let reset = super::extract_number(&reset_pattern, text)
                     .map(|n| n as i64)
                     .unwrap_or(0);

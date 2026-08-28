@@ -3,7 +3,10 @@
 //! Fetches usage data from JetBrains IDE local configuration
 //! JetBrains AI Assistant stores quota info in XML configuration files
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "JetBrains provider types reserved for future integration"
+)]
 
 use async_trait::async_trait;
 use std::path::PathBuf;

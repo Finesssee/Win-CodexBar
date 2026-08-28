@@ -108,7 +108,10 @@ pub struct CodexAccount {
 }
 
 impl CodexAccount {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "constructor accepts all account fields for complete initialization"
+    )]
     pub fn new(
         id: Uuid,
         nickname: Option<String>,

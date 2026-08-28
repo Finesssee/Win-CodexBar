@@ -514,7 +514,12 @@ fn jwt_exp_unix(token: &str) -> Option<u64> {
             .get("exp")?
             .as_f64()
             .filter(|f| f.is_finite() && *f > 0.0)
-            .map(|f| f as u64)
+            .map(|f| {
+                // JWT exp is a whole-second unix timestamp, far below u64::MAX.
+                #[expect(clippy::cast_possible_truncation, reason = "JWT exp epoch fits u64")]
+                let f = f as u64;
+                f
+            })
     })?;
     (exp > 0).then_some(exp)
 }
@@ -751,7 +756,10 @@ pub(crate) fn snapshot_from_credit_status(
         (Some(start), Some(end)) if end > start => {
             let mins = (end - start).num_minutes();
             if mins > 0 {
-                Some(mins.min(u32::MAX as i64) as u32)
+                // Window length is clamped to u32::MAX, so the cast cannot truncate.
+                #[expect(clippy::cast_possible_truncation, reason = "clamped to u32 range")]
+                let window = mins.min(u32::MAX as i64) as u32;
+                Some(window)
             } else {
                 None
             }

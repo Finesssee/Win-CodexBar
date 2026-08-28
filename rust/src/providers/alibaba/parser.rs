@@ -71,10 +71,22 @@ pub(crate) fn parse_response(json: &serde_json::Value) -> Result<UsageSnapshot, 
     let detail = |used_key: &str, total_key: &str| -> Option<String> {
         let used = quota.get(used_key).and_then(|v| v.as_f64())?;
         let total = quota.get(total_key).and_then(|v| v.as_f64())?;
+        // Token counts are whole numbers; the fractional part is rounding
+        // noise from JSON float parsing.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "token counts are whole numbers; fractional part is rounding noise"
+        )]
+        let used_tokens = used as i64;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "token counts are whole numbers; fractional part is rounding noise"
+        )]
+        let total_tokens = total as i64;
         Some(format!(
             "{} / {} tokens",
-            fmt_tokens(used as i64),
-            fmt_tokens(total as i64)
+            fmt_tokens(used_tokens),
+            fmt_tokens(total_tokens)
         ))
     };
 

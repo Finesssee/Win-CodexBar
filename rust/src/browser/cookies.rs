@@ -3,7 +3,10 @@
 //! Chromium browsers store cookies in an SQLite database encrypted with DPAPI.
 //! Firefox stores cookies in an unencrypted SQLite database.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "the cookie API surface is shared across providers and cfg-split Windows/WSLS code paths, so individual helpers are reached only from their own browser/provider callers"
+)]
 
 use std::path::Path;
 
@@ -269,7 +272,7 @@ impl CookieExtractor {
         );
 
         // Clean up temp file
-        let _ = std::fs::remove_file(&temp_db);
+        let _cleanup = std::fs::remove_file(&temp_db);
 
         // If every candidate cookie failed to decrypt and no cookies were recovered,
         // check whether Chrome App-Bound Encryption (Chrome 127+) is the culprit.
@@ -333,9 +336,19 @@ impl CookieExtractor {
         use windows::Win32::Foundation::{HLOCAL, LocalFree};
         use windows::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData};
 
+        // DPAPI blob sizes come from in-memory slices, far below u32::MAX.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "encrypted cookie blobs are small in-memory buffers; a length near u32::MAX is unreachable"
+        )]
+        let cb_input_len = encrypted_data.len() as u32;
+        // SAFETY: CryptUnprotectData only reads `input_blob` (which borrows the
+        // caller-owned `encrypted_data` slice) and allocates `output_blob`, whose
+        // buffer we copy and release with LocalFree below; all pointers passed
+        // are valid for the duration of the single call.
         unsafe {
             let input_blob = CRYPT_INTEGER_BLOB {
-                cbData: encrypted_data.len() as u32,
+                cbData: cb_input_len,
                 pbData: encrypted_data.as_ptr() as *mut u8,
             };
 
@@ -538,7 +551,7 @@ impl CookieExtractor {
         }
 
         // Clean up
-        let _ = std::fs::remove_file(&temp_db);
+        let _cleanup = std::fs::remove_file(&temp_db);
 
         Ok(cookies)
     }
@@ -809,7 +822,7 @@ mod tests {
             write!(f, r#"{{"os_crypt":{{"encrypted_key":"QUJDREVGR0g="}}}}"#).unwrap();
         }
         let detected = CookieExtractor::detect_app_bound_encryption(&path);
-        let _ = std::fs::remove_file(&path);
+        let _cleanup = std::fs::remove_file(&path);
         assert!(!detected, "ABE should not be detected when field is absent");
     }
 
@@ -829,7 +842,7 @@ mod tests {
             .unwrap();
         }
         let detected = CookieExtractor::detect_app_bound_encryption(&path);
-        let _ = std::fs::remove_file(&path);
+        let _cleanup = std::fs::remove_file(&path);
         assert!(detected, "ABE should be detected when field is present");
     }
 }

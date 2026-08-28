@@ -275,23 +275,35 @@ fn parse_pi_assistant_entry(value: &Value, target: PiMappedProvider) -> Option<P
         PiMappedProvider::Codex => {
             CostUsagePricing::codex_cost_usd(&model, input, cache_read, output).unwrap_or(0.0)
         }
-        PiMappedProvider::Claude => CostUsagePricing::claude_cost_usd(
-            &model,
-            input as i32,
-            cache_read as i32,
-            cache_create as i32,
-            output as i32,
-        )
-        .unwrap_or_else(|| {
-            CostUsagePricing::claude_cost_usd(
-                "claude-sonnet-4-6",
-                input as i32,
-                cache_read as i32,
-                cache_create as i32,
-                output as i32,
-            )
-            .unwrap_or(0.0)
-        }),
+        PiMappedProvider::Claude => {
+            // Token counts come from API usage records and fit within i32;
+            // the canonical Claude pricing table takes i32 per-token counts.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "token counts clamped to i32::MAX above"
+            )]
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "token counts are non-negative; wrapping is impossible"
+            )]
+            let (input, cache_read, cache_create, output) = (
+                input.min(i32::MAX as u64) as i32,
+                cache_read.min(i32::MAX as u64) as i32,
+                cache_create.min(i32::MAX as u64) as i32,
+                output.min(i32::MAX as u64) as i32,
+            );
+            CostUsagePricing::claude_cost_usd(&model, input, cache_read, cache_create, output)
+                .unwrap_or_else(|| {
+                    CostUsagePricing::claude_cost_usd(
+                        "claude-sonnet-4-6",
+                        input,
+                        cache_read,
+                        cache_create,
+                        output,
+                    )
+                    .unwrap_or(0.0)
+                })
+        }
     };
 
     Some(PiEntry {
@@ -314,6 +326,12 @@ fn num(usage: &Value, keys: &[&str]) -> u64 {
                 return n.max(0) as u64;
             }
             if let Some(n) = v.as_f64() {
+                // Usage counts are whole tokens; dropping any fractional part
+                // matches the previous cast behavior exactly.
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "token counts are whole numbers; fractional part is rounding noise"
+                )]
                 return n.max(0.0) as u64;
             }
             if let Some(s) = v.as_str()

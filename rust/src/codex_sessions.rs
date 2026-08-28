@@ -141,7 +141,9 @@ mod tests {
 
         assert!(dirs.contains(&user_sessions));
         assert!(dirs.contains(&root_sessions));
-        let _ = fs::remove_dir_all(base);
+        // Best-effort teardown of the temp tree; a removal error cannot
+        // change the assertions already made above.
+        let _removed_temp = fs::remove_dir_all(base);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Status overlay system for showing provider health in tray icons.
 //! Integrates with status page monitoring (Statuspage.io, etc.)
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "status indicator types reserved for future UI integration")]
 
 use serde::{Deserialize, Serialize};
 

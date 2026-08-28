@@ -101,6 +101,10 @@ fn window_minutes(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> O
     let (start, end) = (start?, end?);
     let minutes = (end - start).num_minutes();
     if minutes > 0 {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "guarded by `minutes > 0`; a window longer than ~8 million years is impossible"
+        )]
         Some(minutes as u32)
     } else {
         None
@@ -127,6 +131,12 @@ fn resets_at(
     } else {
         remains as f64
     };
+    // Display/rounding conversion of an epoch value; sub-second precision is
+    // intentionally dropped.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "epoch seconds truncated to whole seconds by design"
+    )]
     Some(now + Duration::seconds(seconds as i64))
 }
 
@@ -215,7 +225,12 @@ fn window_type_from_duration(start: Option<DateTime<Utc>>, end: Option<DateTime<
     } else if (4.0..=6.0).contains(&duration_hours) {
         "5 hours".to_string()
     } else if (1.0..23.0).contains(&duration_hours) {
-        format!("{} hours", duration_hours as i64)
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "label only; duration already filtered into the 1..23 hours bucket"
+        )]
+        let label = format!("{} hours", duration_hours as i64);
+        label
     } else {
         "Custom".to_string()
     }
@@ -287,7 +302,10 @@ fn reset_description(
 /// Build a `RemainsRow` from the raw interval/weekly fields (upstream
 /// `makeServiceUsage`). Returns `None` when the row is a placeholder that
 /// should be skipped.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "signature mirrors the flat upstream makeServiceUsage payload fields one-to-one"
+)]
 fn make_remains_row(
     service_type: &str,
     window_type_override: Option<&str>,

@@ -22,7 +22,10 @@ pub fn note_menu_open() {
 }
 
 /// Weak coding-activity signal (e.g. a refresh cycle that found live usage).
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "auto-refresh helper reserved for future UI integration"
+)]
 pub fn note_coding_activity() {
     *LAST_CODING_ACTIVITY
         .get_or_init(|| Mutex::new(None))

@@ -71,7 +71,9 @@ impl CodexAccountManager {
         {
             Ok(account) => Ok(account),
             Err(error) => {
-                let _ = fs::remove_dir_all(&home_path);
+                // Best-effort teardown of the fresh managed home on failure;
+                // a removal error cannot change the authentication outcome.
+                let _removed_home = fs::remove_dir_all(&home_path);
                 Err(error)
             }
         }
@@ -355,7 +357,9 @@ impl CodexAccountManager {
         let Ok(encoded) = serde_json::to_string_pretty(&payload) else {
             return;
         };
-        let _ = fs::write(path, format!("{encoded}\n"));
+        // Best-effort teardown: persisting the rewritten payload is advisory
+        // and a write error cannot change the in-memory rewrite result.
+        let _written_payload = fs::write(path, format!("{encoded}\n"));
     }
 
     fn managed_home_paths_matching(

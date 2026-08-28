@@ -119,7 +119,13 @@ pub(crate) fn add_codex_days_map_to_summary(
     (total_cost, has_tokens)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "test-only helper path: only scan_codex_file_cost (test) calls this outside tests"
+    )
+)]
 pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
     let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
         Ok(result) => result,
@@ -282,7 +288,13 @@ fn add_codex_tokens_to_summary(
     Some(cost)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "only reached from scan_codex_file_cost_for_range, which is test-only in non-test builds"
+    )
+)]
 fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -> f64 {
     let mut total_cost = 0.0;
 
@@ -322,7 +334,10 @@ fn codex_speed_bucket(model: &str) -> &'static str {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "only reached from test paths in non-test builds")
+)]
 fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
     codex_cost_usd_for_day(model, input, cached, output, None)
 }
@@ -346,6 +361,17 @@ fn codex_cost_usd_for_day(
 
     let normalized = CostUsagePricing::normalize_codex_model(model);
     if normalized.contains("fast") || normalized.contains("priority") {
+        // Fast pricing takes i32 token counts; usage-record counts fit far
+        // below i32::MAX, and the callee re-checks the long-context threshold
+        // against the original u64 magnitude.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "token counts from usage records fit i32"
+        )]
+        #[allow(
+            clippy::cast_possible_wrap,
+            reason = "token counts are non-negative; wrapping is impossible"
+        )]
         let fast = pricing_day
             .and_then(|day| {
                 CostUsagePricing::codex_fast_cost_usd_at_date(

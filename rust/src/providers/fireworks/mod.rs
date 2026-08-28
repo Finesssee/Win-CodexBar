@@ -36,7 +36,10 @@ struct BillingSummaryResponse {
     #[serde(default)]
     line_items: Vec<LineItem>,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field present in the Fireworks billing payload; kept so serde accepts and preserves it"
+    )]
     usage_buckets: Vec<UsageBucket>,
 }
 
@@ -44,7 +47,10 @@ struct BillingSummaryResponse {
 #[serde(rename_all = "camelCase")]
 struct LineItem {
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "deserialized for payload fidelity; cost math uses only total_cost"
+    )]
     category: Option<String>,
     #[serde(default)]
     total_cost: Option<Money>,
@@ -63,7 +69,10 @@ struct Money {
 #[serde(rename_all = "camelCase")]
 struct UsageBucket {
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "timestamp field of the upstream bucket schema; unused locally but required by the wire format"
+    )]
     bucket_start_time: Option<String>,
 }
 

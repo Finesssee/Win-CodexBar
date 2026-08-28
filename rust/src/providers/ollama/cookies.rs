@@ -113,7 +113,8 @@ pub(super) fn cache_validated_session_cookie(source: &OllamaCookieSource) {
             OllamaCookieSource::Manual(_) => "validated",
             OllamaCookieSource::Browser(_) => "browser",
         };
-        let _ = CookieHeaderCache::store(ProviderId::Ollama, &header, label);
+        // Cache store is best-effort: a failed write just means the next fetch re-validates.
+        let _stored = CookieHeaderCache::store(ProviderId::Ollama, &header, label);
     }
 }
 

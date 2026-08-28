@@ -159,7 +159,10 @@ impl InfiniClient {
 }
 
 #[cfg(test)]
-#[allow(clippy::items_after_test_module)]
+#[allow(
+    clippy::items_after_test_module,
+    reason = "test module is defined before helper functions that support it"
+)]
 mod tests {
     use super::*;
 

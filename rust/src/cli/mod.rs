@@ -6,7 +6,10 @@
 //! - `codexbar cost` - print local token cost usage
 //! - `codexbar autostart` - manage Windows auto-start
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "CLI subcommand types reserved for future command expansion"
+)]
 
 pub mod account;
 pub mod autostart;

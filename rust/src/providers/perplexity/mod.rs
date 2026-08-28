@@ -71,7 +71,13 @@ impl PerplexityProvider {
     }
 
     fn ts_to_datetime(ts: f64) -> Option<DateTime<Utc>> {
-        Utc.timestamp_opt(ts as i64, 0).single()
+        // Grant expiry epochs are whole-second unix timestamps, far below i64::MAX.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "whole-second epoch fits i64"
+        )]
+        let secs = ts as i64;
+        Utc.timestamp_opt(secs, 0).single()
     }
 
     fn parse_response(resp: CreditsResponse) -> Result<UsageSnapshot, ProviderError> {

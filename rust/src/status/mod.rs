@@ -2,7 +2,7 @@
 //!
 //! Fetches operational status from provider status pages
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "status types reserved for future UI integration")]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

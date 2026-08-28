@@ -389,7 +389,9 @@ impl HookRunner {
             .map_err(|e| format!("launch failed: {e}"))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(&payload);
+            // Fire-and-forget payload delivery: a hook that closed stdin early
+            // yields a write error, which must not abort hook execution.
+            let _delivered = stdin.write_all(&payload);
         }
 
         let timeout = Duration::from_secs(rule.timeout_secs.max(1));
@@ -404,8 +406,10 @@ impl HookRunner {
                 }
                 Ok(None) => {
                     if started.elapsed() >= timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        // Teardown after timeout: kill/wait results cannot change
+                        // the outcome, which is already reported as timed out.
+                        let _killed = child.kill();
+                        let _reaped = child.wait();
                         return Err("timed out".into());
                     }
                     std::thread::sleep(Duration::from_millis(50));
@@ -487,6 +491,10 @@ fn format_unix_utc(secs: u64) -> String {
     let hour = tod / 3600;
     let min = (tod % 3600) / 60;
     let sec = tod % 60;
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "secs comes from duration since the UNIX epoch, so days fits i64 by a wide margin"
+    )]
     let (year, month, day) = civil_from_days(days as i64);
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
@@ -497,18 +505,32 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "yoe < 400 by the era math and era * 400 stays far inside i64 for any representable day count"
+    )]
     let y = yoe as i64 + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m as u32, d as u32)
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Hinnant's algorithm bounds m to 1..=12 and d to 1..=31; y only exceeds i32 for day offsets billions of years from real clock time"
+    )]
+    let date = (y as i32, m as u32, d as u32);
+    date
 }
 
 fn format_number(value: f64) -> String {
     if value.is_finite() && (value - value.round()).abs() < f64::EPSILON && value.abs() < 1e15 {
-        format!("{}", value as i64)
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the guard above ensures value is finite, integral and |value| < 1e15, so the cast is exact"
+        )]
+        let integral = value as i64;
+        format!("{integral}")
     } else {
         format!("{value}")
     }

@@ -305,7 +305,13 @@ fn reset_date(value: f64) -> Option<DateTime<Utc>> {
     if !value.is_finite() || !(1_000_000_000.0..=4_102_444_800.0).contains(&value) {
         return None;
     }
-    Utc.timestamp_opt(value as i64, 0).single()
+    // Range-checked above to valid Unix seconds.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "value is range-checked above to valid Unix seconds"
+    )]
+    let seconds = value as i64;
+    Utc.timestamp_opt(seconds, 0).single()
 }
 
 #[cfg(test)]

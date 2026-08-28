@@ -256,7 +256,13 @@ fn epoch_to_datetime(value: f64) -> Option<DateTime<Utc>> {
     } else {
         value
     };
-    Utc.timestamp_opt(seconds as i64, 0).single()
+    // Epoch seconds; the sub-second fraction is below timestamp resolution.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "epoch seconds; sub-second fraction below timestamp resolution"
+    )]
+    let whole_seconds = seconds as i64;
+    Utc.timestamp_opt(whole_seconds, 0).single()
 }
 
 fn first_f64(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
@@ -273,7 +279,14 @@ fn first_str<'a>(map: &'a serde_json::Map<String, Value>, keys: &[&str]) -> Opti
 
 fn format_quota_amount(value: f64) -> String {
     if (value - value.round()).abs() < 0.0001 {
-        format!("{}", value.round() as i64)
+        // Guarded above: value is within 0.0001 of a whole number, so the
+        // fractional part is zero.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "whole-number guard above; fractional part is zero"
+        )]
+        let whole = value.round() as i64;
+        format!("{}", whole)
     } else {
         let mut text = format!("{value:.2}");
         while text.contains('.') && text.ends_with('0') {

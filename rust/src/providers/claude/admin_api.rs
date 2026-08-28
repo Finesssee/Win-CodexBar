@@ -139,7 +139,10 @@ struct CostReportResponse {
 #[derive(Debug, Deserialize)]
 struct CostBucket {
     starting_at: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "admin API response fields are deserialized for parsing but not all are read"
+    )]
     ending_at: String,
     results: Vec<CostResult>,
 }
@@ -159,7 +162,10 @@ struct MessagesUsageResponse {
 #[derive(Debug, Deserialize)]
 struct MessageBucket {
     starting_at: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "admin API response fields are deserialized for parsing but not all are read"
+    )]
     ending_at: String,
     results: Vec<MessageResult>,
 }

@@ -550,6 +550,10 @@ impl OpenCodeUsageFetcher {
         } else {
             number
         };
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "timestamps are normalized to whole seconds (ms input divided by 1000) before the cast"
+        )]
         DateTime::<Utc>::from_timestamp(seconds as i64, 0)
     }
 

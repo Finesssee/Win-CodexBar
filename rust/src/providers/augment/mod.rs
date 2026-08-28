@@ -6,7 +6,10 @@
 mod keepalive;
 
 // Re-exports for future session management
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "keepalive API re-exported for upcoming session-management wiring"
+)]
 pub use keepalive::{AugmentSessionKeepalive, KeepaliveConfig};
 
 use async_trait::async_trait;
@@ -247,7 +250,10 @@ impl AugmentProvider {
         parse_auggie_account_status(&stdout)
     }
 
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "detection probe kept alongside the fetch path; only fetch_via_cli is wired into fetch() today"
+    )]
     /// Probe CLI for detection
     async fn probe_cli(&self) -> Result<UsageSnapshot, ProviderError> {
         self.fetch_via_cli().await.or_else(|_| {

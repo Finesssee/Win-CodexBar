@@ -278,6 +278,11 @@ impl SessionEquivalentForecast {
             return None;
         }
         let available_windows_until_reset = remaining_seconds / session_seconds;
+        // Whole-window count by design; the fractional window is dropped.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "window count is a small whole number; fractional part dropped by design"
+        )]
         let windows_until_reset = available_windows_until_reset.floor() as i64;
 
         Some(Self {
@@ -986,10 +991,13 @@ mod tests {
         // remaining weekly 60 / 12 = 5.0
         assert!((forecast.estimated_windows_to_exhaust_weekly - 5.0).abs() < 1e-9);
         assert!(forecast.available_windows_until_reset > 0.0);
-        assert_eq!(
-            forecast.windows_until_reset,
-            forecast.available_windows_until_reset.floor() as i64
-        );
+        // Mirrors the production whole-window truncation.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "assertion mirrors the production whole-window truncation"
+        )]
+        let expected_windows = forecast.available_windows_until_reset.floor() as i64;
+        assert_eq!(forecast.windows_until_reset, expected_windows);
         assert_eq!(forecast.sample_count, 3);
         assert!((forecast.weekly_used_percent - 40.0).abs() < 1e-9);
     }
@@ -1032,10 +1040,13 @@ mod tests {
             SessionEquivalentForecast::make(&session, &weekly, &burn, None, friday, Some(5))
                 .unwrap();
         assert!(work_f.available_windows_until_reset < wall_f.available_windows_until_reset);
-        assert_eq!(
-            work_f.windows_until_reset,
-            work_f.available_windows_until_reset.floor() as i64
-        );
+        // Mirrors the production whole-window truncation.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "assertion mirrors the production whole-window truncation"
+        )]
+        let expected_work_windows = work_f.available_windows_until_reset.floor() as i64;
+        assert_eq!(work_f.windows_until_reset, expected_work_windows);
     }
 
     #[test]

@@ -2,7 +2,10 @@
 //!
 //! Runs CLI login commands and captures output/URLs
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "login flow types reserved for future session management integration"
+)]
 
 use regex_lite::Regex;
 use std::io::{BufRead, BufReader, Read};
@@ -270,7 +273,8 @@ where
 
         self.auth_link = Some(m.as_str().to_string());
         (self.on_phase)(LoginPhase::WaitingBrowser);
-        let _ = open::that(m.as_str());
+        // Best-effort browser open; the link stays on screen for manual use.
+        let _opened_browser = open::that(m.as_str());
     }
 
     fn into_result(self, outcome: LoginOutcome) -> LoginResult {
@@ -305,7 +309,8 @@ fn stop_child_with_outcome<F>(
 where
     F: Fn(LoginPhase),
 {
-    let _ = child.kill();
+    // Best-effort teardown; the child may already have exited.
+    let _killed = child.kill();
     state.into_result(outcome)
 }
 

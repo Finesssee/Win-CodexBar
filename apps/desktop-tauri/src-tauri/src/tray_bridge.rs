@@ -723,7 +723,10 @@ fn truncate_tooltip_text(text: &str, max_chars: usize) -> String {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "tray bridge helper reserved for future system tray integration"
+)]
 fn menu_contains(menu: &[TrayMenuEntry], id: &str) -> bool {
     menu.iter().any(|entry| {
         entry.id.as_deref() == Some(id)

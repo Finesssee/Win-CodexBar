@@ -76,11 +76,23 @@ pub fn tray_tooltip(provider_name: &str, session_percent: f64, weekly_percent: f
     let lang = current_language();
     let session_label = get_text(lang, LocaleKey::TraySessionPercent);
     let weekly_label = get_text(lang, LocaleKey::TrayWeeklyPercent);
+    // Display-only percent tooltip; both values are 0–100 usage percents that
+    // fit i32, and the casts only drop the fractional part for a whole-percent label.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "tooltip percent is bounded to 0–100 and fits i32; only the fractional part is dropped for a whole-percent label"
+    )]
+    let session_pct = session_percent as i32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "tooltip percent is bounded to 0–100 and fits i32; only the fractional part is dropped for a whole-percent label"
+    )]
+    let weekly_pct = weekly_percent as i32;
     format!(
         "{}: {} | {}",
         provider_name,
-        session_label.replace("{}", &format!("{}", session_percent as i32)),
-        weekly_label.replace("{}", &format!("{}", weekly_percent as i32))
+        session_label.replace("{}", &format!("{session_pct}")),
+        weekly_label.replace("{}", &format!("{weekly_pct}"))
     )
 }
 
@@ -102,11 +114,23 @@ pub fn tray_tooltip_with_status(
         Some(IconOverlayStatus::Incident) => get_text(lang, LocaleKey::TrayStatusIncident),
         Some(IconOverlayStatus::Partial) => get_text(lang, LocaleKey::TrayStatusPartial),
     };
+    // Display-only percent tooltip; both values are 0–100 usage percents that
+    // fit i32, and the casts only drop the fractional part for a whole-percent label.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "tooltip percent is bounded to 0–100 and fits i32; only the fractional part is dropped for a whole-percent label"
+    )]
+    let session_pct = session_percent as i32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "tooltip percent is bounded to 0–100 and fits i32; only the fractional part is dropped for a whole-percent label"
+    )]
+    let weekly_pct = weekly_percent as i32;
     format!(
         "{}: {} | {}{}",
         provider_name,
-        session_label.replace("{}", &format!("{}", session_percent as i32)),
-        weekly_label.replace("{}", &format!("{}", weekly_percent as i32)),
+        session_label.replace("{}", &format!("{session_pct}")),
+        weekly_label.replace("{}", &format!("{weekly_pct}")),
         status_suffix
     )
 }
@@ -137,7 +161,7 @@ pub fn tray_tooltip_credits(provider_name: &str, credits_percent: f64) -> String
 macro_rules! locale_keys {
     ($($key:ident,)*) => {
         /// Locale keys for app-owned UI strings.
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "locale keys are generated for all supported UI strings; not all are referenced yet")]
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum LocaleKey {
             $($key,)*

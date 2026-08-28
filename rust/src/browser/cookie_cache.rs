@@ -3,7 +3,12 @@
 //! Caches cookie headers for providers to avoid repeated browser cookie extraction.
 //! Stores normalized cookie headers with timestamps and source labels.
 
-#![allow(dead_code)]
+// The cache API is currently unused by the crate (reserved for provider
+// cookie reuse), so every public item would trip dead_code.
+#![allow(
+    dead_code,
+    reason = "module reserved: CookieHeaderCache has no callers yet"
+)]
 
 use crate::core::ProviderId;
 use chrono::{DateTime, Utc};

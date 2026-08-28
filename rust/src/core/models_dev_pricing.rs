@@ -704,7 +704,9 @@ impl ModelsDevRefreshCoordinator {
         let state = Arc::clone(&self.state);
         tokio::spawn(async move {
             let result = operation.await;
-            let _ = sender.send(Some(result));
+            // Fire-and-forget result delivery; send fails only if all receivers
+            // dropped, and the watch channel keeps the latest value regardless.
+            let _delivered = sender.send(Some(result));
             state
                 .lock()
                 .await

@@ -185,6 +185,10 @@ impl CopilotApi {
 
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
 
+        // SAFETY: CredReadW is an FFI call that treats `target_wide` as a
+        // read-only null-terminated wide string (live for the call duration)
+        // and `credential` as an out-parameter; it is initialized to null and
+        // only written on success, and the returned status gates all use of it.
         let result = unsafe {
             CredReadW(
                 PCWSTR(target_wide.as_ptr()),
@@ -198,6 +202,12 @@ impl CopilotApi {
             return None;
         }
 
+        // SAFETY: `credential` is valid here because CredReadW succeeded (the
+        // error case returned above). The CREDENTIALW and its CredentialBlob
+        // buffer are API-allocated and stay live until CredFree; the blob
+        // slice is bounded by CredentialBlobSize. CredFree runs on every path
+        // (early blob-less return and normal path) before `credential` goes out
+        // of scope, and `token` is an owned String, so no borrow outlives it.
         let token = unsafe {
             let cred = &*credential;
             if cred.CredentialBlobSize == 0 || cred.CredentialBlob.is_null() {

@@ -181,6 +181,11 @@ fn aggregate(
         }
 
         let local = entry.timestamp.with_timezone(&Local);
+        // Weekday (0-6) and hour (0-23) both fit u8.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "weekday (0-6) and hour (0-23) fit u8"
+        )]
         let key = (
             local.weekday().num_days_from_monday() as u8,
             local.hour() as u8,
@@ -248,11 +253,23 @@ fn aggregate(
         (None, None) => left.model.cmp(&right.model),
     });
 
+    // Counts are clamped to u32::MAX before casting.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to u32::MAX before casting"
+    )]
+    let request_count = entries.len().min(u32::MAX as usize) as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to u32::MAX before casting"
+    )]
+    let conversation_count = conversations.len().min(u32::MAX as usize) as u32;
+
     Some(ImportedSpendSource {
         source_id: "opencodex".to_string(),
         display_name: "OpenCodex".to_string(),
-        request_count: entries.len().min(u32::MAX as usize) as u32,
-        conversation_count: conversations.len().min(u32::MAX as usize) as u32,
+        request_count,
+        conversation_count,
         known_cost_usd: saw_known_cost.then_some(known_cost),
         token_mix,
         coverage,
@@ -336,6 +353,11 @@ fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
 fn load_entries(source_path: &Path) -> Option<Vec<OpenCodexEntry>> {
     let metadata = fs::metadata(source_path).ok()?;
     let source_len = metadata.len();
+    // Modified time is clamped to u64::MAX before casting.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to u64::MAX before casting"
+    )]
     let source_modified_ms = metadata
         .modified()
         .ok()
@@ -389,7 +411,8 @@ fn write_cache(cache: &CacheFile) {
     let Ok(bytes) = serde_json::to_vec(cache) else {
         return;
     };
-    let _ = fs::write(path, bytes);
+    // Best-effort cache write; a failed write is non-fatal.
+    let _written = fs::write(path, bytes);
 }
 
 fn usage_path() -> Option<PathBuf> {
@@ -493,7 +516,17 @@ fn timestamp_from_epoch(value: f64) -> Option<DateTime<Utc>> {
     } else {
         value
     };
+    // Epoch timestamps fit i64 seconds; float-to-int casts saturate otherwise.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "epoch timestamps fit i64 seconds"
+    )]
     let whole = seconds.trunc() as i64;
+    // Fractional seconds in [0, 1e9) fit u32.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "fractional seconds in [0, 1e9) fit u32"
+    )]
     let nanos = (seconds.fract().abs() * 1_000_000_000.0) as u32;
     Utc.timestamp_opt(whole, nanos).single()
 }
@@ -504,7 +537,14 @@ fn nonnegative_u64(value: Option<&Value>) -> Option<u64> {
         return Some(number);
     }
     let number = value.as_f64()?;
-    (number.is_finite() && number >= 0.0 && number <= u64::MAX as f64).then_some(number as u64)
+    // Guarded to finite non-negative values within u64 range.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "guarded to finite non-negative values within u64 range"
+    )]
+    let parsed =
+        (number.is_finite() && number >= 0.0 && number <= u64::MAX as f64).then_some(number as u64);
+    parsed
 }
 
 fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {

@@ -10,6 +10,8 @@ use std::ffi::c_void;
 
 #[cfg(windows)]
 #[link(name = "dwmapi")]
+// SAFETY: FFI declarations for the DWM API; the functions are only ever
+// called with live window handles and caller-owned buffers (see call sites).
 unsafe extern "system" {
     fn DwmSetWindowAttribute(hwnd: isize, attr: u32, data: *const c_void, size: u32) -> i32;
     fn DwmExtendFrameIntoClientArea(hwnd: isize, margins: *const Margins) -> i32;

@@ -74,7 +74,10 @@ pub struct ClaudeWebApiFetcher {
 #[derive(Debug, Deserialize)]
 struct Organization {
     uuid: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field mirrors the Claude API org payload; deserialized for round-trip fidelity but not read yet"
+    )]
     name: Option<String>,
 }
 
@@ -848,6 +851,8 @@ mod tests {
     #[test]
     fn resolves_raw_session_key_from_primary_env_var() {
         let _guard = env_lock().lock().expect("env lock");
+        // SAFETY: running under env_lock() so no other test thread touches the
+        // environment concurrently; single-threaded w.r.t. these keys.
         unsafe {
             std::env::remove_var("CLAUDE_AI_SESSION_KEY");
             std::env::remove_var("CLAUDE_WEB_SESSION_KEY");
@@ -859,6 +864,8 @@ mod tests {
 
         assert_eq!(session_key.as_deref(), Some("sk-ant-primary"));
 
+        // SAFETY: same env_lock()-guarded mutation; restoring state after the
+        // assertions, before the lock is released.
         unsafe {
             std::env::remove_var("CLAUDE_AI_SESSION_KEY");
             std::env::remove_var("CLAUDE_WEB_SESSION_KEY");
@@ -868,6 +875,8 @@ mod tests {
     #[test]
     fn resolves_session_key_assignment_from_env_var() {
         let _guard = env_lock().lock().expect("env lock");
+        // SAFETY: env_lock() held for this whole test, so set_var/remove_var
+        // cannot race another thread's environment access.
         unsafe {
             std::env::remove_var("CLAUDE_AI_SESSION_KEY");
             std::env::remove_var("CLAUDE_WEB_SESSION_KEY");
@@ -878,6 +887,7 @@ mod tests {
 
         assert_eq!(session_key.as_deref(), Some("sk-ant-cookie-format"));
 
+        // SAFETY: cleanup while still holding the env_lock() guard.
         unsafe {
             std::env::remove_var("CLAUDE_AI_SESSION_KEY");
             std::env::remove_var("CLAUDE_WEB_SESSION_KEY");

@@ -40,6 +40,12 @@ pub fn build_restart_script(
     backup_destination: Option<&Path>,
     restore_source: Option<&Path>,
 ) -> String {
+    // Delay is bounded, non-negative seconds rendered to whole milliseconds;
+    // rounding already makes the value whole, so f64->u64 cannot overflow.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "delay is non-negative seconds; whole milliseconds by design"
+    )]
     let delay_ms = (delay_seconds.max(0.0) * 1000.0).round() as u64;
     let log_path = powershell_literal_path(&restart_log_path());
     let effective_session_root = session_root

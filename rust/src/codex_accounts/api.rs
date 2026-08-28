@@ -288,7 +288,9 @@ impl CodexAccountApi {
             && !credentials.refresh_token.is_empty()
             && let Ok(refreshed) = self.refresh(&credentials).await
         {
-            let _ = save_credentials(codex_home_path, &refreshed);
+            // Best-effort credential persist: a write failure here cannot
+            // block the in-memory refresh already in hand.
+            let _saved_refreshed = save_credentials(codex_home_path, &refreshed);
             credentials = refreshed;
         }
 
@@ -302,7 +304,9 @@ impl CodexAccountApi {
         }
 
         if let Ok(refreshed) = self.refresh(&credentials).await {
-            let _ = save_credentials(codex_home_path, &refreshed);
+            // Best-effort credential persist before the retry; a write error
+            // cannot block the fetch already in progress.
+            let _saved_retry = save_credentials(codex_home_path, &refreshed);
             return self
                 .fetch_once(codex_home_path, &refreshed, email_hint, verify_live_data)
                 .await;

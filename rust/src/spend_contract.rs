@@ -300,6 +300,11 @@ pub fn build_local_spend_contract_from_summary(
         replace_native,
     );
 
+    // Conversation count is clamped to u32::MAX before casting.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to u32::MAX before casting"
+    )]
     let native_conversations = if native.conversations.is_empty() {
         summary.sessions_count
     } else {
@@ -385,7 +390,10 @@ fn load_native_spend(provider_id: &str, history_days: u32) -> NativeSpendData {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "signature mirrors the flat spend-contract config fields one-to-one"
+)]
 fn resolve_spend(
     native_cost: Option<f64>,
     native_coverage: CostCoverageCounts,
@@ -526,6 +534,11 @@ fn activity_from_sessions(sessions: &[SessionUsage]) -> Vec<SpendActivityCell> {
             continue;
         };
         let local = timestamp.with_timezone(&Local);
+        // Weekday (0-6) and hour (0-23) both fit u8.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "weekday (0-6) and hour (0-23) fit u8"
+        )]
         let key = (
             local.weekday().num_days_from_monday() as u8,
             local.hour() as u8,

@@ -42,7 +42,10 @@ struct UsageResponse {
 
 #[derive(Debug, Deserialize, Clone)]
 struct UsageMonth {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field present in the DeepInfra billing payload; kept so serde preserves it"
+    )]
     period: String,
     /// Cost in cents (upstream field name is `total_cost`).
     total_cost: f64,

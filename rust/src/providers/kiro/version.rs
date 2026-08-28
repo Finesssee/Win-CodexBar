@@ -392,7 +392,8 @@ mod tests {
             "kiro.exe is the Electron GUI app on Windows; running it as a CLI spawns the IDE"
         );
 
-        let _ = std::fs::remove_file(cli_path);
-        let _ = std::fs::remove_file(gui_path);
+        // Best-effort cleanup of temp binaries; leftover files are harmless.
+        let _removed_cli = std::fs::remove_file(cli_path);
+        let _removed_gui = std::fs::remove_file(gui_path);
     }
 }

@@ -6,7 +6,10 @@
 //! - Manual cookies
 //! - Other user preferences
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "settings types mirror the full config schema; some fields are not yet consumed"
+)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -568,7 +571,10 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
-        #[allow(unused_mut)]
+        #[allow(
+            unused_mut,
+            reason = "mutability is needed for conditional initialization paths that the compiler cannot prove"
+        )]
         let mut settings = match Self::settings_path() {
             Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
                 Ok(content) => {
@@ -616,7 +622,8 @@ impl Settings {
             }
         }
         if !already_migrated && let Some(parent) = marker.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            // Best-effort marker dir creation; the write below reports failure.
+            let _created_dir = std::fs::create_dir_all(parent);
             if let Err(error) = std::fs::write(&marker, b"1") {
                 tracing::warn!("Failed to write promote_tray_icon migration marker: {error}");
             }
@@ -680,7 +687,8 @@ impl Settings {
             let command = Self::start_at_login_command(&exe_path);
             run_key.set_value("CodexBar", &command)?;
         } else {
-            let _ = run_key.delete_value("CodexBar");
+            // Best-effort removal; a missing value means the desired state already.
+            let _removed_value = run_key.delete_value("CodexBar");
         }
 
         Ok(())

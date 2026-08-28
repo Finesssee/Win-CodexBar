@@ -258,7 +258,13 @@ pub async fn run(args: GuardArgs) -> i32 {
 
     let source_mode = SourceMode::parse(&args.source).unwrap_or(SourceMode::Auto);
     let web_timeout = if timeout_secs > 0.0 {
-        timeout_secs.ceil() as u64
+        // Whole-second ceiling; timeout_secs is validated to 0..=86400, far below u64::MAX.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "timeout validated to 0..=86400, so the cast cannot truncate"
+        )]
+        let ceil = timeout_secs.ceil() as u64;
+        ceil
     } else {
         60
     };
@@ -413,7 +419,13 @@ pub fn guard_human_line(
 fn guard_percent_string(value: f64) -> String {
     let rounded = value.round();
     if (value - rounded).abs() < 0.05 {
-        format!("{}%", rounded as i64)
+        // Display-only whole-percent label; percentages are bounded far inside i64 range.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "display-only percentage label"
+        )]
+        let whole = rounded as i64;
+        format!("{}%", whole)
     } else {
         format!("{:.1}%", value)
     }

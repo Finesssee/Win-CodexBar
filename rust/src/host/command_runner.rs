@@ -4,7 +4,10 @@
 //! On Windows, uses standard process spawning with output capture.
 //! Designed for running interactive CLI tools like `codex` and `claude`.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "command runner types reserved for future host management integration"
+)]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -241,17 +244,21 @@ impl CommandRunner {
         if Self::past_deadline(deadline) {
             return;
         }
-        let _ = stdin.write_all(input_text.as_bytes());
-        let _ = stdin.write_all(b"\n");
-        let _ = stdin.flush();
+        // Fire-and-forget seeding: the child may close stdin before we finish
+        // writing, and a write error there must not abort output capture.
+        let _written_input = stdin.write_all(input_text.as_bytes());
+        let _written_newline = stdin.write_all(b"\n");
+        let _flushed_stdin = stdin.flush();
     }
 
     fn finish_child(child: &mut Child) -> Option<i32> {
         match child.try_wait() {
             Ok(Some(status)) => status.code(),
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                // Teardown after timeout/capture: kill/wait results cannot
+                // change the outcome, already reported separately.
+                let _killed = child.kill();
+                let _reaped = child.wait();
                 None
             }
             Err(_) => None,
@@ -346,7 +353,7 @@ impl CommandRunner {
                     return;
                 }
             }
-            let _ = sender.send(StreamEvent::Closed);
+            let _sent_closed = sender.send(StreamEvent::Closed);
         });
     }
 

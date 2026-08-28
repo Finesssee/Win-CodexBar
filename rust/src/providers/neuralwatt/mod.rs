@@ -52,7 +52,10 @@ struct Subscription {
     kwh_included: Option<f64>,
     kwh_used: Option<f64>,
     kwh_remaining: Option<f64>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field mirrors the NeuralWatt API payload; deserialized for round-trip fidelity but not read yet"
+    )]
     in_overage: Option<bool>,
 }
 
@@ -217,7 +220,9 @@ fn subscription_window(sub: &Subscription) -> Option<RateWindow> {
         parse_iso(sub.current_period_end.as_deref()),
     ) {
         if end > start {
-            let mins = ((end - start).num_minutes()).max(1) as u32;
+            // Billing-window minutes are clamped to u32 range, so the cast cannot truncate.
+            #[expect(clippy::cast_possible_truncation, reason = "clamped to u32 range")]
+            let mins = ((end - start).num_minutes()).clamp(1, u32::MAX as i64) as u32;
             w.window_minutes = Some(mins);
         }
         w.resets_at = Some(end);

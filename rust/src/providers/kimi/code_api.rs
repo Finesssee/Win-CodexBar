@@ -28,7 +28,10 @@ struct KimiCodeCredentialFile {
     #[serde(default, alias = "accessToken")]
     access_token: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "field exists in the CLI credential file; deserialized to preserve the schema but never read locally"
+    )]
     refresh_token: Option<String>,
     #[serde(default, alias = "expiresAt")]
     expires_at: Option<serde_json::Value>,
@@ -305,6 +308,8 @@ mod tests {
                 .any(|(k, v)| *k == "X-Msh-Platform" && v == KIMI_CODE_CLI_PLATFORM)
         );
 
+        // SAFETY: this test owns KIMI_CODE_HOME_ENV (set at its start under
+        // env_lock); removing it here restores the shared environment.
         unsafe {
             std::env::remove_var(KIMI_CODE_HOME_ENV);
         }
@@ -330,6 +335,8 @@ mod tests {
         let now = 1_800_000_000.0_f64;
         let home = write_temp_kimi_code_home("oauth-token", Some(json!(now + 3600.0)));
 
+        // SAFETY: env_lock() guard held for the whole test, so these
+        // set_var calls cannot race another thread's environment access.
         unsafe {
             std::env::set_var(KIMI_CODE_HOME_ENV, home.path());
             std::env::set_var(KIMI_CODE_BASE_URL_ENV, "https://proxy.example.com/kimi");
@@ -337,12 +344,15 @@ mod tests {
         assert!(has_code_endpoint_override());
         assert!(kimi_code_cli_access_token(now).is_none());
 
+        // SAFETY: still under the same env_lock() guard; swapping which
+        // override keys are present between assertions.
         unsafe {
             std::env::remove_var(KIMI_CODE_BASE_URL_ENV);
             std::env::set_var(KIMI_CODE_OAUTH_HOST_ENV, "https://oauth.example.com");
         }
         assert!(kimi_code_cli_access_token(now).is_none());
 
+        // SAFETY: final cleanup while the env_lock() guard is still alive.
         unsafe {
             std::env::remove_var(KIMI_CODE_OAUTH_HOST_ENV);
             std::env::remove_var(KIMI_CODE_HOME_ENV);

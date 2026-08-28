@@ -1067,9 +1067,14 @@ fn parse_f64(value: Option<&Value>) -> Option<f64> {
 
 fn parse_i64(value: Option<&Value>) -> Option<i64> {
     match value? {
-        Value::Number(number) => number
-            .as_i64()
-            .or_else(|| number.as_f64().map(|v| v as i64)),
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number.as_f64().map(|v| {
+                // Quota numbers are small integers; any fractional part is discarded deliberately.
+                #[expect(clippy::cast_possible_truncation, reason = "quota counts fit i64")]
+                let v = v as i64;
+                v
+            })
+        }),
         Value::String(text) => text.trim().replace(',', "").parse().ok(),
         _ => None,
     }
@@ -1178,7 +1183,13 @@ fn quota_detail_percent(used_percent: f64, total: Option<f64>) -> Option<String>
 
 fn format_quota(value: f64) -> String {
     if (value.round() - value).abs() < f64::EPSILON {
-        format_count(value.round() as i64)
+        // Whole-number quotas are far below i64::MAX; rounding is intentional.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "whole-number quota fits i64"
+        )]
+        let rounded = value.round() as i64;
+        format_count(rounded)
     } else {
         let formatted = format!("{value:.2}");
         let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');

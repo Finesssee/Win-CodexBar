@@ -162,7 +162,9 @@ impl GrokProvider {
 
         let cookie_header = crate::providers::browser_cookie_header(&["grok.com"])?;
         let result = self.fetch_with_cookie(&cookie_header).await?;
-        let _ = CookieHeaderCache::store(ProviderId::Grok, &cookie_header, "browser");
+        // Best-effort cache write: failing to persist the cookie only costs a
+        // re-read from the browser on the next fetch.
+        let _cached = CookieHeaderCache::store(ProviderId::Grok, &cookie_header, "browser");
         Ok(result)
     }
 
@@ -534,9 +536,15 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
         .varints
         .iter()
         .filter_map(|field| {
+            // Varint timestamps are Unix seconds inside the range checked below.
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "varint timestamps are bounded to the Unix-seconds range checked below"
+            )]
+            let seconds = field.value as i64;
             (1_700_000_000..=2_100_000_000)
                 .contains(&field.value)
-                .then(|| Utc.timestamp_opt(field.value as i64, 0).single())
+                .then(|| Utc.timestamp_opt(seconds, 0).single())
                 .flatten()
         })
         .filter(|dt| *dt > Utc::now())
@@ -639,7 +647,13 @@ impl ProtoScan {
     ) -> Option<usize> {
         let (len, next) = read_varint(data, i)?;
         let start = next;
-        let end = start.saturating_add(len as usize);
+        // Varint field lengths are bounded by the containing message buffer.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "varint field lengths are bounded by the containing message buffer"
+        )]
+        let len_usize = len as usize;
+        let end = start.saturating_add(len_usize);
         if end <= data.len() {
             self.scan_message(&data[start..end], path, depth + 1);
             Some(end)

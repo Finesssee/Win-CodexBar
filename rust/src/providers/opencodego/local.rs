@@ -229,7 +229,12 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
             Ok(UsageRow {
                 created_ms: row.get::<_, i64>(0)?,
                 cost: row.get::<_, f64>(1)?,
-                request_count: row.get::<_, i64>(2).map(|n| n.max(1) as u32).unwrap_or(1),
+                // Request counts from the DB are clamped to ≥1 and realistically
+                // far below u32::MAX; try_from guards the pathological case.
+                request_count: row
+                    .get::<_, i64>(2)
+                    .map(|n| u32::try_from(n.max(1)).unwrap_or(u32::MAX))
+                    .unwrap_or(1),
                 model: row.get::<_, String>(3).unwrap_or_default(),
             })
         })
@@ -715,12 +720,14 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        let _ = std::fs::create_dir_all(&dir);
+        // Best-effort fixture setup; a failure surfaces as the fetch error below.
+        let _created = std::fs::create_dir_all(&dir);
         let auth = dir.join("auth.json");
         let db = dir.join("opencode.db");
         let err = fetch_from_paths(&auth, &db, Utc::now()).unwrap_err();
         assert!(matches!(err, ProviderError::NotInstalled(_)));
-        let _ = std::fs::remove_dir_all(&dir);
+        // Best-effort teardown; temp dir may already be gone.
+        let _removed_dir = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -745,7 +752,8 @@ mod tests {
 
         // auth present so empty-rows path is not used; auth not required when rows exist
         let auth = db.with_extension("auth.json");
-        let _ = std::fs::write(&auth, r#"{"opencode-go":{"key":"test-key"}}"#);
+        // Fixture write; failure would make fetch_from_paths return an error.
+        let _written = std::fs::write(&auth, r#"{"opencode-go":{"key":"test-key"}}"#);
 
         let snap = fetch_from_paths(&auth, &db, now).unwrap();
         assert!((snap.rolling_usage_percent - 50.0).abs() < 0.05, "{snap:?}");
@@ -754,8 +762,9 @@ mod tests {
         // session 6 + week 9 + month 15 = 30 → 50%
         assert!((snap.monthly_usage_percent - 50.0).abs() < 0.05, "{snap:?}");
 
-        let _ = std::fs::remove_file(&db);
-        let _ = std::fs::remove_file(&auth);
+        // Best-effort teardown; leftover temp files are harmless.
+        let _removed_db = std::fs::remove_file(&db);
+        let _removed_auth = std::fs::remove_file(&auth);
     }
 
     #[test]
@@ -794,14 +803,16 @@ mod tests {
         drop(conn);
 
         let auth = db.with_extension("auth.json");
-        let _ = std::fs::write(&auth, r#"{"opencode-go":{"key":"k"}}"#);
+        // Fixture write; a failure would surface in fetch_from_paths.
+        let _written_auth = std::fs::write(&auth, r#"{"opencode-go":{"key":"k"}}"#);
         let snap = fetch_from_paths(&auth, &db, now).unwrap();
         assert!(
             (snap.rolling_usage_percent - 25.0).abs() < 0.05,
             "expected step-finish cost only, got {snap:?}"
         );
-        let _ = std::fs::remove_file(&db);
-        let _ = std::fs::remove_file(&auth);
+        // Best-effort teardown; leftover temp files are harmless.
+        let _removed_db = std::fs::remove_file(&db);
+        let _removed_auth = std::fs::remove_file(&auth);
     }
 
     #[test]
@@ -855,7 +866,8 @@ mod tests {
             )
             .unwrap();
             // Truncate empties WAL content before close; journal_mode stays WAL.
-            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            // Best-effort checkpoint; a truncated WAL is just tidier.
+            let _checkpointed = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
             drop(conn);
         }
 
@@ -866,7 +878,8 @@ mod tests {
         for side in [&wal, &shm] {
             if side.exists() {
                 let parked = side.with_extension("parked");
-                let _ = std::fs::rename(side, parked);
+                // Best-effort parking; a locked sidecar just stays put.
+                let _parked = std::fs::rename(side, parked);
             }
         }
         assert!(!wal.exists(), "precondition: no -wal");

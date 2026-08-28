@@ -3,7 +3,10 @@
 //! Monitors and manages child web probe processes to prevent orphaned processes.
 //! Ensures that browser automation or scraping processes are properly cleaned up.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "watchdog types reserved for future browser-session monitoring integration"
+)]
 
 use std::collections::HashMap;
 use std::process::Child;

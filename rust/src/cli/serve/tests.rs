@@ -348,7 +348,8 @@ async fn trickling_bytes_do_not_reset_total_head_deadline() {
         }
     }
     let mut response = Vec::new();
-    let _ = client.read_to_end(&mut response).await;
+    // Best-effort drain to unblock the server; the deadline assertions below are the real check.
+    let _drained = client.read_to_end(&mut response).await;
     let elapsed = started.elapsed();
     drop(client);
     server_task.await.unwrap().unwrap();

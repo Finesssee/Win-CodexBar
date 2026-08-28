@@ -118,7 +118,13 @@ fn latest_pi_session_name(path: &Path, prefix_lines: &[&[u8]]) -> Option<String>
     if file.seek(SeekFrom::Start(offset)).is_err() {
         return latest;
     }
-    let mut tail = vec![0_u8; TAIL_READ.min(size as usize)];
+    // Session file sizes fit usize on all supported targets.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "session file sizes fit usize on any supported target"
+    )]
+    let size_usize = size as usize;
+    let mut tail = vec![0_u8; TAIL_READ.min(size_usize)];
     let mut read_total = 0_usize;
     while read_total < tail.len() {
         match file.read(&mut tail[read_total..]) {
@@ -159,7 +165,13 @@ fn read_prefix(path: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
     let metadata = file.metadata().ok()?;
-    let limit = (metadata.len() as usize).min(MAX_PREFIX_READ);
+    // Session file sizes fit usize on all supported targets.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "session file sizes fit usize on any supported target"
+    )]
+    let len_usize = metadata.len() as usize;
+    let limit = len_usize.min(MAX_PREFIX_READ);
     let mut data = vec![0_u8; limit];
     let mut read_total = 0_usize;
     while read_total < limit {

@@ -2,7 +2,13 @@
 //!
 //! Data structures for OpenAI/Codex dashboard usage breakdown and credits tracking.
 
-#![allow(dead_code)]
+// Serde data model mirroring the OpenAI dashboard payload plus its cache
+// store; several fields and helpers have no consumer yet but must survive
+// (de)serialization round-trips.
+#![allow(
+    dead_code,
+    reason = "dashboard snapshot fields mirror the upstream OpenAI payload; not all are consumed yet"
+)]
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -247,10 +253,14 @@ impl OpenAIDashboardCacheStore {
     pub fn save(cache: &OpenAIDashboardCache) {
         if let Some(url) = Self::cache_path() {
             if let Some(parent) = url.parent() {
-                let _ = fs::create_dir_all(parent);
+                // Cache write is best-effort: failing to create the cache
+                // dir just means no dashboard cache this run.
+                let _created = fs::create_dir_all(parent);
             }
             if let Ok(data) = serde_json::to_string_pretty(cache) {
-                let _ = fs::write(&url, data);
+                // Same best-effort contract: a failed serialize/write leaves
+                // the previous cache intact.
+                let _written = fs::write(&url, data);
             }
         }
     }
@@ -258,7 +268,8 @@ impl OpenAIDashboardCacheStore {
     /// Clear cached data
     pub fn clear() {
         if let Some(url) = Self::cache_path() {
-            let _ = fs::remove_file(url);
+            // Cache invalidation is idempotent; a missing file is fine.
+            let _removed = fs::remove_file(url);
         }
     }
 

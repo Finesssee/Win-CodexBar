@@ -108,7 +108,10 @@ fn is_system_user_dir(name: &str) -> bool {
 /// Convert a Windows path to its WSL equivalent.
 ///
 /// `C:\Users\John\AppData\Local` becomes `/mnt/c/Users/John/AppData/Local`.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "WSL detection helper reserved for future cross-platform integration"
+)]
 pub fn windows_path_to_wsl(windows_path: &str) -> Option<PathBuf> {
     let path = windows_path.replace('\\', "/");
 

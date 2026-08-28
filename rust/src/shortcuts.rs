@@ -2,7 +2,7 @@
 //!
 //! Provides system-wide hotkeys to open the menu
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "keyboard shortcut types reserved for future global hotkey integration")]
 
 use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager,

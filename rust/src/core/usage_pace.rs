@@ -184,7 +184,16 @@ impl UsagePace {
     /// Format the ETA as a human-readable string
     pub fn format_eta(&self) -> Option<String> {
         let secs = self.eta_seconds?;
+        // Display-only ETA breakdown; whole hours/minutes by design.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "display-only ETA; whole hours/minutes by design"
+        )]
         let hours = (secs / 3600.0) as i64;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "display-only ETA; whole hours/minutes by design"
+        )]
         let minutes = ((secs % 3600.0) / 60.0) as i64;
 
         if hours > 24 {

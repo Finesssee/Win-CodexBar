@@ -126,17 +126,29 @@ fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
 const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 
 fn unix_now_ms() -> i64 {
-    SystemTime::now()
+    // Duration is clamped to i64::MAX before casting, so the value fits i64.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to i64::MAX before casting"
+    )]
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    millis
 }
 
 fn system_time_to_unix_ms(modified: Option<SystemTime>) -> i64 {
-    modified
+    // Duration is clamped to i64::MAX before casting, so the value fits i64.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to i64::MAX before casting"
+    )]
+    let millis = modified
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    millis
 }
 
 fn rebuild_cache_days(cache: &mut CostUsageCache) {
@@ -183,6 +195,10 @@ impl ClaudePricing {
         // Standard buckets (input, cache-read, 5-minute cache-write, output),
         // including any long-context tiering, come from the canonical table.
         // Unknown/retired models fall back to Sonnet pricing.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "clamped to i32::MAX before casting"
+        )]
         let clamp = |v: u64| v.min(i32::MAX as u64) as i32;
         let base = CostUsagePricing::claude_cost_usd(
             model,
@@ -212,7 +228,10 @@ impl ClaudePricing {
 }
 
 /// JSONL event structures for Codex
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "JSONL event fields are deserialized for parsing but not all are read"
+)]
 #[derive(Debug, Deserialize)]
 struct CodexEvent {
     #[serde(rename = "type")]
@@ -220,7 +239,10 @@ struct CodexEvent {
     event_msg: Option<CodexEventMsg>,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "event message fields are deserialized for parsing but not all are read"
+)]
 #[derive(Debug, Deserialize)]
 struct CodexEventMsg {
     #[serde(rename = "type")]
@@ -382,7 +404,9 @@ impl CostScanner {
                 !cache.days.is_empty() && cache.previous_report.is_none();
             let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
             summary.total_cost_usd += cost;
-            summary.sessions_count = cache
+            // Session count is a display field; the cache holds far fewer files than u32::MAX.
+            #[allow(clippy::cast_possible_truncation, reason = "cache file counts fit u32")]
+            let sessions_count = cache
                 .files
                 .values()
                 .filter(|usage| {
@@ -391,6 +415,7 @@ impl CostScanner {
                     })
                 })
                 .count() as u32;
+            summary.sessions_count = sessions_count;
 
             // Pi-compatible sessions are outside the Codex JSONL cache.
             // Skip when tests inject sessions roots — avoid scanning the real home tree.
@@ -624,7 +649,12 @@ impl CostScanner {
             Ok(m) => m,
             Err(_) => return,
         };
-        let size = metadata.len() as i64;
+        // File sizes are clamped to i64::MAX before casting.
+        #[allow(
+            clippy::cast_possible_wrap,
+            reason = "file sizes are clamped to i64::MAX"
+        )]
+        let size = metadata.len().min(i64::MAX as u64) as i64;
         let mtime_ms = system_time_to_unix_ms(metadata.modified().ok());
         let path_key = path.to_string_lossy().to_string();
         let cached = cache.files.get(&path_key).cloned();
@@ -941,7 +971,10 @@ fn add_claude_record_to_daily_costs(
 }
 
 /// Check if any cost usage sources are available
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "utility probe for cost-usage availability; not yet wired into all call sites"
+)]
 pub fn has_cost_usage_sources() -> bool {
     let scanner = CostScanner::new(1);
     scanner
@@ -1268,7 +1301,8 @@ mod tests {
             Some(140)
         );
         assert!(scan_codex_file_cost(&path) > 0.0);
-        let _ = std::fs::remove_file(&path);
+        // Best-effort test cleanup; the file may already be gone.
+        let _removed = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1421,8 +1455,9 @@ mod tests {
             "each day should hold exactly one record's cost, got {day_one_cost} vs {day_two_cost}"
         );
 
-        let _ = std::fs::remove_file(&file_a);
-        let _ = std::fs::remove_file(&file_b);
+        // Best-effort test cleanup; the files may already be gone.
+        let _removed_a = std::fs::remove_file(&file_a);
+        let _removed_b = std::fs::remove_file(&file_b);
     }
 
     #[test]
@@ -1440,7 +1475,8 @@ mod tests {
         let mut seen = HashSet::new();
         let counted = for_each_claude_usage_record(&path, &cutoff, &mut seen, None, |_| {});
         assert_eq!(counted, 1, "incomplete final JSONL line must be processed");
-        let _ = std::fs::remove_file(&path);
+        // Best-effort test cleanup; the file may already be gone.
+        let _removed = std::fs::remove_file(&path);
     }
 
     fn write_codex_session_fixture(sessions_root: &Path, name: &str, input_tokens: u64) -> PathBuf {

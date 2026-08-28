@@ -60,7 +60,10 @@ impl MiniMaxLocalStorageImporter {
 
     /// Get paths to browser localStorage databases
     fn get_browser_paths() -> Vec<(String, PathBuf)> {
-        #[allow(unused_mut)]
+        #[allow(
+            unused_mut,
+            reason = "mutability needed for conditional initialization that the compiler cannot prove"
+        )]
         let mut paths = Vec::new();
 
         #[cfg(target_os = "windows")]

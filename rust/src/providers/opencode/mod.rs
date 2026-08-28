@@ -7,7 +7,10 @@ pub mod billing;
 pub mod scraper;
 
 // Re-exports for advanced scraping
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "imports needed for future OpenCode provider wiring"
+)]
 pub use scraper::{OpenCodeError, OpenCodeUsageFetcher, OpenCodeUsageSnapshot};
 
 use async_trait::async_trait;
@@ -497,6 +500,10 @@ impl OpenCodeProvider {
         } else {
             number
         };
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "timestamps are normalized to whole seconds (ms input divided by 1000) before the cast"
+        )]
         DateTime::<Utc>::from_timestamp(seconds as i64, 0)
     }
 
@@ -514,6 +521,10 @@ impl OpenCodeProvider {
         let percent = super::extract_number(&percent_pattern, text)
             .ok_or_else(|| ProviderError::Parse(format!("Missing {} percent", prefix)))?;
 
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "resetInSec values are whole-second counts scraped as integral numbers"
+        )]
         let reset = super::extract_number(&reset_pattern, text)
             .map(|n| n as i64)
             .unwrap_or(0);

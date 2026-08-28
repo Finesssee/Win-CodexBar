@@ -34,7 +34,10 @@ pub enum SurfaceTarget {
 }
 
 impl SurfaceTarget {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "surface target type reserved for future window management integration"
+    )]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "summary" => Some(Self::Summary),

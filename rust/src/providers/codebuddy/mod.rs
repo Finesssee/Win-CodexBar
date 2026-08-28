@@ -452,7 +452,9 @@ fn cookie_fingerprint(cookie: &str) -> String {
     let mut out = String::with_capacity(16);
     for byte in &digest[..8] {
         use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
+        // Formatting a fingerprint char can only fail on IO errors, which
+        // String writes never raise; discarding is correct.
+        let _written_hex = write!(out, "{byte:02x}");
     }
     out
 }
@@ -662,6 +664,10 @@ fn format_credit_number(value: f64) -> String {
     }
     let rounded = (value * 100.0).round() / 100.0;
     if (rounded - rounded.round()).abs() < 0.001 {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "value just rounded and verified integral within 0.001, so the i64 cast loses nothing"
+        )]
         format_int_with_commas(rounded.round() as i64)
     } else {
         let s = format!("{rounded:.2}");
@@ -743,6 +749,10 @@ fn epoch_seconds_or_millis(number: f64) -> Option<DateTime<Utc>> {
     } else {
         number
     };
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "epoch seconds far exceed i64 range yield None from from_timestamp anyway; truncation only for absurd inputs that fail validation next"
+    )]
     DateTime::<Utc>::from_timestamp(seconds as i64, 0)
 }
 
@@ -973,6 +983,10 @@ mod tests {
         ));
         // Oversized cache is refused before parsing.
         let big = dir.path().join("big.json");
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "MAX_CACHE_BYTES is 1 MiB; +1 stays far inside usize on any supported target"
+        )]
         std::fs::write(&big, vec![b' '; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
         assert!(read_credits_cache(&big).is_err());
     }
@@ -1267,6 +1281,8 @@ mod tests {
             assert!(matches!(err, ProviderError::Other(_)), "got {err}");
         }
 
+        // SAFETY: this test set CB_CREDITS_FILE at its start under the same
+        // single-test ownership; removing it restores the shared environment.
         unsafe {
             std::env::remove_var("CB_CREDITS_FILE");
         }

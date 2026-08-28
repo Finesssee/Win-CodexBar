@@ -37,9 +37,15 @@ pub struct UpdateInfo {
     pub version: String,
     pub download_url: String,
     pub expected_sha256: Option<String>,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "update metadata fields are deserialized for version comparison but not all are read"
+    )]
     pub release_url: String,
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "update metadata fields are deserialized for version comparison but not all are read"
+    )]
     pub release_notes: String,
     pub delivery: UpdateDelivery,
 }
@@ -63,7 +69,10 @@ struct GitHubRelease {
     #[serde(default)]
     draft: bool,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "update metadata fields are deserialized for version comparison but not all are read"
+    )]
     prerelease: bool,
 }
 
@@ -79,7 +88,10 @@ struct GitHubAsset {
 ///
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "update check response fields are deserialized for parsing but not all are read"
+)]
 pub async fn check_for_updates() -> Option<UpdateInfo> {
     check_for_updates_with_channel(UpdateChannel::Stable).await
 }
@@ -238,7 +250,10 @@ fn is_newer_version(remote: &str, current: &str) -> bool {
 }
 
 /// Get the current version
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "update info struct reserved for future UI integration"
+)]
 pub fn current_version() -> &'static str {
     CURRENT_VERSION
 }
@@ -263,8 +278,8 @@ pub async fn download_update(
     write_download_response(response, &file_path, &progress_tx).await?;
     verify_download_hash(&file_path, expected_update_sha256(update_info)?).await?;
 
-    // Signal download complete
-    let _ = progress_tx.send(UpdateState::Ready(file_path.clone()));
+    // Signal download complete; the receiver may be gone, which is fine.
+    let _ready_signal = progress_tx.send(UpdateState::Ready(file_path.clone()));
 
     Ok(file_path)
 }
@@ -367,14 +382,16 @@ fn send_download_progress(
         0.0
     };
 
-    let _ = progress_tx.send(UpdateState::Downloading(progress));
+    // Best-effort progress update; a dropped receiver is fine.
+    let _progress_update = progress_tx.send(UpdateState::Downloading(progress));
 }
 
 /// Verify the SHA256 hash of a downloaded file against release metadata.
 async fn verify_download_hash(file_path: &PathBuf, expected_hash: &str) -> Result<(), String> {
     let actual = sha256_file_async(file_path).await?;
     if let Err(e) = verify_sha256_hex(&actual, expected_hash) {
-        let _ = std::fs::remove_file(file_path);
+        // Best-effort cleanup of the corrupt download; the hash error is returned regardless.
+        let _removed = std::fs::remove_file(file_path);
         return Err(e);
     }
 
@@ -427,7 +444,10 @@ fn sha256_file(file_path: &Path) -> Result<String, String> {
 /// Start background download of an update
 ///
 /// Returns a receiver that can be polled for progress updates.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "update info struct reserved for future UI integration"
+)]
 pub fn start_background_download(
     update_info: UpdateInfo,
 ) -> (
@@ -445,7 +465,8 @@ pub fn start_background_download(
                     // UpdateState::Ready is already sent by download_update
                 }
                 Err(e) => {
-                    let _ = tx.send(UpdateState::Failed(e));
+                    // Best-effort failure signal; the receiver may already be gone.
+                    let _failure_signal = tx.send(UpdateState::Failed(e));
                 }
             }
         });
@@ -626,7 +647,10 @@ fn windows_powershell_path() -> PathBuf {
 }
 
 /// Check if there's a pending update ready to install
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "update info struct reserved for future UI integration"
+)]
 pub fn get_pending_update() -> Option<PathBuf> {
     let download_dir = get_download_dir()?;
 
@@ -668,10 +692,13 @@ fn find_pending_installer_in_dir(download_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Clean up downloaded updates
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "update info struct reserved for future UI integration"
+)]
 pub fn cleanup_downloads() {
     if let Some(download_dir) = get_download_dir() {
-        let _ = std::fs::remove_dir_all(&download_dir);
+        let _cleaned = std::fs::remove_dir_all(&download_dir);
     }
 }
 

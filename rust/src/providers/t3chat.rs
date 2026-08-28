@@ -335,7 +335,13 @@ fn date_from_epoch(value: Option<f64>) -> Option<DateTime<Utc>> {
     } else {
         raw
     };
-    Utc.timestamp_opt(seconds as i64, 0).single()
+    // Epoch seconds (normalized above) are far below i64::MAX for real dates.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "normalized epoch seconds fit i64"
+    )]
+    let secs = seconds as i64;
+    Utc.timestamp_opt(secs, 0).single()
 }
 
 fn plan_name(customer: &T3CustomerData) -> Option<String> {

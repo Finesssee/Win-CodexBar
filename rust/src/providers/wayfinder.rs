@@ -242,7 +242,8 @@ impl Provider for WayfinderProvider {
             Self::fetch_json(&client, &endpoint_url(&base, MODELS_PATH)?).await?;
         let savings: SavingsResponse =
             Self::fetch_json(&client, &endpoint_url(&base, SAVINGS_PATH)?).await?;
-        let _ = Self::fetch_metrics(&client, &endpoint_url(&base, METRICS_PATH)?).await;
+        // Metrics are best-effort enrichment; a failure must not fail the usage fetch.
+        let _metrics = Self::fetch_metrics(&client, &endpoint_url(&base, METRICS_PATH)?).await;
 
         let wayfinder_usage = WayfinderUsageSnapshot {
             gateway_status: health.status,

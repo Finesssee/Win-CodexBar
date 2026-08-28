@@ -566,7 +566,13 @@ fn rolling_reset(seconds: Option<f64>, now: DateTime<Utc>) -> Option<DateTime<Ut
     if seconds < 0.0 {
         return None;
     }
-    Some(now + chrono::Duration::milliseconds((seconds * 1000.0) as i64))
+    // The window offset is whole seconds from the API, far below i64::MAX.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "API window offset is far below i64::MAX"
+    )]
+    let millis = (seconds * 1000.0) as i64;
+    Some(now + chrono::Duration::milliseconds(millis))
 }
 
 fn date_from_milliseconds(raw: Option<f64>) -> Option<DateTime<Utc>> {
@@ -574,7 +580,14 @@ fn date_from_milliseconds(raw: Option<f64>) -> Option<DateTime<Utc>> {
     if raw <= 0.0 {
         return None;
     }
+    // Epoch milliseconds from the API; realistic dates are far below i64::MAX.
+    #[expect(clippy::cast_possible_truncation, reason = "epoch ms dates fit i64")]
     let secs = (raw / 1000.0).floor() as i64;
+    // The fractional second is in [0, 1), so nanoseconds stay below u32::MAX.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "fractional second keeps nanoseconds < u32::MAX"
+    )]
     let nsecs = (((raw / 1000.0) - secs as f64) * 1_000_000_000.0) as u32;
     Utc.timestamp_opt(secs, nsecs).single()
 }

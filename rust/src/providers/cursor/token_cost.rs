@@ -140,8 +140,15 @@ pub async fn fetch_token_cost_report(
         if count < PAGE_SIZE {
             break;
         }
+        // Collected events are bounded by MAX_PAGES * PAGE_SIZE, so the
+        // length always fits in i64.
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "event count bounded by MAX_PAGES * PAGE_SIZE"
+        )]
+        let collected = all.len() as i64;
         if let Some(expected) = expected_total
-            && all.len() as i64 >= expected
+            && collected >= expected
         {
             break;
         }
@@ -267,10 +274,24 @@ where
             Ok(v)
         }
         fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
-            Ok(v as i64)
+            // Usage-event counts from the Cursor API are small non-negative
+            // integers, far below i64::MAX.
+            #[expect(
+                clippy::cast_possible_wrap,
+                reason = "usage-event counts are small non-negative integers"
+            )]
+            let count = v as i64;
+            Ok(count)
         }
         fn visit_f64<E: de::Error>(self, v: f64) -> Result<i64, E> {
-            Ok(v as i64)
+            // Token counts are whole numbers; the fractional part is rounding
+            // noise from JSON float parsing.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "token counts are whole numbers; fractional part is rounding noise"
+            )]
+            let count = v as i64;
+            Ok(count)
         }
         fn visit_str<E: de::Error>(self, v: &str) -> Result<i64, E> {
             v.parse().map_err(E::custom)

@@ -566,6 +566,16 @@ impl Provider for AntigravityProvider {
     fn supports_cli(&self) -> bool {
         true
     }
+
+    /// Antigravity's `NotInstalled` reports the local language-server probe
+    /// finding nothing to talk to — a runtime that is not running, not a
+    /// credential problem — so it surfaces as an offline runtime.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::NotInstalled(_) => crate::core::ProviderStateKind::LocalRuntimeOffline,
+            _ => error.state_kind(),
+        }
+    }
 }
 
 struct ProcessInfo {

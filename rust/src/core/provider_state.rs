@@ -7,6 +7,13 @@
 //! to a small [`ProviderStateKind`] while the typed [`ProviderError`] still
 //! exists, and the kind travels on `ProviderUsageSnapshot` / `ProviderDetail`.
 //! The frontend only maps the kind to a locale key.
+//!
+//! Variant meanings are provider-relative: most providers raise
+//! `NotInstalled` for a missing API key or auth file — a sign-in gate, not an
+//! offline runtime — so the default maps it to
+//! [`ProviderStateKind::NeedsAuthentication`]. Probes that genuinely mean a
+//! local runtime is not running override via `Provider::error_state_kind`
+//! (see `AntigravityProvider`).
 
 use serde::{Deserialize, Serialize};
 
@@ -45,9 +52,11 @@ impl ProviderError {
     /// (see `AntigravityProvider::error_state_kind`).
     pub fn state_kind(&self) -> ProviderStateKind {
         match self {
-            // A missing local language server/process is a runtime that is
-            // simply not running, not a credential problem.
-            ProviderError::NotInstalled(_) => ProviderStateKind::LocalRuntimeOffline,
+            // `NotInstalled` mostly reports missing credentials/keys (API
+            // key or auth file absent) — a sign-in gate. Providers whose
+            // probe genuinely means a local runtime is not running override
+            // via `error_state_kind`.
+            ProviderError::NotInstalled(_) => ProviderStateKind::NeedsAuthentication,
             // Expired tokens are "expired session"; other OAuth failures
             // (missing credentials, revoked, consent off) are sign-in gates.
             ProviderError::OAuthRevoked(_) => ProviderStateKind::NeedsAuthentication,
@@ -102,7 +111,7 @@ mod tests {
         );
         assert_eq!(
             E::NotInstalled("not found".into()).state_kind(),
-            K::LocalRuntimeOffline
+            K::NeedsAuthentication
         );
         assert_eq!(E::Timeout.state_kind(), K::Unknown);
         // Real `reqwest::Error` built through the public API: a `file://`

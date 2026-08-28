@@ -676,9 +676,11 @@ pub trait Provider: Send + Sync {
     }
 
     /// Presentation-safe availability state for a refresh error. The default
-    /// maps `ProviderError` variants; override only when one of this
-    /// provider's error variants carries provider-specific meaning (e.g. a
-    /// local language-server probe that reports "not installed").
+    /// maps `ProviderError` variants, treating `NotInstalled` as a missing
+    /// credential (most providers raise it for a missing API key or auth
+    /// file). Override only when a variant carries provider-specific meaning
+    /// that differs — e.g. a local language-server probe whose
+    /// "not installed" means the runtime is simply not running.
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
         error.state_kind()
     }

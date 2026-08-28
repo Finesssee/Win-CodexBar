@@ -9,7 +9,7 @@ use async_trait::async_trait;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    ProviderStateKind, SourceMode,
+    SourceMode,
 };
 
 pub use api::CopilotApi;
@@ -74,44 +74,5 @@ impl Provider for CopilotProvider {
 
     fn supports_oauth(&self) -> bool {
         true
-    }
-
-    /// Copilot's `NotInstalled` means no usable GitHub token was found
-    /// (missing credential, not a missing local runtime), so it surfaces as a
-    /// sign-in gate rather than an offline runtime.
-    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
-        match error {
-            ProviderError::NotInstalled(_) => ProviderStateKind::NeedsAuthentication,
-            _ => error.state_kind(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod state_kind_tests {
-    use super::*;
-
-    #[test]
-    fn not_installed_maps_to_needs_authentication() {
-        let provider = CopilotProvider::new();
-        assert_eq!(
-            provider.error_state_kind(&ProviderError::NotInstalled(
-                "GitHub Copilot token not found. Sign in with GitHub.".into(),
-            )),
-            ProviderStateKind::NeedsAuthentication
-        );
-    }
-
-    #[test]
-    fn other_variants_use_the_default_mapping() {
-        let provider = CopilotProvider::new();
-        assert_eq!(
-            provider.error_state_kind(&ProviderError::Timeout),
-            ProviderStateKind::Unknown
-        );
-        assert_eq!(
-            provider.error_state_kind(&ProviderError::OAuth("Token expired.".into())),
-            ProviderStateKind::ExpiredSession
-        );
     }
 }

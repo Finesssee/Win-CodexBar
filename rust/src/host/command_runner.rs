@@ -272,7 +272,7 @@ impl CommandRunner {
             match child.try_wait() {
                 Ok(Some(status)) => return status.code(),
                 Ok(None) => {}
-                Err(_) => return None,
+                Err(_) => break,
             }
             if remaining.is_zero() {
                 break;
@@ -281,10 +281,10 @@ impl CommandRunner {
             std::thread::sleep(step);
             remaining -= step;
         }
-        // Teardown after timeout/capture. If the process exited between the
-        // grace loop and kill (kill fails on an already-dead process), `wait`
-        // still yields the true exit status; when the kill lands, the code is
-        // ours and already reported separately.
+        // Teardown after timeout/capture or a transient try_wait error
+        // (e.g. ECHILD/handle race). If the process already exited, kill
+        // fails and `wait` still yields the true exit status; when the kill
+        // lands, the code is ours and already reported separately.
         let killed = child.kill().is_ok();
         let reaped = child.wait().ok();
         if killed {

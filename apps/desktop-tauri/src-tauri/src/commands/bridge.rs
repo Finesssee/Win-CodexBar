@@ -194,7 +194,7 @@ pub struct ProviderUsageSnapshot {
     pub updated_at: String,
     #[serde(default)]
     pub error: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_error_state")]
     pub error_state: codexbar::core::ProviderStateKind,
     #[serde(default)]
     pub pace: Option<PaceSnapshot>,
@@ -216,6 +216,10 @@ fn default_display_name() -> String {
 
 fn default_source_label() -> String {
     "seed".to_string()
+}
+
+fn default_error_state() -> codexbar::core::ProviderStateKind {
+    codexbar::core::ProviderStateKind::Unknown
 }
 
 /// Provider payload after applying settings-driven cross-surface presentation.

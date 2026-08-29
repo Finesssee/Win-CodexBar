@@ -372,6 +372,7 @@ fn error_category(err: &ProviderError) -> &'static str {
     match err {
         ProviderError::AuthRequired
         | ProviderError::OAuth(_)
+        | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_)
         | ProviderError::NoCookies => "auth",
         ProviderError::Network(_) | ProviderError::Timeout => "network",

@@ -361,7 +361,7 @@ impl ClaudeOAuthFetcher {
         credentials: &ClaudeOAuthCredentials,
     ) -> Result<OAuthUsageResponse, ProviderError> {
         if credentials.is_expired() {
-            return Err(ProviderError::OAuth(
+            return Err(ProviderError::OAuthExpired(
                 "OAuth token expired. Run `claude` to refresh.".to_string(),
             ));
         }
@@ -413,7 +413,7 @@ impl ClaudeOAuthFetcher {
             }
 
             if status.as_u16() == 401 {
-                return Err(ProviderError::OAuth(
+                return Err(ProviderError::OAuthExpired(
                     "OAuth token invalid or expired. Run `claude` to re-authenticate.".to_string(),
                 ));
             }

@@ -61,16 +61,8 @@ impl ProviderError {
             // Expired tokens are "expired session"; other OAuth failures
             // (missing credentials, revoked, consent off) are sign-in gates.
             ProviderError::OAuthRevoked(_) => ProviderStateKind::NeedsAuthentication,
-            ProviderError::OAuth(message) => {
-                if message.contains("token expired")
-                    || message.contains("Token expired")
-                    || message.contains("session expired")
-                {
-                    ProviderStateKind::ExpiredSession
-                } else {
-                    ProviderStateKind::NeedsAuthentication
-                }
-            }
+            ProviderError::OAuthExpired(_) => ProviderStateKind::ExpiredSession,
+            ProviderError::OAuth(_) => ProviderStateKind::NeedsAuthentication,
             ProviderError::AuthRequired | ProviderError::NoCookies => {
                 ProviderStateKind::NeedsAuthentication
             }
@@ -99,11 +91,11 @@ mod tests {
             K::NeedsAuthentication
         );
         assert_eq!(
-            E::OAuth("Token expired. Run `claude login` to refresh.".into()).state_kind(),
+            E::OAuthExpired("Token expired. Run `claude login` to refresh.".into()).state_kind(),
             K::ExpiredSession
         );
         assert_eq!(
-            E::OAuth("Claude OAuth session expired and its stored refresh token was rejected by the server.".into()).state_kind(),
+            E::OAuthExpired("Claude OAuth session expired and its stored refresh token was rejected by the server.".into()).state_kind(),
             K::ExpiredSession
         );
         assert_eq!(

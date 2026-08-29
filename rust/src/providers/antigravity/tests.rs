@@ -391,3 +391,15 @@ fn not_installed_maps_to_local_runtime_offline() {
         crate::core::ProviderStateKind::LocalRuntimeOffline
     );
 }
+
+#[test]
+fn probe_failure_maps_to_unknown() {
+    // A failed probe (PowerShell unavailable etc.) says nothing about the
+    // runtime itself - inconclusive, not offline.
+    assert_eq!(
+        AntigravityProvider::new().error_state_kind(&ProviderError::NotInstalled(
+            "Failed to detect Antigravity process".into()
+        )),
+        crate::core::ProviderStateKind::Unknown
+    );
+}

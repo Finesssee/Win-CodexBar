@@ -292,7 +292,7 @@ fn claude_cli_auth_error(lowered: &str) -> Option<ProviderError> {
         return Some(ProviderError::AuthRequired);
     }
     if lowered.contains("token expired") || lowered.contains("token_expired") {
-        return Some(ProviderError::OAuth(
+        return Some(ProviderError::OAuthExpired(
             "Token expired. Run `claude login` to refresh.".to_string(),
         ));
     }

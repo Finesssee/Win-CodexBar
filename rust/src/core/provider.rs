@@ -556,6 +556,9 @@ pub enum ProviderError {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    #[error("OAuth session expired: {0}")]
+    OAuthExpired(String),
+
     #[error("OAuth token revoked: {0}")]
     OAuthRevoked(String),
 

@@ -379,6 +379,7 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
         ProviderError::AuthRequired
         | ProviderError::NoCookies
         | ProviderError::OAuth(_)
+        | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_) => "auth_required".into(),
         ProviderError::Timeout => "timeout".into(),
         ProviderError::Network(err) => {

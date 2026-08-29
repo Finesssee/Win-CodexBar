@@ -113,18 +113,28 @@ struct WindowsProcessMetadata {
 }
 
 impl WindowsProcessOutputParser {
-    pub fn parse(output: &str) -> Vec<AgentProcessRecord> {
-        let Ok(value) = serde_json::from_str::<Value>(output.trim()) else {
-            return Vec::new();
+    /// Parse `ConvertTo-Json` output from the Windows process query.
+    ///
+    /// Distinguishes "legitimately no processes" (empty array) from an
+    /// unparseable response: only genuinely malformed JSON is an error, so
+    /// callers can surface parse failures instead of silently reporting an
+    /// empty discovery result.
+    pub fn parse(output: &str) -> Result<Vec<AgentProcessRecord>, String> {
+        let trimmed = output.trim();
+        if trimmed.is_empty() {
+            return Err("process query produced no output".to_string());
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            return Err("process query output was not valid JSON".to_string());
         };
         let values = match value {
             Value::Array(values) => values,
             Value::Object(_) => vec![value],
-            _ => return Vec::new(),
+            _ => return Err("process query output was not a JSON array".to_string()),
         };
         let mut seen = HashSet::new();
 
-        values
+        Ok(values
             .into_iter()
             .filter_map(|value| serde_json::from_value::<WindowsProcessMetadata>(value).ok())
             .filter(|process| process.process_id > 0 && seen.insert(process.process_id))
@@ -153,7 +163,7 @@ impl WindowsProcessOutputParser {
                     command: None,
                 }
             })
-            .collect()
+            .collect())
     }
 }
 

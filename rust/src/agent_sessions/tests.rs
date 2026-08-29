@@ -206,7 +206,7 @@ bad line
             }
         ]"#;
 
-        let records = WindowsProcessOutputParser::parse(output);
+        let records = WindowsProcessOutputParser::parse(output).unwrap();
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].provider, Some(AgentSessionProvider::Claude));
@@ -214,6 +214,56 @@ bad line
         assert!(records[0].started_at.is_some());
         assert_eq!(records[0].executable, "claude.exe");
         assert!(!records[0].executable.contains("super-secret"));
+    }
+
+    #[test]
+    fn windows_process_parser_treats_empty_array_as_empty_result() {
+        let records = WindowsProcessOutputParser::parse("[]").unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn windows_process_parser_reports_unparseable_output() {
+        let error = WindowsProcessOutputParser::parse("<html>gateway timeout</html>")
+            .expect_err("malformed JSON must be an error");
+        assert!(error.contains("JSON"), "{error}");
+
+        let error = WindowsProcessOutputParser::parse("   ")
+            .expect_err("empty output must be an error");
+        assert!(error.contains("no output"), "{error}");
+    }
+
+    #[test]
+    fn error_tail_caps_line_length_and_redacts() {
+        let stderr = "Authorization: Bearer sk-secret-token\nshort line\n";
+        let tail = LocalAgentSessionScanner::error_tail(stderr);
+
+        assert!(!tail.contains("sk-secret-token"), "{tail}");
+        assert!(tail.contains("[REDACTED]"), "{tail}");
+        for line in tail.split("; ") {
+            assert!(line.chars().count() <= CommandRunner::MAX_LINE_CHARS + 1);
+        }
+    }
+
+    #[test]
+    fn error_tail_truncates_long_lines() {
+        let long_line = "x".repeat(CommandRunner::MAX_LINE_CHARS + 50);
+        let tail = LocalAgentSessionScanner::error_tail(&long_line);
+
+        assert!(tail.ends_with('\u{2026}'), "{tail}");
+        assert!(
+            tail.chars().count() <= CommandRunner::MAX_LINE_CHARS + 1,
+            "{tail}"
+        );
+    }
+
+    #[test]
+    fn exit_code_label_is_human_readable() {
+        assert_eq!(LocalAgentSessionScanner::exit_code_label(Some(1)), "1");
+        assert_eq!(
+            LocalAgentSessionScanner::exit_code_label(None),
+            "unknown"
+        );
     }
 
     #[test]

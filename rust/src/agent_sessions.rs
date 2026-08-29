@@ -388,16 +388,19 @@ impl LocalAgentSessionScanner {
                 ),
             ),
             Ok(result) if result.exit_code == Some(0) => {
-                (WindowsProcessOutputParser::parse(&result.text), None)
+                match WindowsProcessOutputParser::parse(&result.text) {
+                    Ok(processes) => (processes, None),
+                    Err(parse_error) => (
+                        Vec::new(),
+                        Some(format!(
+                            "Windows process discovery could not parse its output \
+                             ({parse_error}); file-only sessions may still appear."
+                        )),
+                    ),
+                }
             }
             Ok(result) => {
-                let stderr_tail = crate::logging::safe_error_message(result.text);
-                let stderr_tail = stderr_tail
-                    .lines()
-                    .rev()
-                    .take(3)
-                    .collect::<Vec<_>>()
-                    .join("; ");
+                let stderr_tail = Self::error_tail(&result.stderr);
                 let hint = if stderr_tail.is_empty() {
                     String::new()
                 } else {
@@ -406,9 +409,10 @@ impl LocalAgentSessionScanner {
                 (
                     Vec::new(),
                     Some(format!(
-                        "Windows process discovery failed with exit code {:?}{}; \
+                        "Windows process discovery failed with exit code {}{}; \
                          file-only sessions may still appear.",
-                        result.exit_code, hint
+                        Self::exit_code_label(result.exit_code),
+                        hint
                     )),
                 )
             }
@@ -454,6 +458,31 @@ impl LocalAgentSessionScanner {
             ],
             ..CommandOptions::default()
         }
+    }
+
+    /// Redacted, length-bounded tail of captured stderr for error messages.
+    fn error_tail(stderr: &str) -> String {
+        let tail = crate::logging::safe_error_message(stderr);
+        tail.lines()
+            .map(|line| {
+                if line.chars().count() > CommandRunner::MAX_LINE_CHARS {
+                    let cut: String = line.chars().take(CommandRunner::MAX_LINE_CHARS).collect();
+                    format!("{cut}\u{2026}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// Human-readable exit-code label for user-facing messages.
+    fn exit_code_label(exit_code: Option<i32>) -> String {
+        exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     fn scan_files(

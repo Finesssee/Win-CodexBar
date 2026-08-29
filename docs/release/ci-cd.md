@@ -24,10 +24,12 @@ gets the restricted `GH_TOKEN` context.
 3. The build invokes `scripts/release-doctor.ps1 -SkipGitHub`, then
    `scripts/windows-release-build.ps1 -Ref <full-SHA> -SmokeInstall` with a
    fresh temporary `WorkRoot`. It never receives `GH_TOKEN` and never uploads.
-4. The job emits exactly these four publishable assets:
+4. The job emits exactly these six publishable assets:
    `CodexBar-X.Y.Z-Setup.exe`, its `.sha256` sidecar,
-   `CodexBar-X.Y.Z-portable.exe`, and its `.sha256` sidecar. It also emits
-   `release-manifest.json` (tag, commit, version, sizes, and hashes) and logs,
+   `CodexBar-X.Y.Z-portable.exe`, its `.sha256` sidecar,
+   `CodexBarCLI-vX.Y.Z-windows-x64.zip`, and its `.sha256` sidecar. It also
+   emits `release-manifest.json` (tag, commit, version, sizes, and hashes)
+   and logs,
    then persists/stores the bundle as CircleCI workspace/artifacts.
 5. A human must approve the `release-approval` job after reviewing the
    manifest and artifact logs.

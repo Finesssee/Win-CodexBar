@@ -476,6 +476,12 @@ try {
     Copy-Item $installer $installerAsset -Force
     Compress-Archive -Path $releaseExe -DestinationPath $cliZip -Force
 
+    $zipVerifyDir = Join-Path ([IO.Path]::GetTempPath()) ("codexbar-cli-zip-verify-" + [guid]::NewGuid().ToString('N'))
+    Expand-Archive -LiteralPath $cliZip -DestinationPath $zipVerifyDir -Force
+    $extractedCli = Join-Path $zipVerifyDir "codexbar-cli.exe"
+    if (-not (Test-Path -LiteralPath $extractedCli -PathType Leaf)) { throw "CLI zip missing codexbar-cli.exe entry: $cliZip" }
+    if ((Get-FileHash -LiteralPath $extractedCli -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $releaseExe -Algorithm SHA256).Hash) { throw "CLI zip entry hash mismatch: $cliZip" }
+
     foreach ($asset in @($installerAsset, $portableExe, $cliZip)) {
         $fileName = Split-Path $asset -Leaf
         $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()

@@ -43,6 +43,12 @@ gets the restricted `GH_TOKEN` context.
    notes/review. Winget follows only after the immutable installer URL and
    digest are stable.
 
+## Signing status
+
+The `CodexBarCLI-vX.Y.Z-windows-x64.zip` asset is currently **unsigned**. The
+SignPath workflow's upload glob (`CodexBar-*.exe`) does not include it.
+Revisit when SignPath wiring for the CLI zip lands.
+
 ## Local checks
 
 Run the focused, dependency-free helper tests and prerequisite assertions:

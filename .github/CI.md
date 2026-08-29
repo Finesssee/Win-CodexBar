@@ -73,7 +73,10 @@ Both jobs use CircleCI's hosted Windows executor (`circleci/windows@5.0`).
    package, pnpm 11.24.0, the Rust MSVC target, Git, and Inno Setup 6.
 3. It uses a new temporary `WorkRoot`, runs `release-doctor.ps1`, then runs
    `windows-release-build.ps1` with the immutable SHA and `-SmokeInstall`.
-   It never uploads. Four assets, `release-manifest.json`, and build logs are
+   It never uploads. Six assets — `CodexBar-<version>-Setup.exe` and its
+   `.sha256` sidecar, `CodexBar-<version>-portable.exe` and its `.sha256`
+   sidecar, `CodexBarCLI-v<version>-windows-x64.zip` and its `.sha256`
+   sidecar — plus `release-manifest.json` and build logs are
    persisted to the workspace and stored as CircleCI artifacts.
 4. `release-approval` is a required manual CircleCI approval job.
 5. `release-publish` attaches the workspace and is the only job with context

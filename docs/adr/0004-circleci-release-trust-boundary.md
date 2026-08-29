@@ -25,8 +25,11 @@ It provisions/asserts pinned-enough prerequisites, uses a fixed WorkRoot
 pnpm store), runs release-doctor, and invokes `windows-release-build.ps1` with
 the immutable SHA and `-SmokeInstall`. The WorkRoot's `cache/` subdirectory
 survives between runs while `source/` and `assets/` are cleaned fresh. It emits
-four expected assets, a manifest, and logs into a persisted workspace. The
-builder has no publication path.
+six expected assets — `CodexBar-<version>-Setup.exe` and its `.sha256`
+sidecar, `CodexBar-<version>-portable.exe` and its `.sha256` sidecar,
+`CodexBarCLI-v<version>-windows-x64.zip` and its `.sha256` sidecar — plus a
+manifest and logs into a persisted workspace. The builder has no publication
+path.
 
 A required CircleCI approval separates build from `release-publish`. Only that
 job receives the project-restricted `github-release-publisher` context with a

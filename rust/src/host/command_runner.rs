@@ -251,18 +251,35 @@ impl CommandRunner {
         let _flushed_stdin = stdin.flush();
     }
 
+    /// Grace period between stdout/stderr EOF and process-object exit.
+    ///
+    /// Windows is the motivating case: PowerShell tears down its console
+    /// handles slightly before the process object transitions to signaled, so
+    /// a single `try_wait` right after capture sees `Ok(None)` even though the
+    /// process exited successfully milliseconds later. Waiting (instead of
+    /// immediately killing) preserves the real exit code.
+    const EXIT_GRACE_PERIOD: Duration = Duration::from_millis(250);
+
     fn finish_child(child: &mut Child) -> Option<i32> {
-        match child.try_wait() {
-            Ok(Some(status)) => status.code(),
-            Ok(None) => {
-                // Teardown after timeout/capture: kill/wait results cannot
-                // change the outcome, already reported separately.
-                let _killed = child.kill();
-                let _reaped = child.wait();
-                None
+        let mut remaining = Self::EXIT_GRACE_PERIOD;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.code(),
+                Ok(None) => {}
+                Err(_) => return None,
             }
-            Err(_) => None,
+            if remaining.is_zero() {
+                break;
+            }
+            let step = remaining.min(Duration::from_millis(10));
+            std::thread::sleep(step);
+            remaining -= step;
         }
+        // Teardown after timeout/capture: kill/wait results cannot
+        // change the outcome, already reported separately.
+        let _killed = child.kill();
+        let _reaped = child.wait();
+        None
     }
 
     /// Capture output from a running process
@@ -554,6 +571,31 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "timeout took {:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn large_capture_is_not_truncated() {
+        let runner = CommandRunner::new();
+        let options = CommandOptions {
+            initial_delay: Duration::ZERO,
+            extra_args: vec![
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                "$big = 'A' * 90000; Write-Output $big".to_string(),
+            ],
+            ..CommandOptions::default()
+        };
+
+        let result = runner.run("powershell.exe", None, &options).unwrap();
+
+        assert!(!result.timed_out);
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.text.len() >= 90_000,
+            "expected >= 90000 bytes, got {}",
+            result.text.len()
         );
     }
 

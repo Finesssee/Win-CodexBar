@@ -382,21 +382,41 @@ impl LocalAgentSessionScanner {
         let (processes, error) = match process_result {
             Ok(result) if result.timed_out => (
                 Vec::new(),
-                Some("Windows process discovery timed out; file-only sessions may still appear."),
+                Some(
+                    "Windows process discovery timed out; file-only sessions may still appear."
+                        .to_string(),
+                ),
             ),
             Ok(result) if result.exit_code == Some(0) => {
                 (WindowsProcessOutputParser::parse(&result.text), None)
             }
-            Ok(_) => (
-                Vec::new(),
-                Some(
-                    "Windows process discovery failed; verify PowerShell and CIM access. File-only sessions may still appear.",
-                ),
-            ),
+            Ok(result) => {
+                let stderr_tail = crate::logging::safe_error_message(result.text);
+                let stderr_tail = stderr_tail
+                    .lines()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let hint = if stderr_tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr_tail}")
+                };
+                (
+                    Vec::new(),
+                    Some(format!(
+                        "Windows process discovery failed with exit code {:?}{}; \
+                         file-only sessions may still appear.",
+                        result.exit_code, hint
+                    )),
+                )
+            }
             Err(_) => (
                 Vec::new(),
                 Some(
-                    "Unable to launch PowerShell for process discovery; file-only sessions may still appear.",
+                    "Unable to launch PowerShell for process discovery; file-only sessions may still appear."
+                        .to_string(),
                 ),
             ),
         };

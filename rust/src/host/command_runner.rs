@@ -156,7 +156,13 @@ impl CommandRunner {
         Self::send_initial_input(&mut child, input, options.initial_delay, deadline);
 
         // Capture output
-        let (output, stderr, timed_out) = self.capture_output(&mut child, options, deadline)?;
+        let (output, stderr, timed_out) = match self.capture_output(&mut child, options, deadline) {
+            Ok(captured) => captured,
+            Err(e) => {
+                let _exit_code = Self::finish_child(&mut child);
+                return Err(e);
+            }
+        };
 
         let exit_code = Self::finish_child(&mut child);
 

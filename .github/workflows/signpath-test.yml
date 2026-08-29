@@ -136,7 +136,7 @@ jobs:
           $version = '${{ steps.version.outputs.version }}'
           $outputDir = 'release-output'
           $tag = '${{ inputs.tag }}'
-          $assets = Get-ChildItem "$outputDir\CodexBar-$version-*" |
+          $assets = Get-ChildItem "$outputDir\CodexBar-$version-*", "$outputDir\CodexBarCLI-v$version-*" |
             Where-Object { $_.Name -notmatch '\.log$' } |
             Select-Object -ExpandProperty FullName
           gh release create $tag --repo nesszer/Win-CodexBar --draft --title "Win-CodexBar $version" --notes "Release $version" @assets

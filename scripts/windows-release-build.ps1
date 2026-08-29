@@ -464,6 +464,7 @@ try {
     $installer = Join-Path $installerOut "CodexBar-$version-Setup.exe"
     $portableExe = Join-Path $AssetsDir "CodexBar-$version-portable.exe"
     $installerAsset = Join-Path $AssetsDir "CodexBar-$version-Setup.exe"
+    $cliZip = Join-Path $AssetsDir "CodexBarCLI-v$version-windows-x64.zip"
 
     foreach ($path in @($desktopExe, $releaseExe, $installer)) {
         if (-not (Test-Path $path)) {
@@ -473,8 +474,9 @@ try {
 
     Copy-Item $desktopExe $portableExe -Force
     Copy-Item $installer $installerAsset -Force
+    Compress-Archive -Path $releaseExe -DestinationPath $cliZip -Force
 
-    foreach ($asset in @($installerAsset, $portableExe)) {
+    foreach ($asset in @($installerAsset, $portableExe, $cliZip)) {
         $fileName = Split-Path $asset -Leaf
         $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
         "$hash  $fileName" | Set-Content -Encoding ascii "$asset.sha256"
@@ -494,7 +496,7 @@ try {
 
     Write-Host ""
     Write-Host "Release assets:"
-    Get-ChildItem $AssetsDir -Filter "CodexBar-$version-*" |
+    Get-ChildItem $AssetsDir -Filter "CodexBar*" |
         Sort-Object Name |
         Select-Object Name, Length, LastWriteTime |
         Format-Table -AutoSize

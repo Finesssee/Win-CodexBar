@@ -174,8 +174,8 @@ function Assert-ManifestAndAssets {
         throw 'Manifest is missing its assets list.'
     }
     $manifestAssets = @($manifest.assets)
-    if ($manifestAssets.Count -ne 4) {
-        throw "Manifest must contain exactly four release assets; found $($manifestAssets.Count)."
+    if ($manifestAssets.Count -ne 6) {
+        throw "Manifest must contain exactly six release assets; found $($manifestAssets.Count)."
     }
     $manifestNames = @($manifestAssets | ForEach-Object { [string]$_.name } | Sort-Object)
     if (($manifestNames -join '|') -ne ($expectedNames -join '|')) {
@@ -205,7 +205,8 @@ function Assert-ManifestAndAssets {
     }
     Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBar-$ExpectedVersion-Setup.exe")
     Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBar-$ExpectedVersion-portable.exe")
-    Write-Host '[ok] manifest, exact four asset names, SHA-256 values, and sidecars verified before API access'
+    Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBarCLI-v$ExpectedVersion-windows-x64.zip")
+    Write-Host '[ok] manifest, exact six asset names, SHA-256 values, and sidecars verified before API access'
 }
 
 $env:GH_TOKEN = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:gh_token) { $env:gh_token } else { '' }
@@ -276,5 +277,5 @@ foreach ($path in $assetPaths) {
     }
 }
 
-Write-Host "Draft GitHub Release $Tag contains all four verified Windows assets."
+Write-Host "Draft GitHub Release $Tag contains all six verified Windows assets."
 Write-Host 'No release publication/finalization was performed.'

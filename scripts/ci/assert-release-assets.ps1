@@ -16,7 +16,9 @@ foreach ($name in @(
     "CodexBar-$version-Setup.exe",
     "CodexBar-$version-Setup.exe.sha256",
     "CodexBar-$version-portable.exe",
-    "CodexBar-$version-portable.exe.sha256"
+    "CodexBar-$version-portable.exe.sha256",
+    "CodexBarCLI-v$version-windows-x64.zip",
+    "CodexBarCLI-v$version-windows-x64.zip.sha256"
 )) {
     $path = Join-Path $assetsDir $name
     if (-not (Test-Path -LiteralPath $path)) {

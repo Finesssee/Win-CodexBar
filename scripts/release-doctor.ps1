@@ -146,6 +146,7 @@ if ((Test-Path $changelogPath) -and (Select-String -Path $changelogPath -Pattern
 if (Test-Path $AssetsDir) {
     Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-Setup.exe")
     Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-portable.exe")
+    Test-AssetHash (Join-Path $AssetsDir "CodexBarCLI-v$Version-windows-x64.zip")
 } else {
     Write-Warn "local assets directory not found: $AssetsDir"
 }
@@ -169,7 +170,9 @@ if (-not $SkipGitHub) {
                     "CodexBar-$Version-Setup.exe",
                     "CodexBar-$Version-Setup.exe.sha256",
                     "CodexBar-$Version-portable.exe",
-                    "CodexBar-$Version-portable.exe.sha256"
+                    "CodexBar-$Version-portable.exe.sha256",
+                    "CodexBarCLI-v$Version-windows-x64.zip",
+                    "CodexBarCLI-v$Version-windows-x64.zip.sha256"
                 )) {
                     if ($assetNames -contains $name) {
                         Write-Ok "GitHub release has $name"

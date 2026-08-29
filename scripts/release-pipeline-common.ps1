@@ -62,7 +62,9 @@ function Get-RequiredReleaseAssets {
         "CodexBar-$Version-Setup.exe",
         "CodexBar-$Version-Setup.exe.sha256",
         "CodexBar-$Version-portable.exe",
-        "CodexBar-$Version-portable.exe.sha256"
+        "CodexBar-$Version-portable.exe.sha256",
+        "CodexBarCLI-v$Version-windows-x64.zip",
+        "CodexBarCLI-v$Version-windows-x64.zip.sha256"
     )
 }
 

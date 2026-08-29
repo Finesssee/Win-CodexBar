@@ -40,8 +40,9 @@ foreach ($path in $expectedPaths) {
 }
 Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBar-$version-Setup.exe")
 Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBar-$version-portable.exe")
+Assert-AssetMatchesSidecar (Join-Path $AssetsDir "CodexBarCLI-v$version-windows-x64.zip")
 
-# Copy only the four publishable assets and the build logs into the persisted bundle.
+# Copy only the six publishable assets and the build logs into the persisted bundle.
 foreach ($path in $expectedPaths) {
     Copy-Item -LiteralPath $path -Destination (Join-Path $OutputDir (Split-Path $path -Leaf)) -Force
 }

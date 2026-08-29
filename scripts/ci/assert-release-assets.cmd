@@ -19,6 +19,8 @@ for %%F in (
   "CodexBar-%VERSION%-Setup.exe.sha256"
   "CodexBar-%VERSION%-portable.exe"
   "CodexBar-%VERSION%-portable.exe.sha256"
+  "CodexBarCLI-v%VERSION%-windows-x64.zip"
+  "CodexBarCLI-v%VERSION%-windows-x64.zip.sha256"
 ) do (
   if not exist "%ASSETS_DIR%\%%~F" (
     echo Missing release artifact: %ASSETS_DIR%\%%~F

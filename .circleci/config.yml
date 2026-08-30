@@ -250,17 +250,19 @@ jobs:
               $nodeMsi = Join-Path $env:TEMP "node-v$nodeFallbackVersion-x64.msi"
               & curl.exe -sSfL -o $nodeMsi "https://nodejs.org/dist/v$nodeFallbackVersion/node-v$nodeFallbackVersion-x64.msi"
               if ($LASTEXITCODE -ne 0) { throw "downloading Node MSI exited with code $LASTEXITCODE" }
-              $msiArgs = @('/i', $nodeMsi, '/qn', '/norestart')
+              # The image's own Node may occupy C:\Program Files\nodejs and a
+              # same-product MSI upgrade can silently no-op; install into a
+              # dedicated per-version directory and put it first on PATH.
+              $nodeDir = "C:\node-v$nodeFallbackVersion"
+              $msiArgs = @('/i', $nodeMsi, '/qn', '/norestart', "INSTALLDIR=$nodeDir")
               $proc = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
               if ($proc.ExitCode -ne 0) { throw "msiexec install exited with code $($proc.ExitCode)" }
-              # The image's preinstalled Node (a different major) may sit
-              # earlier on PATH; resolve node strictly from the MSI dir.
-              $nodeExe = 'C:\Program Files\nodejs\node.exe'
+              $nodeExe = Join-Path $nodeDir 'node.exe'
               if (-not (Test-Path $nodeExe)) { throw 'node.exe is still unavailable after MSI provisioning.' }
               $nodeVersion = (& $nodeExe --version).Trim()
               $nodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
               if ($nodeMajor -ne $requiredNodeMajor) { throw "Node $nodeVersion is installed; required major $requiredNodeMajor." }
-              $env:Path = "C:\Program Files\nodejs;$env:Path"
+              $env:Path = "$nodeDir;$env:Path"
             }
             Write-Host "[ok] Node $nodeVersion"
             $pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\ci-toolchain\pnpm'
@@ -281,7 +283,7 @@ jobs:
             # Delegate the check slice to the local-check script (fmt/clippy/test,
             # frontend install/test/build, interaction-guard tests) with the PATH
             # prefix set once.
-            $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Program Files\nodejs;$pnpmShimDir;$env:Path"
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$nodeDir;C:\Program Files\nodejs;$pnpmShimDir;$env:Path"
             & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\local-check.ps1') -Slice ci
             if ($LASTEXITCODE -ne 0) { throw "local-check.ps1 -Slice ci failed with exit code $LASTEXITCODE" }
       - save_cache:

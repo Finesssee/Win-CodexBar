@@ -253,11 +253,14 @@ jobs:
               $msiArgs = @('/i', $nodeMsi, '/qn', '/norestart')
               $proc = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
               if ($proc.ExitCode -ne 0) { throw "msiexec install exited with code $($proc.ExitCode)" }
-              $env:Path = "C:\Program Files\nodejs;$env:Path"
-              if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is still unavailable after MSI provisioning.' }
-              $nodeVersion = (& node --version).Trim()
+              # The image's preinstalled Node (a different major) may sit
+              # earlier on PATH; resolve node strictly from the MSI dir.
+              $nodeExe = 'C:\Program Files\nodejs\node.exe'
+              if (-not (Test-Path $nodeExe)) { throw 'node.exe is still unavailable after MSI provisioning.' }
+              $nodeVersion = (& $nodeExe --version).Trim()
               $nodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
               if ($nodeMajor -ne $requiredNodeMajor) { throw "Node $nodeVersion is installed; required major $requiredNodeMajor." }
+              $env:Path = "C:\Program Files\nodejs;$env:Path"
             }
             Write-Host "[ok] Node $nodeVersion"
             $pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\ci-toolchain\pnpm'

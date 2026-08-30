@@ -4017,6 +4017,24 @@ html:has(.menu-surface--tray) {
   color: var(--provider-status-ok, #4ade80);
 }
 
+.codex-menu-accounts__usage {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  font-size: 0.66rem;
+  color: var(--provider-row-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.codex-menu-accounts__usage > span + span::before {
+  content: "·";
+  margin: 0 5px;
+  opacity: 0.65;
+}
+
 .codex-menu-accounts__bar {
   display: block;
   height: 4px;

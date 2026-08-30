@@ -321,7 +321,10 @@ export default function MenuCard({
       )}
 
       {provider.providerId === "codex" && (
-        <CodexAccountsMenu hideEmail={hideEmail} />
+        <CodexAccountsMenu
+          hideEmail={hideEmail}
+          resetTimeRelative={resetTimeRelative}
+        />
       )}
     </article>
   );

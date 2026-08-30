@@ -173,6 +173,8 @@ jobs:
               if ($prUrl -match '/pull/(\d+)') { $prNumber = $Matches[1] }
               try {
                 if ([string]::IsNullOrWhiteSpace($prNumber)) { throw 'PR number not available from pipeline values.' }
+                $repo = "$($env:CIRCLE_PROJECT_USERNAME)/$($env:CIRCLE_PROJECT_REPONAME)"
+                if ([string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_USERNAME) -or [string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_REPONAME)) { throw 'CIRCLE_PROJECT_USERNAME/REPONAME unavailable for pulls API fallback.' }
                 $pr = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/pulls/$prNumber" -Headers @{ 'User-Agent' = 'codexbar-pr-check' }
                 $baseSha = [string]$pr.base.sha
                 if ([string]::IsNullOrWhiteSpace($baseSha)) { throw 'pulls API returned no base.sha.' }

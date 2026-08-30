@@ -62,7 +62,11 @@ nul
 .env
 .env.*
 /.local/
-/docs/
+# Docs children ignored generally; ADRs are product docs and stay trackable
+/docs/*
+!/docs/adr/
+/docs/adr/*
+!/docs/adr/*.md
 /scripts/*
 /docs/ui-parity-workflow.md
 /scripts/crop_vm_preferences_proof.sh

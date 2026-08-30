@@ -118,6 +118,177 @@ jobs:
             & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $publisher -AssetsDir (Join-Path $root 'release-output') -Tag $env:CIRCLE_TAG
             if ($LASTEXITCODE -ne 0) { throw "publish-github-release.ps1 failed with exit code $LASTEXITCODE" }
 
+
+  pr-check:
+    executor:
+      name: win/default
+      size: medium
+    environment:
+      CARGO_TERM_COLOR: always
+    steps:
+      - checkout
+      - run:
+          name: Budget and trigger gates
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          command: |
+            $ErrorActionPreference = 'Stop'
+            # Gate 1 - budget: CI_BUDGET_MODE=off is the emergency stop (unset/empty = normal).
+            if ($env:CI_BUDGET_MODE -eq 'off') {
+              Write-Host 'CI_BUDGET_MODE is off: hosted pr-check skips (emergency stop).'
+              & circleci-agent step halt
+              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
+              exit 0
+            }
+            Write-Host "CI_BUDGET_MODE is '$($env:CI_BUDGET_MODE)': hosted pr-check passes budget gate."
+            # Gate 2 - branch/PR scope: the GitHub workflow fires on PRs plus pushes to
+            # main/master only. CircleCI keeps the branch filter wide (same-repo PR
+            # builds arrive as branch pipelines with PR variables set), so this gate
+            # reproduces the narrower contract. Non-PR branch pushes halt the job
+            # before any cache or toolchain work.
+            $isPr = (-not [string]::IsNullOrWhiteSpace($env:CIRCLE_PULL_REQUEST)) -or (-not [string]::IsNullOrWhiteSpace($env:CIRCLE_PULL_REQUESTS)) -or (-not [string]::IsNullOrWhiteSpace($env:CIRCLE_PR_NUMBER))
+            $isMainPush = $env:CIRCLE_BRANCH -in @('main', 'master')
+            if (-not $isPr -and -not $isMainPush) {
+              Write-Host "Branch push to '$($env:CIRCLE_BRANCH)' (not a PR, not main/master): hosted pr-check skips."
+              & circleci-agent step halt
+              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
+              exit 0
+            }
+            Write-Host "Trigger gate passed (PR: $isPr, branch: $($env:CIRCLE_BRANCH)): hosted pr-check passes scope gate."
+            # Gate 3 - docs-only: mirror paths-ignore (docs/**, **/*.md, CONTEXT.md,
+            # .github/CI.md). Skip only when every changed file matches an ignored
+            # path; when the base cannot be determined, run the checks (fail open).
+            $base = $env:CIRCLE_PR_BASE_REVISION  # undocumented CircleCI variable; used only if present
+            if ([string]::IsNullOrWhiteSpace($base) -and $isPr) {
+              # Resolve the PR base from the public GitHub pulls API.
+              $prNumber = $env:CIRCLE_PR_NUMBER
+              if ([string]::IsNullOrWhiteSpace($prNumber) -and -not [string]::IsNullOrWhiteSpace($env:CIRCLE_PULL_REQUEST)) {
+                if ($env:CIRCLE_PULL_REQUEST -match '/pull/(\d+)') { $prNumber = $Matches[1] }
+              }
+              if ([string]::IsNullOrWhiteSpace($prNumber) -and -not [string]::IsNullOrWhiteSpace($env:CIRCLE_PULL_REQUESTS)) {
+                if ($env:CIRCLE_PULL_REQUESTS -match '/pull/(\d+)') { $prNumber = $Matches[1] }
+              }
+              try {
+                if ([string]::IsNullOrWhiteSpace($prNumber)) { throw 'PR number not available from CircleCI variables.' }
+                $repo = "$($env:CIRCLE_PROJECT_USERNAME)/$($env:CIRCLE_PROJECT_REPONAME)"
+                $pr = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/pulls/$prNumber" -Headers @{ 'User-Agent' = 'codexbar-pr-check' }
+                $baseSha = [string]$pr.base.sha
+                if ([string]::IsNullOrWhiteSpace($baseSha)) { throw 'pulls API returned no base.sha.' }
+                & git fetch origin $baseSha --depth=1
+                if ($LASTEXITCODE -ne 0) { throw "git fetch base.sha exited with code $LASTEXITCODE" }
+                $base = $baseSha
+                Write-Host "Docs gate base resolved from GitHub pulls API: $baseSha"
+              } catch {
+                Write-Host "Docs gate base resolution failed ($($_.Exception.Message)): running full checks (fail open)."
+                $base = ''
+              }
+            } elseif ([string]::IsNullOrWhiteSpace($base) -and $isMainPush) {
+              & git rev-parse --verify --quiet 'HEAD^' *> $null
+              if ($LASTEXITCODE -eq 0) { $base = 'HEAD^' } else { Write-Host 'No parent commit on main push: running full checks (fail open).' }
+            }
+            if ([string]::IsNullOrWhiteSpace($base)) { exit 0 }  # fail open: gate step ends, job continues
+            $changed = & git diff --name-only "$base..$env:CIRCLE_SHA1"  # two-dot tree diff: base fetched at depth 1 may lack a merge base for three-dot
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host 'git diff against base failed: cannot evaluate docs-only gate; running full checks (fail open).'
+              exit 0
+            }
+            $ignoredPattern = '^(docs/.*)|(.*\.md)$'
+            $codeFiles = @($changed | Where-Object { $_ -and ($_ -notmatch $ignoredPattern) -and ($_ -ne 'CONTEXT.md') -and ($_ -ne '.github/CI.md') })
+            if ($codeFiles.Count -eq 0) {
+              Write-Host "All $($changed.Count) changed files match paths-ignore (docs/**, **/*.md, CONTEXT.md, .github/CI.md): hosted pr-check skips."
+              & circleci-agent step halt
+              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
+              exit 0
+            }
+            Write-Host "$($codeFiles.Count) code file(s) changed: hosted pr-check passes docs gate."
+      - restore_cache:
+          name: Restore Cargo registry and git cache
+          keys:
+            - pr-check-cargo-{{ checksum "Cargo.lock" }}
+            - pr-check-cargo-
+      - restore_cache:
+          name: Restore pnpm store cache
+          keys:
+            - pr-check-pnpm-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}
+            - pr-check-pnpm-
+      - run:
+          name: Provision toolchain and run local-check ci slice
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          no_output_timeout: 60m
+          command: |
+            $ErrorActionPreference = 'Stop'
+            # Rust stable with rustfmt, clippy, and the MSVC target.
+            if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+              Write-Host 'rustup is unavailable on the image; installing winget package Rustlang.Rustup.'
+              & winget install --id Rustlang.Rustup --exact --source winget --silent --accept-source-agreements --accept-package-agreements
+              if ($LASTEXITCODE -ne 0) { throw "winget install Rustlang.Rustup exited with code $LASTEXITCODE" }
+              $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+              $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+              $paths = @($env:Path, $machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+              if ($paths.Count -gt 0) { $env:Path = $paths -join ';' }
+            }
+            & rustup toolchain install stable --profile default -c rustfmt,clippy -t x86_64-pc-windows-msvc
+            if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install exited with code $LASTEXITCODE" }
+            & rustup default stable
+            if ($LASTEXITCODE -ne 0) { throw "rustup default exited with code $LASTEXITCODE" }
+            Write-Host "[ok] rustup default stable (rustc $((& rustc --version)))"
+            # Node exact major 24 (GH workflow baseline) with pnpm from the
+            # packageManager pin.
+            $env:Path = "C:\Program Files\nodejs;$env:Path"
+            $requiredNodeMajor = 24
+            $nodeFallbackVersion = '24.18.0'
+            $nodeVersion = $null
+            if (Get-Command node -ErrorAction SilentlyContinue) { $nodeVersion = (& node --version).Trim() }
+            $nodeMajor = 0
+            if ($nodeVersion -match '^v(\d+)\.') { $nodeMajor = [int]$Matches[1] }
+            if ($nodeMajor -ne $requiredNodeMajor) {
+              $found = if ($nodeVersion) { $nodeVersion } else { 'none' }
+              Write-Host "Node $requiredNodeMajor.x is required (image has $found); installing winget package OpenJS.NodeJS.LTS --version $nodeFallbackVersion."
+              & winget install --id OpenJS.NodeJS.LTS --exact --version $nodeFallbackVersion --source winget --silent --accept-source-agreements --accept-package-agreements
+              if ($LASTEXITCODE -ne 0) { throw "winget install OpenJS.NodeJS.LTS exited with code $LASTEXITCODE" }
+              $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+              $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+              $paths = @($env:Path, $machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+              if ($paths.Count -gt 0) { $env:Path = $paths -join ';' }
+              $env:Path = "C:\Program Files\nodejs;$env:Path"
+              if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is still unavailable after winget provisioning.' }
+              $nodeVersion = (& node --version).Trim()
+              $nodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
+              if ($nodeMajor -ne $requiredNodeMajor) { throw "Node $nodeVersion is installed; required major $requiredNodeMajor." }
+            }
+            Write-Host "[ok] Node $nodeVersion"
+            $pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\ci-toolchain\pnpm'
+            New-Item -ItemType Directory -Force -Path $pnpmShimDir | Out-Null
+            & corepack enable --install-directory $pnpmShimDir
+            if ($LASTEXITCODE -ne 0) { throw "corepack enable exited with code $LASTEXITCODE" }
+            # packageManager in apps/desktop-tauri/package.json is the source of
+            # truth for the pnpm version (no hardcoded drift).
+            $packageManager = [string]((Get-Content -Raw -LiteralPath 'apps/desktop-tauri/package.json' | ConvertFrom-Json).packageManager)
+            if ($packageManager -notmatch '^pnpm@(.+)$') { throw "packageManager '$packageManager' does not match ^pnpm@<version>." }
+            $expectedPnpm = $Matches[1]
+            & corepack prepare $packageManager --activate
+            if ($LASTEXITCODE -ne 0) { throw "corepack prepare $packageManager --activate exited with code $LASTEXITCODE" }
+            $env:Path = "$pnpmShimDir;$env:Path"
+            $pnpmVersion = (& pnpm --version).Trim()
+            if ($pnpmVersion -ne $expectedPnpm) { throw "pnpm $pnpmVersion is active; expected exact $expectedPnpm (packageManager $packageManager)." }
+            Write-Host "[ok] pnpm $pnpmVersion"
+            # Delegate the check slice to the local-check script (fmt/clippy/test,
+            # frontend install/test/build, interaction-guard tests) with the PATH
+            # prefix set once.
+            $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Program Files\nodejs;$pnpmShimDir;$env:Path"
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\local-check.ps1') -Slice ci
+            if ($LASTEXITCODE -ne 0) { throw "local-check.ps1 -Slice ci failed with exit code $LASTEXITCODE" }
+      - save_cache:
+          name: Save Cargo registry and git cache
+          key: pr-check-cargo-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+      - save_cache:
+          name: Save pnpm store cache
+          key: pr-check-pnpm-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}
+          paths:
+            - ~/AppData/Local/pnpm/store
+
 workflows:
   release:
     jobs:
@@ -137,3 +308,13 @@ workflows:
           requires:
             - release-approval
           filters: *release-tag-filter
+
+  pr-check:
+    jobs:
+      - pr-check:
+          filters:
+            tags:
+              ignore:
+                - /^v[0-9]+\.[0-9]+\.[0-9]+$/
+            branches:
+              only: /.*/

@@ -1,20 +1,10 @@
 name: PR check
 
-# Blacksmith CI only: PR validation. Release assets stay in CircleCI.
+# Manual-only historical fallback: the hosted PR check moved to CircleCI
+# (ADR 0005). This workflow no longer schedules on push or pull_request;
+# run it by hand for Blacksmith diagnostics. The job body is kept intact
+# for that purpose.
 on:
-  push:
-    branches: [main, master]
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'CONTEXT.md'
-      - '.github/CI.md'
-  pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'CONTEXT.md'
-      - '.github/CI.md'
   workflow_dispatch:
 
 concurrency:

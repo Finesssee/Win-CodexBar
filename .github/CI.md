@@ -2,23 +2,28 @@
 
 Win-CodexBar has two deliberately separate hosted CI responsibilities:
 
-- **Blacksmith GitHub Actions** remains the primary PR/push validation path.
-- **CircleCI** is a release-only Windows path. It can start only for a
-  canonical protected semver tag (`vX.Y.Z`), never for a branch or PR.
+- **CircleCI** hosts the primary PR/push validation path: the `pr-check`
+  job/workflow in `.circleci/config.yml` runs the full local-check slice on
+  CircleCI's hosted Windows executor for every branch pipeline that passes
+  its gates.
+- The **Blacksmith GitHub Actions** PR check
+  (`.github/workflows/pr-check.yml`) is a manual-dispatch-only fallback: its
+  `on:` block holds `workflow_dispatch` only, so it no longer schedules
+  automatically and is run by hand only for Blacksmith diagnostics.
 
-The CircleCI pipeline does not replace or weaken the Blacksmith checks. Its
-build job has no GitHub write credential; only the post-approval publisher
-receives the restricted `GH_TOKEN` context.
+These responsibilities do not overlap: the CircleCI PR check replaces the
+former Blacksmith PR/push gate (see ADR 0005). Its build job has no GitHub
+write credential; only the post-approval release publisher receives the
+restricted `GH_TOKEN` context.
 
-## Blacksmith GitHub Actions
+## CircleCI hosted PR check (primary PR/push gate)
 
-### PR check — `.github/workflows/pr-check.yml`
+### Workflow — `.circleci/config.yml`
 
-Runs on `pull_request`, on `push` to `main`/`master`, and on
-`workflow_dispatch`. Runner: `blacksmith-4vcpu-windows-2025`
-(Windows Server 2025; VS Build Tools available per Blacksmith docs).
-
-Exact commands run, in order:
+The hosted PR/push validation gate now runs on **CircleCI** as the
+`pr-check` job in the `pr-check` workflow (project `nesszer/Win-CodexBar`),
+not on Blacksmith. The CircleCI job delegates the whole check to
+`scripts/local-check.ps1 -Slice ci`, so the exact commands it runs are:
 
 ```powershell
 cargo fmt --all --check
@@ -27,9 +32,6 @@ cargo test --workspace
 pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
 ```
-
-This is the **local-check slice** from `scripts/local-check.ps1` only. It does
-not run release packaging, installer smoke, or publication.
 
 `concurrency.cancel-in-progress` is on, keyed by ref, so superseded pushes
 cancel the in-flight run.
@@ -42,22 +44,23 @@ permissions. It is unrelated to release publication.
 
 ## GitHub Actions budget mode
 
-Both GitHub workflows carry `if: vars.CI_BUDGET_MODE != 'off'`, so they run
-when the variable is unset (`normal`), `normal`, or `thin`, and skip only when
-it is `off`. This gate does not disable CircleCI releases.
+Only the interaction guard carries the `if: vars.CI_BUDGET_MODE != 'off'`
+gate now; it runs when the variable is unset (`normal`), `normal`, or
+`thin`, and skips only when it is `off`. This gate does not disable
+CircleCI releases.
 
 Set `CI_BUDGET_MODE` in **Settings → Secrets and variables → Actions →
 Variables**. Do not hard-code it in a workflow.
 
-| Mode   | PR check | Interaction guard | Circle release |
-|--------|----------|-------------------|----------------|
-| normal | runs     | runs              | tag-triggered  |
-| thin   | runs     | runs              | tag-triggered  |
-| off    | skip     | skip              | tag-triggered  |
+| Mode   | Interaction guard | Circle release |
+|--------|-------------------|----------------|
+| normal | runs              | tag-triggered  |
+| thin   | runs              | tag-triggered  |
+| off    | skip              | tag-triggered  |
 
 The Blacksmith Pool minutes intent remains roughly **60% Win-CodexBar**,
-**30% linear-cli**, and **10% buffer**. CircleCI credits are separate and must
-be budgeted in CircleCI.
+**30% linear-cli**, and **10% buffer**. CircleCI credits are separate and
+must be budgeted in CircleCI.
 
 ## CircleCI release pipeline
 
@@ -112,12 +115,11 @@ CircleCI project setup and GitHub tag/context/ruleset changes are the current
 manual setup scope.
 
 ## Cost, retry, and rollback behavior
-
-Blacksmith Windows minutes remain the recurring PR cost and are still billed
-according to the existing Blacksmith plan (Windows has historically billed at
-2x on its free tier). CircleCI release builds add Windows executor credits only
-for protected semver tags, plus the short approval/publish job. Do not use
-CircleCI for branch validation or ad-hoc release testing.
+CircleCI Windows credits are now the recurring PR cost (spent against the
+open-source allowance; see ADR 0005), plus release builds for protected
+semver tags and the short approval/publish job. Blacksmith minutes remain
+relevant only for the interaction guard and manual-dispatch diagnostics.
+Do not use CircleCI for ad-hoc release testing outside its gated triggers.
 
 Reruns are safe: the build is tied to the immutable SHA from the tag and
 produces a fresh temporary WorkRoot. If publication stops after some uploads,

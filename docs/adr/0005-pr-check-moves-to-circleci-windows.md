@@ -1,6 +1,6 @@
 # ADR 0005: Hosted PR check moves to CircleCI Windows
 
-Date: 2026-08-31
+Date: 2026-08-30
 Status: Accepted; supersedes the hosted-runner decision of ADR 0001 and the
 Blacksmith gate description in ADR 0002
 

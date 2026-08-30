@@ -221,13 +221,14 @@ jobs:
             $ErrorActionPreference = 'Stop'
             # Rust stable with rustfmt, clippy, and the MSVC target.
             if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
-              Write-Host 'rustup is unavailable on the image; installing winget package Rustlang.Rustup.'
-              & winget install --id Rustlang.Rustup --exact --source winget --silent --accept-source-agreements --accept-package-agreements
-              if ($LASTEXITCODE -ne 0) { throw "winget install Rustlang.Rustup exited with code $LASTEXITCODE" }
-              $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-              $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-              $paths = @($env:Path, $machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-              if ($paths.Count -gt 0) { $env:Path = $paths -join ';' }
+              Write-Host 'rustup is unavailable on the image; installing via rustup-init.exe (winget is not on the hosted image).'
+              $rustupInit = Join-Path $env:TEMP 'rustup-init.exe'
+              & curl.exe -sSfL -o $rustupInit https://win.rustup.rs/x86_64
+              if ($LASTEXITCODE -ne 0) { throw "downloading rustup-init.exe exited with code $LASTEXITCODE" }
+              & $rustupInit -y --default-toolchain none --profile minimal
+              if ($LASTEXITCODE -ne 0) { throw "rustup-init exited with code $LASTEXITCODE" }
+              $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+              $env:Path = "$cargoBin;$env:Path"
             }
             & rustup toolchain install stable --profile default -c rustfmt,clippy -t x86_64-pc-windows-msvc
             if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install exited with code $LASTEXITCODE" }
@@ -245,15 +246,15 @@ jobs:
             if ($nodeVersion -match '^v(\d+)\.') { $nodeMajor = [int]$Matches[1] }
             if ($nodeMajor -ne $requiredNodeMajor) {
               $found = if ($nodeVersion) { $nodeVersion } else { 'none' }
-              Write-Host "Node $requiredNodeMajor.x is required (image has $found); installing winget package OpenJS.NodeJS.LTS --version $nodeFallbackVersion."
-              & winget install --id OpenJS.NodeJS.LTS --exact --version $nodeFallbackVersion --source winget --silent --accept-source-agreements --accept-package-agreements
-              if ($LASTEXITCODE -ne 0) { throw "winget install OpenJS.NodeJS.LTS exited with code $LASTEXITCODE" }
-              $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-              $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-              $paths = @($env:Path, $machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-              if ($paths.Count -gt 0) { $env:Path = $paths -join ';' }
+              Write-Host "Node $requiredNodeMajor.x is required (image has $found); installing Node $nodeFallbackVersion via official MSI (winget is not on the hosted image)."
+              $nodeMsi = Join-Path $env:TEMP "node-v$nodeFallbackVersion-x64.msi"
+              & curl.exe -sSfL -o $nodeMsi "https://nodejs.org/dist/v$nodeFallbackVersion/node-v$nodeFallbackVersion-x64.msi"
+              if ($LASTEXITCODE -ne 0) { throw "downloading Node MSI exited with code $LASTEXITCODE" }
+              $msiArgs = @('/i', $nodeMsi, '/qn', '/norestart')
+              $proc = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
+              if ($proc.ExitCode -ne 0) { throw "msiexec install exited with code $($proc.ExitCode)" }
               $env:Path = "C:\Program Files\nodejs;$env:Path"
-              if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is still unavailable after winget provisioning.' }
+              if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is still unavailable after MSI provisioning.' }
               $nodeVersion = (& node --version).Trim()
               $nodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
               if ($nodeMajor -ne $requiredNodeMajor) { throw "Node $nodeVersion is installed; required major $requiredNodeMajor." }

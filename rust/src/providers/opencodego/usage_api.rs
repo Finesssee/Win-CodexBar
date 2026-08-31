@@ -99,7 +99,7 @@ fn api_window(
     now: DateTime<Utc>,
 ) -> Option<(f64, DateTime<Utc>)> {
     let object = names.iter().find_map(|name| usage.get(*name))?;
-    let mut percent = [
+    let percent = [
         "percent",
         "usagePercent",
         "usedPercent",
@@ -114,10 +114,10 @@ fn api_window(
                 .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
         })
     })?;
-    if (0.0..=1.0).contains(&percent) {
-        percent *= 100.0;
-    }
-    percent = percent.clamp(0.0, 100.0);
+    // GET /zen/go/v1/usage returns whole percentages in 0..=100 (including exact
+    // 1% / 0.5%). Do not treat values in (0, 1] as 0..=1 fractions: that turns
+    // a real 1% into a false 100% exhausted state (win-fork #247 / upstream #3216).
+    let percent = percent.clamp(0.0, 100.0);
     let reset = [
         "resetInSec",
         "resetInSeconds",
@@ -170,5 +170,37 @@ mod tests {
         assert!((snapshot.primary.used_percent - 12.0).abs() < 0.001);
         assert!((snapshot.secondary.as_ref().unwrap().used_percent - 8.0).abs() < 0.001);
         assert!((snapshot.tertiary.as_ref().unwrap().used_percent - 35.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn preserves_whole_percent_units_including_exact_one() {
+        let now = DateTime::parse_from_rfc3339("2026-08-31T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Live Go API shape: percent is already 0..=100. Exact 1 must stay 1%.
+        let text = r#"{"usage":{"rolling":{"status":"ok","percent":1,"resetsAt":"2026-08-31T17:12:09.085Z"},"weekly":{"status":"ok","percent":0,"resetsAt":"2026-09-07T00:00:00.085Z"},"monthly":{"status":"ok","percent":23,"resetsAt":"2026-09-20T04:39:33.085Z"}}}"#;
+        let snapshot = parse_usage_text(text, now).unwrap();
+        assert!(
+            (snapshot.primary.used_percent - 1.0).abs() < 0.001,
+            "rolling 1% must not be rescaled to 100%, got {}",
+            snapshot.primary.used_percent
+        );
+        assert!((snapshot.secondary.as_ref().unwrap().used_percent - 0.0).abs() < 0.001);
+        assert!((snapshot.tertiary.as_ref().unwrap().used_percent - 23.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn preserves_sub_one_percent_without_fraction_rescale() {
+        let now = DateTime::parse_from_rfc3339("2026-08-31T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let text = r#"{"usage":{"rolling":{"percent":0.5,"resetsAt":"2026-08-31T17:00:00Z"},"weekly":{"percent":100,"resetsAt":"2026-09-07T00:00:00Z"}}}"#;
+        let snapshot = parse_usage_text(text, now).unwrap();
+        assert!(
+            (snapshot.primary.used_percent - 0.5).abs() < 0.001,
+            "0.5% must stay 0.5, got {}",
+            snapshot.primary.used_percent
+        );
+        assert!((snapshot.secondary.as_ref().unwrap().used_percent - 100.0).abs() < 0.001);
     }
 }

@@ -161,7 +161,7 @@ function CodexAccountRow({
         className={`codex-menu-accounts__row${isAmbient ? " codex-menu-accounts__row--active" : ""}`}
       >
         <div className="codex-menu-accounts__meta">
-          <span className="codex-menu-accounts__email" title={label}>
+          <span className="codex-menu-accounts__email" title={shown}>
             {shown}
             {isAmbient && (
               <span className="codex-menu-accounts__badge">

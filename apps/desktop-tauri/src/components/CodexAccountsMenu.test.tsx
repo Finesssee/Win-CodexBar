@@ -196,4 +196,34 @@ describe("CodexAccountsMenu", () => {
     expect(tauriMocks.codexAccountSwitch).toHaveBeenCalledWith("2");
     expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
   });
+  it("keeps the email tooltip masked while hideEmail is on and raw when off", async () => {
+    const { container: hidden } = renderMenu(true, {
+      accounts: [account("1", { source: "ambient" }), account("2")],
+      snapshots: {},
+    });
+    await waitFor(() => {
+      expect(
+        hidden.querySelectorAll(".codex-menu-accounts__email").length,
+      ).toBe(2);
+    });
+    const hiddenEmail = hidden.querySelectorAll(
+      ".codex-menu-accounts__email",
+    )[1] as HTMLElement;
+    expect(hiddenEmail.getAttribute("title")).toBe(hiddenEmail.textContent);
+
+    const { container: visible } = renderMenu(false, {
+      accounts: [account("1", { source: "ambient" }), account("2")],
+      snapshots: {},
+    });
+    await waitFor(() => {
+      expect(
+        visible.querySelectorAll(".codex-menu-accounts__email").length,
+      ).toBe(2);
+    });
+    const rawEmail = visible.querySelectorAll(
+      ".codex-menu-accounts__email",
+    )[1] as HTMLElement;
+    expect(rawEmail.getAttribute("title")).toBe("user-2@example.com");
+  });
 });
+

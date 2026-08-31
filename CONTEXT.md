@@ -48,10 +48,10 @@ Set it in both CI surfaces, not in code:
 
 - **CircleCI** (the hosted `pr-check` job): CircleCI Project Settings →
   Environment Variables → `CI_BUDGET_MODE`. The job's budget guard reads it as
-  `$env:CI_BUDGET_MODE`; unset/empty is treated as `normal`. CircleCI
-  withholds project environment variables from forked-PR builds by default,
-  so forked PRs arrive empty → `normal` → runs (the same effective behavior as
-  GitHub's `vars.` withholding).
+  `$env:CI_BUDGET_MODE`; unset/empty is treated as `normal`. CircleCI's
+  GitHub App integration does not build fork-PR pipelines, so fork-PR
+  changes need the manual same-repo branch fallback (see "Hosted PR check
+  (CircleCI)"); `CI_BUDGET_MODE` applies whenever a pipeline actually runs.
 - **GitHub Actions** (`interaction-guard.yml` unchanged; `pr-check.yml` now a
   manual-dispatch-only fallback with no automatic push/PR scheduling):
   Settings → Secrets and variables → Actions → Variables; the workflows read

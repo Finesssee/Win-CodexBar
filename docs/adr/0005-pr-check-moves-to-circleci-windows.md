@@ -68,9 +68,10 @@ Move the hosted PR/push gate to CircleCI as a new `pr-check` job in
   (populated on pull request events); if that is empty while the pipeline is
   still PR-associated, the base SHA is resolved from the public GitHub pulls
   API using the documented `CIRCLE_PROJECT_USERNAME`/`CIRCLE_PROJECT_REPONAME`
-  variables and fetched with `--depth=1`; on `main`/`master` pushes
-  `HEAD^` is used when available. Any resolution, fetch, or diff failure
-  fails open: it exits only the gate step and therefore continues the job
+  variables and fetched with `--depth=1`. Docs-only evaluation applies only
+  to PR-associated pipelines; every `main`/`master` push runs the full
+  checks. Any resolution, fetch, or diff failure on a PR pipeline fails
+  open: it exits only the gate step and therefore continues the job
   into the checks; the gate never silently skips on an unknown base.
 - Budget gating stays honest and coarse: the job reads `CI_BUDGET_MODE` as a
   CircleCI project environment variable (unset/empty = `normal`) and halts

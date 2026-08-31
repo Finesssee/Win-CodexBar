@@ -7,11 +7,13 @@ path and the hosted release path. The `pr-check` workflow (added 2026-08) runs
 the format, clippy, Rust test, frontend test, and frontend build checks on
 hosted CircleCI Windows. It mirrors the GitHub workflow's trigger contract:
 pull requests and pushes to `main`/`master` run the checks (delegated to
-`scripts/local-check.ps1 -Slice ci`); other branch pushes and docs-only
-diffs (`docs/**`, `**/*.md`, `CONTEXT.md`, `.github/CI.md`) skip via early
-gates that log their reason and then call `circleci-agent step halt`, stopping
-the job before any cache or toolchain spend (docs-only detection fails open
-when the base revision cannot be determined). The release-tag pattern (`vX.Y.Z`) is
+`scripts/local-check.ps1 -Slice ci`); every `main`/`master` push runs the
+full checks — the docs-only skip never applies to them. Docs-only PRs
+(`docs/**`, `**/*.md`, `CONTEXT.md`, `.github/CI.md`) and other branch
+pushes skip via early gates that log their reason and then call
+`circleci-agent step halt`, stopping the job before any cache or toolchain
+spend (docs-only detection fails open when the base revision cannot be
+determined). The release-tag pattern (`vX.Y.Z`) is
 ignored so it never double-runs with the release workflow. The former
 Blacksmith GitHub Actions gate (`.github/workflows/pr-check.yml`) is retired
 for this repo — the Blacksmith pool is exhausted — and the workflow is now a
@@ -115,8 +117,9 @@ are intentionally manual.
 ## Cost, retry, and rollback
 
 The hosted PR check now runs on CircleCI Windows: its thin-slice Windows
-credits recur on PRs and `main`/`master` pushes (other branch pushes and
-docs-only diffs skip before spending), alongside the protected release tag
+credits recur on PRs and `main`/`master` pushes — every `main`/`master` push
+runs the full checks, while other branch pushes and docs-only PRs skip
+before spending — alongside the protected release tag
 path. The repository is public, so the PR check spends the Free Plan
 open-source allowance (open-source builds are not subject to the Free Plan's
 30,000-credit personal block). Fork PRs remain uncovered — the GitHub App does

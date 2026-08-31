@@ -361,4 +361,28 @@ mod tests {
             Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap())
         );
     }
+
+    #[test]
+    fn usage_percent_one_stays_one() {
+        let snapshot = snapshot_from_usage(&serde_json::json!({
+            "quotas": [{"usage_percent": 1, "limit": 100}]
+        }));
+        assert_eq!(snapshot.primary.used_percent, 1.0);
+    }
+
+    #[test]
+    fn usage_percent_half_stays_half() {
+        let snapshot = snapshot_from_usage(&serde_json::json!({
+            "quotas": [{"usage_percent": 0.5, "limit": 100}]
+        }));
+        assert_eq!(snapshot.primary.used_percent, 0.5);
+    }
+
+    #[test]
+    fn usage_percent_hundred_stays_hundred() {
+        let snapshot = snapshot_from_usage(&serde_json::json!({
+            "quotas": [{"usage_percent": 100, "limit": 100}]
+        }));
+        assert_eq!(snapshot.primary.used_percent, 100.0);
+    }
 }

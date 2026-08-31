@@ -129,6 +129,14 @@ jobs:
       # Stable relative target dir so the target cache below is portable and
       # every cargo invocation in local-check.ps1 shares one cache.
       CARGO_TARGET_DIR: target
+      # Compile-time pipeline values are exported as environment variables,
+      # never passed as command-line arguments: an empty-string argument does
+      # not survive the Windows argv handoff to a child powershell.exe -File
+      # invocation (MissingArgument). gates.ps1 reads CBX_PR_URL /
+      # CBX_PR_BASE_SHA, plus CI_BUDGET_MODE / CIRCLE_BRANCH / CIRCLE_SHA1,
+      # from the environment with [AllowEmptyString] defaults.
+      CBX_PR_URL: << pipeline.event.context.github.pr_url >>
+      CBX_PR_BASE_SHA: << pipeline.event.github.pull_request.base.sha >>
     steps:
       - checkout
       - run:
@@ -136,12 +144,7 @@ jobs:
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
-            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-pr-gates.ps1') `
-              -BudgetMode $env:CI_BUDGET_MODE `
-              -Branch $env:CIRCLE_BRANCH `
-              -PrUrl '<< pipeline.event.context.github.pr_url >>' `
-              -PrBaseSha '<< pipeline.event.github.pull_request.base.sha >>' `
-              -Sha $env:CIRCLE_SHA1
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-pr-gates.ps1')
             if ($LASTEXITCODE -ne 0) { throw "circleci-pr-gates.ps1 failed with exit code $LASTEXITCODE" }
       - restore_cache:
           name: Restore Cargo registry and git cache

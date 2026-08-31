@@ -29,14 +29,18 @@ param(
     # CIRCLE_BRANCH.
     [AllowEmptyString()][string]$Branch = $env:CIRCLE_BRANCH,
 
-    # Compile-time pipeline value pipeline.event.context.github.pr_url
-    # (empty on push pipelines).
-    [AllowEmptyString()][string]$PrUrl = '',
+    # Compile-time pipeline value pipeline.event.context.github.pr_url,
+    # exported as CBX_PR_URL by the job environment (empty on push
+    # pipelines). Delivered via environment, never as a command-line
+    # argument: an empty-string argument does not survive the Windows argv
+    # handoff to a child powershell.exe -File invocation (MissingArgument).
+    [AllowEmptyString()][string]$PrUrl = $env:CBX_PR_URL,
 
     # Compile-time pipeline value
-    # pipeline.event.github.pull_request.base.sha (populated only on pull
-    # request events; empty on push pipelines).
-    [AllowEmptyString()][string]$PrBaseSha = '',
+    # pipeline.event.github.pull_request.base.sha, exported as CBX_PR_BASE_SHA
+    # by the job environment (populated only on pull request events; empty on
+    # push pipelines).
+    [AllowEmptyString()][string]$PrBaseSha = $env:CBX_PR_BASE_SHA,
 
     # CIRCLE_SHA1.
     [AllowEmptyString()][string]$Sha = $env:CIRCLE_SHA1,

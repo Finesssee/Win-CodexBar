@@ -152,9 +152,16 @@ fn percent_from_object(map: &serde_json::Map<String, Value>) -> Option<f64> {
         "percent_used",
         "percentUsed",
     ] {
-        if let Some(v) = map.get(key).and_then(Value::as_f64) {
-            return Some(if v <= 1.0 { v * 100.0 } else { v });
-        }
+        let Some(v) = map.get(key).and_then(Value::as_f64) else {
+            continue;
+        };
+        // Chutes usage/quota payloads (GET /users/me/subscription_usage, and
+        // whatever `collect_windows` recurses into) carry whole percent values
+        // in 0..=100 — no documented field is a 0..=1 fraction. Rescaling
+        // 0..=1 as fractions turned a real 1% into a false 100% exhausted
+        // state (#408; same class as #247 / upstream #3216, fixed for
+        // opencodego in #407).
+        return Some(v.clamp(0.0, 100.0));
     }
     let used = first_f64(map, &["used", "usage", "current_usage", "currentUsage"]);
     let limit = first_f64(

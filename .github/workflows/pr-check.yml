@@ -50,23 +50,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
 
-      - name: Install frontend deps
-        run: pnpm --dir apps/desktop-tauri install --frozen-lockfile
-
-      - name: Rust format check
-        run: cargo fmt --all --check
-
-      - name: Rust clippy (workspace)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Rust tests (workspace)
-        run: cargo test --workspace
-
-      - name: Frontend tests
-        run: pnpm --dir apps/desktop-tauri test
-
-      - name: Frontend type check / build
-        run: pnpm --dir apps/desktop-tauri run build
-
-      - name: Interaction guard script tests
-        run: node --test .github/scripts/interaction-guard.test.mjs
+      # Canonical check source of truth: the same slice the CircleCI
+      # pr-check job runs (fmt/clippy/test, frontend install/test/build,
+      # interaction-guard script tests). No duplicated inline steps here.
+      - name: Run local-check ci slice
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/local-check.ps1 -Slice ci

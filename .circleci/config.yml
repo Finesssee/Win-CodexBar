@@ -1,5 +1,6 @@
 version: 2.1
 
+
 orbs:
   win: circleci/windows@5.0
 
@@ -125,86 +126,23 @@ jobs:
       size: medium
     environment:
       CARGO_TERM_COLOR: always
+      # Stable relative target dir so the target cache below is portable and
+      # every cargo invocation in local-check.ps1 shares one cache.
+      CARGO_TARGET_DIR: target
     steps:
       - checkout
       - run:
-          name: Budget and trigger gates
+          name: Budget, trigger, and docs-only gates
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           command: |
             $ErrorActionPreference = 'Stop'
-            # Gate 1 - budget: CI_BUDGET_MODE=off is the emergency stop (unset/empty = normal).
-            if ($env:CI_BUDGET_MODE -eq 'off') {
-              Write-Host 'CI_BUDGET_MODE is off: hosted pr-check skips (emergency stop).'
-              & circleci-agent step halt
-              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
-              exit 0
-            }
-            Write-Host "CI_BUDGET_MODE is '$($env:CI_BUDGET_MODE)': hosted pr-check passes budget gate."
-            # Gate 2 - branch/PR scope: the GitHub workflow fires on PRs plus pushes to
-            # main/master only. GitHub App pipelines expose PR association via the
-            # compile-time pipeline value pipeline.event.context.github.pr_url (docs:
-            # "matches environment variable CIRCLE_PULL_REQUEST"); the legacy
-            # CIRCLE_PULL_REQUEST*/CIRCLE_PR_NUMBER env vars are OAuth-integration
-            # variables and are not populated on GitHub App pipelines. On push
-            # pipelines the PR values interpolate to empty strings, so the step
-            # compiles and runs for push, PR, and api triggers alike.
-            $prUrl = '<< pipeline.event.context.github.pr_url >>'
-            $isPr = -not [string]::IsNullOrWhiteSpace($prUrl)
-            $isMainPush = $env:CIRCLE_BRANCH -in @('main', 'master')
-            if (-not $isPr -and -not $isMainPush) {
-              Write-Host "Branch push to '$($env:CIRCLE_BRANCH)' (not a PR, not main/master): hosted pr-check skips."
-              & circleci-agent step halt
-              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
-              exit 0
-            }
-            Write-Host "Trigger gate passed (PR: $isPr, branch: $($env:CIRCLE_BRANCH)): hosted pr-check passes scope gate."
-            # Gate 3 - docs-only: mirror paths-ignore (docs/**, **/*.md, CONTEXT.md,
-            # .github/CI.md). Skip only when every changed file matches an ignored
-            # path; when the base cannot be determined, run the checks (fail open).
-            # PR pipelines carry the base SHA directly via the compile-time value
-            # pipeline.event.github.pull_request.base.sha (docs: "The SHA of the base
-            # branch of the pull request... Only populated for pull request events");
-            # it interpolates to an empty string on push pipelines.
-            $base = '<< pipeline.event.github.pull_request.base.sha >>'
-            if ([string]::IsNullOrWhiteSpace($base) -and $isPr) {
-              # PR association without a populated event value (e.g. api trigger):
-              # resolve the base from the public GitHub pulls API.
-              $prNumber = ''
-              if ($prUrl -match '/pull/(\d+)') { $prNumber = $Matches[1] }
-              try {
-                if ([string]::IsNullOrWhiteSpace($prNumber)) { throw 'PR number not available from pipeline values.' }
-                $repo = "$($env:CIRCLE_PROJECT_USERNAME)/$($env:CIRCLE_PROJECT_REPONAME)"
-                if ([string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_USERNAME) -or [string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_REPONAME)) { throw 'CIRCLE_PROJECT_USERNAME/REPONAME unavailable for pulls API fallback.' }
-                $pr = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/pulls/$prNumber" -Headers @{ 'User-Agent' = 'codexbar-pr-check' }
-                $baseSha = [string]$pr.base.sha
-                if ([string]::IsNullOrWhiteSpace($baseSha)) { throw 'pulls API returned no base.sha.' }
-                & git fetch origin $baseSha --depth=1
-                if ($LASTEXITCODE -ne 0) { throw "git fetch base.sha exited with code $LASTEXITCODE" }
-                $base = $baseSha
-                Write-Host "Docs gate base resolved from GitHub pulls API: $baseSha"
-              } catch {
-                Write-Host "Docs gate base resolution failed ($($_.Exception.Message)): running full checks (fail open)."
-                $base = ''
-              }
-            } elseif ([string]::IsNullOrWhiteSpace($base) -and $isMainPush) {
-              & git rev-parse --verify --quiet 'HEAD^' *> $null
-              if ($LASTEXITCODE -eq 0) { $base = 'HEAD^' } else { Write-Host 'No parent commit on main push: running full checks (fail open).' }
-            }
-            if ([string]::IsNullOrWhiteSpace($base)) { exit 0 }  # fail open: gate step ends, job continues
-            $changed = & git diff --name-only "$base..$env:CIRCLE_SHA1"  # two-dot tree diff: base fetched at depth 1 may lack a merge base for three-dot
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host 'git diff against base failed: cannot evaluate docs-only gate; running full checks (fail open).'
-              exit 0
-            }
-            $ignoredPattern = '^(docs/.*)|(.*\.md)$'
-            $codeFiles = @($changed | Where-Object { $_ -and ($_ -notmatch $ignoredPattern) -and ($_ -ne 'CONTEXT.md') -and ($_ -ne '.github/CI.md') })
-            if ($codeFiles.Count -eq 0) {
-              Write-Host "All $($changed.Count) changed files match paths-ignore (docs/**, **/*.md, CONTEXT.md, .github/CI.md): hosted pr-check skips."
-              & circleci-agent step halt
-              if ($LASTEXITCODE -ne 0) { throw "circleci-agent step halt exited with code $LASTEXITCODE" }
-              exit 0
-            }
-            Write-Host "$($codeFiles.Count) code file(s) changed: hosted pr-check passes docs gate."
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-pr-gates.ps1') `
+              -BudgetMode $env:CI_BUDGET_MODE `
+              -Branch $env:CIRCLE_BRANCH `
+              -PrUrl '<< pipeline.event.context.github.pr_url >>' `
+              -PrBaseSha '<< pipeline.event.github.pull_request.base.sha >>' `
+              -Sha $env:CIRCLE_SHA1
+            if ($LASTEXITCODE -ne 0) { throw "circleci-pr-gates.ps1 failed with exit code $LASTEXITCODE" }
       - restore_cache:
           name: Restore Cargo registry and git cache
           keys:
@@ -215,79 +153,23 @@ jobs:
           keys:
             - pr-check-pnpm-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}
             - pr-check-pnpm-
+      - restore_cache:
+          name: Restore Cargo target cache (exact or older same-Rust fallback)
+          keys:
+            - pr-check-target-v1-{{ checksum "scripts/circleci-pinned-rust.txt" }}-{{ checksum "Cargo.lock" }}-{{ checksum "Cargo.toml" }}-{{ checksum "rust/Cargo.toml" }}-{{ checksum "apps/desktop-tauri/src-tauri/Cargo.toml" }}
+            - pr-check-target-v1-{{ checksum "scripts/circleci-pinned-rust.txt" }}-{{ checksum "Cargo.lock" }}-
       - run:
-          name: Provision toolchain and run local-check ci slice
+          name: Provision pinned toolchain and run local-check ci slice
           shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
           no_output_timeout: 60m
           command: |
             $ErrorActionPreference = 'Stop'
-            # Rust stable with rustfmt, clippy, and the MSVC target.
-            if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
-              Write-Host 'rustup is unavailable on the image; installing via rustup-init.exe (winget is not on the hosted image).'
-              $rustupInit = Join-Path $env:TEMP 'rustup-init.exe'
-              & curl.exe -sSfL -o $rustupInit https://win.rustup.rs/x86_64
-              if ($LASTEXITCODE -ne 0) { throw "downloading rustup-init.exe exited with code $LASTEXITCODE" }
-              & $rustupInit -y --default-toolchain none --profile minimal
-              if ($LASTEXITCODE -ne 0) { throw "rustup-init exited with code $LASTEXITCODE" }
-              $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-              $env:Path = "$cargoBin;$env:Path"
-            }
-            & rustup toolchain install stable --profile default -c rustfmt,clippy -t x86_64-pc-windows-msvc
-            if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install exited with code $LASTEXITCODE" }
-            & rustup default stable
-            if ($LASTEXITCODE -ne 0) { throw "rustup default exited with code $LASTEXITCODE" }
-            Write-Host "[ok] rustup default stable (rustc $((& rustc --version)))"
-            # Node exact major 24 (GH workflow baseline) with pnpm from the
-            # packageManager pin.
-            $env:Path = "C:\Program Files\nodejs;$env:Path"
-            $requiredNodeMajor = 24
-            $nodeFallbackVersion = '24.18.0'
-            $nodeVersion = $null
-            if (Get-Command node -ErrorAction SilentlyContinue) { $nodeVersion = (& node --version).Trim() }
-            $nodeMajor = 0
-            if ($nodeVersion -match '^v(\d+)\.') { $nodeMajor = [int]$Matches[1] }
-            if ($nodeMajor -ne $requiredNodeMajor) {
-              $found = if ($nodeVersion) { $nodeVersion } else { 'none' }
-              Write-Host "Node $requiredNodeMajor.x is required (image has $found); installing Node $nodeFallbackVersion via official MSI (winget is not on the hosted image)."
-              $nodeMsi = Join-Path $env:TEMP "node-v$nodeFallbackVersion-x64.msi"
-              & curl.exe -sSfL -o $nodeMsi "https://nodejs.org/dist/v$nodeFallbackVersion/node-v$nodeFallbackVersion-x64.msi"
-              if ($LASTEXITCODE -ne 0) { throw "downloading Node MSI exited with code $LASTEXITCODE" }
-              # The image's own Node may occupy C:\Program Files\nodejs and a
-              # same-product MSI upgrade can silently no-op; install into a
-              # dedicated per-version directory and put it first on PATH.
-              $nodeDir = "C:\node-v$nodeFallbackVersion"
-              $msiArgs = @('/i', $nodeMsi, '/qn', '/norestart', "INSTALLDIR=$nodeDir")
-              $proc = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
-              if ($proc.ExitCode -ne 0) { throw "msiexec install exited with code $($proc.ExitCode)" }
-              $nodeExe = Join-Path $nodeDir 'node.exe'
-              if (-not (Test-Path $nodeExe)) { throw 'node.exe is still unavailable after MSI provisioning.' }
-              $nodeVersion = (& $nodeExe --version).Trim()
-              $nodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
-              if ($nodeMajor -ne $requiredNodeMajor) { throw "Node $nodeVersion is installed; required major $requiredNodeMajor." }
-              $env:Path = "$nodeDir;$env:Path"
-            }
-            Write-Host "[ok] Node $nodeVersion"
-            $pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\ci-toolchain\pnpm'
-            New-Item -ItemType Directory -Force -Path $pnpmShimDir | Out-Null
-            & corepack enable --install-directory $pnpmShimDir
-            if ($LASTEXITCODE -ne 0) { throw "corepack enable exited with code $LASTEXITCODE" }
-            # packageManager in apps/desktop-tauri/package.json is the source of
-            # truth for the pnpm version (no hardcoded drift).
-            $packageManager = [string]((Get-Content -Raw -LiteralPath 'apps/desktop-tauri/package.json' | ConvertFrom-Json).packageManager)
-            if ($packageManager -notmatch '^pnpm@(.+)$') { throw "packageManager '$packageManager' does not match ^pnpm@<version>." }
-            $expectedPnpm = $Matches[1]
-            & corepack prepare $packageManager --activate
-            if ($LASTEXITCODE -ne 0) { throw "corepack prepare $packageManager --activate exited with code $LASTEXITCODE" }
-            $env:Path = "$pnpmShimDir;$env:Path"
-            $pnpmVersion = (& pnpm --version).Trim()
-            if ($pnpmVersion -ne $expectedPnpm) { throw "pnpm $pnpmVersion is active; expected exact $expectedPnpm (packageManager $packageManager)." }
-            Write-Host "[ok] pnpm $pnpmVersion"
-            # Delegate the check slice to the local-check script (fmt/clippy/test,
-            # frontend install/test/build, interaction-guard tests) with the PATH
-            # prefix set once.
-            $env:Path = "$env:USERPROFILE\.cargo\bin;$nodeDir;C:\Program Files\nodejs;$pnpmShimDir;$env:Path"
-            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\local-check.ps1') -Slice ci
-            if ($LASTEXITCODE -ne 0) { throw "local-check.ps1 -Slice ci failed with exit code $LASTEXITCODE" }
+            $pinnedRust = (Get-Content -Raw -LiteralPath 'scripts\circleci-pinned-rust.txt').Trim()
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\run-circleci-pr-check.ps1') `
+              -RustVersion $pinnedRust `
+              -NodeVersion '24.18.0' `
+              -NodeMajor 24
+            if ($LASTEXITCODE -ne 0) { throw "run-circleci-pr-check.ps1 failed with exit code $LASTEXITCODE" }
       - save_cache:
           name: Save Cargo registry and git cache
           key: pr-check-cargo-{{ checksum "Cargo.lock" }}
@@ -299,6 +181,12 @@ jobs:
           key: pr-check-pnpm-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}
           paths:
             - ~/AppData/Local/pnpm/store
+      - save_cache:
+          name: Save Cargo target cache
+          key: pr-check-target-v1-{{ checksum "scripts/circleci-pinned-rust.txt" }}-{{ checksum "Cargo.lock" }}-{{ checksum "Cargo.toml" }}-{{ checksum "rust/Cargo.toml" }}-{{ checksum "apps/desktop-tauri/src-tauri/Cargo.toml" }}
+          paths:
+            - target
+
 
 workflows:
   release:

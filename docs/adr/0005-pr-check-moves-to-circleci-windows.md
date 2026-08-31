@@ -20,22 +20,39 @@ Move the hosted PR/push gate to CircleCI as a new `pr-check` job in
 `.circleci/config.yml` (workflow `pr-check`):
 
 - `win/default` executor, `size: medium`. The check steps are not re-declared
-  in the config: one fused step provisions the toolchain, then delegates the
-  whole check to `scripts/local-check.ps1 -Slice ci`, a new opt-in slice that
-  mirrors `.github/workflows/pr-check.yml` step for step (`cargo fmt --all
-  --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo
-  test --workspace`, `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm run
+  in the config: the provisioning and gate logic is extracted into scripts
+  that the config calls, and the whole check delegates to
+  `scripts/local-check.ps1 -Slice ci`, an opt-in slice that mirrors
+  `.github/workflows/pr-check.yml` step for step (`cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+  --workspace`, `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm run
   build`, plus the interaction-guard script tests). The script's default
   (no-parameter) local behavior is unchanged.
-- Rust stable is installed by downloading `rustup-init.exe` directly from
-  `https://win.rustup.rs/x86_64` (the hosted image has no winget) and then
-  installing the stable toolchain with the `rustfmt`/`clippy` components and
-  the `x86_64-pc-windows-msvc` target; Node 24.18.0 is installed from the
-  official x64 MSI (`msiexec /qn /norestart` with a dedicated per-version
-  `INSTALLDIR`, because the image's preinstalled Node is a different major and
-  a same-product MSI upgrade silently no-ops); pnpm 11.24.0 is activated by
-  corepack from the exact `packageManager` pin in
-  `apps/desktop-tauri/package.json`.
+  - `scripts/circleci-pr-gates.ps1` owns the three skip decisions that used
+    to live inline in the config (budget `off`, non-PR/non-main branch
+    pushes, docs-only PR diffs); each true skip calls `circleci-agent step
+    halt`.
+  - `scripts/run-circleci-pr-check.ps1` owns toolchain provisioning with
+    official checksum verification: `rustup-init.exe` is downloaded from
+    static.rust-lang.org and verified against the official adjacent
+    `.sha256` file; the Node 24.18.0 x64 MSI is verified against the
+    official `SHASUMS256.txt` entry before `msiexec` runs (into a dedicated
+    per-version `INSTALLDIR`, because a same-product MSI upgrade silently
+    no-ops); pnpm is activated by corepack from the exact `packageManager`
+    pin in `apps/desktop-tauri/package.json`.
+  - Pure checksum/gate logic lives in `scripts/circleci-pr-common.ps1` and
+    is exercised offline by `scripts/circleci-pr.tests.ps1`.
+  - The pinned Rust version is read from
+    `scripts/circleci-pinned-rust.txt`; the Cargo target cache keys embed
+    `{{ checksum "scripts/circleci-pinned-rust.txt" }}` so a Rust pin bump
+    invalidates the target cache (no pipeline parameter, no config edit).
+  - The config depends on compile-time GitHub App PR pipeline values:
+    `pipeline.event.context.github.pr_url` and
+    `pipeline.event.github.pull_request.base.sha` (populated only on pull
+    request events; empty on push pipelines). They come from CircleCI's
+    GitHub App integration, so fork-PR pipelines are never built and a
+    manual same-repo branch fallback is needed for external contributors'
+    changes.
 - Trigger: the workflow filter stays wide (`branches: only: /.*/`) because
   CircleCI delivers same-repo PR builds as branch pipelines; parity with the
   GitHub workflow (PRs plus pushes to `main`/`master`, `paths-ignore` for
@@ -68,6 +85,10 @@ GitHub Actions workflow and is unaffected.
 
 ## Consequences
 
+- Auto-cancel of superseded pushes is a CircleCI **project setting**
+  ("Auto-cancel redundant workflows", Project Settings → Advanced), keyed by
+  branch the same way the GitHub workflow's `concurrency` group was; the
+  `pr-check` job carries no `concurrency` YAML.
 - Hosted PR feedback continues on the real Windows target with no Blacksmith
   dependency.
 - `CI_BUDGET_MODE` must now be set in two places to control both surfaces:

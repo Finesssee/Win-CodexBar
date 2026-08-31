@@ -33,8 +33,9 @@ pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
 ```
 
-`concurrency.cancel-in-progress` is on, keyed by ref, so superseded pushes
-cancel the in-flight run.
+Auto-cancel of superseded pushes is a CircleCI **project setting** ("Auto-cancel
+redundant workflows", Project Settings → Advanced), not GitHub `concurrency`
+YAML — the CircleCI job has none.
 
 ### Interaction guard — `.github/workflows/interaction-guard.yml`
 
@@ -58,9 +59,10 @@ Variables**. Do not hard-code it in a workflow.
 | thin   | runs              | tag-triggered  |
 | off    | skip              | tag-triggered  |
 
-The Blacksmith Pool minutes intent remains roughly **60% Win-CodexBar**,
-**30% linear-cli**, and **10% buffer**. CircleCI credits are separate and
-must be budgeted in CircleCI.
+The Blacksmith Pool minutes intent was roughly **60% Win-CodexBar**,
+**30% linear-cli**, and **10% buffer**; that allocation is historical for this
+repo — Win-CodexBar no longer draws on the pool. CircleCI credits are separate
+and must be budgeted in CircleCI.
 
 ## CircleCI release pipeline
 
@@ -104,7 +106,8 @@ automated by this repository:
    permission; no workflow file is changed by the publisher.
 4. Protect the `v*` tag namespace with a GitHub ruleset/tag protection policy
    that permits only authorized release maintainers to create canonical
-   `vX.Y.Z` tags. Protect `main` and require the normal Blacksmith checks.
+   `vX.Y.Z` tags. Protect `main` and require the `ci/circleci: pr-check`
+   status check.
 5. Configure CircleCI notifications and a spending/credit alert appropriate to
    the organization. Do not approve a release until the build artifacts and
    manifest have been reviewed.

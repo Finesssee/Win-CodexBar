@@ -19,15 +19,17 @@ manual-dispatch-only fallback (`on: workflow_dispatch` only; no automatic
 push/PR scheduling) kept for Blacksmith diagnostics.
 
 **Fork-PR coverage note:** CircleCI does not build pull requests from forks
-by default (unlike GitHub Actions). External fork PRs are therefore **not
-covered** by the CircleCI gate until the project enables fork PR builds in
-Project Settings → Advanced. When enabled, CircleCI still withholds project
-environment variables from forked-PR builds by default (so `CI_BUDGET_MODE`
-arrives unset → `normal` → checks run), which is the same withholding the
-`CI_BUDGET_MODE` note in `CONTEXT.md` relies on. The tradeoff: leaving fork
-builds disabled keeps the OSS credit spend bounded but means external
-contributors get no hosted Windows validation; enabling it restores coverage
-at the cost of those credits.
+by default (unlike GitHub Actions). The GitHub App integration does not build
+fork-PR pipelines, and there is no Advanced setting that can enable them;
+external fork PRs are therefore **not covered** by the CircleCI gate. The
+manual fallback for forks is needed: an external contributor's changes must
+be pulled onto a same-repo branch (or the fork changes committed to a
+maintainer branch) so a CircleCI branch pipeline runs the checks. When those
+pipelines run, CircleCI withholds project environment variables from
+untrusted builds by default (so `CI_BUDGET_MODE` arrives unset → `normal` →
+checks run), which is the same withholding the `CI_BUDGET_MODE` note in
+`CONTEXT.md` relies on. Tradeoff: bounded OSS credit spend, but external
+contributors get no direct hosted Windows validation of their own PRs.
 
 The `release` workflow remains filtered to the canonical
 `nesszer/Win-CodexBar` project and exact protected tags `vX.Y.Z`; branch and
@@ -117,8 +119,9 @@ credits recur on PRs and `main`/`master` pushes (other branch pushes and
 docs-only diffs skip before spending), alongside the protected release tag
 path. The repository is public, so the PR check spends the Free Plan
 open-source allowance (open-source builds are not subject to the Free Plan's
-30,000-credit personal block). Fork PRs are not covered until fork builds are
-enabled (see the fork-PR coverage note above). Blacksmith is retired for
+30,000-credit personal block). Fork PRs remain uncovered — the GitHub App does
+not build fork-PR pipelines and a manual same-repo branch fallback is needed
+(see the fork-PR coverage note above). Blacksmith is retired for
 this repo and no longer bills recurring PR cost. Windows executor rates
 depend on the CircleCI plan, so set an organization credit alert before
 enabling the PR check or releases.

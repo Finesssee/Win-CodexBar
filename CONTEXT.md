@@ -80,12 +80,14 @@ program also documents a monthly allowance for macOS/Windows OSS builds, so
 budget the thin slice's Windows credits on the CircleCI plan, not the retired
 Blacksmith intent share.
 
+The required branch/PR status check for `main` is `ci/circleci: pr-check`
+(the CircleCI `pr-check` job), not a Blacksmith check.
+
 ## Intent share (60/30/10)
 
-The Blacksmith Pool minutes intent is divided: roughly **60% Win-CodexBar**,
-**30% linear-cli**, and **10% buffer**. This is an intent allocation of the
-pool's minutes, not a measure of time spent in `normal`/`thin`/`off` modes.
-Win-CodexBar's hosted PR check is now a single CircleCI Windows job (the
+The Blacksmith Pool minutes intent was divided roughly **60% Win-CodexBar**,
+**30% linear-cli**, and **10% buffer**. That allocation is historical for this
+repo: Win-CodexBar's hosted PR check is now a single CircleCI Windows job (the
 Blacksmith runner is retired for this repo), so this repo no longer draws on
 the pool; release builds stay local.
 

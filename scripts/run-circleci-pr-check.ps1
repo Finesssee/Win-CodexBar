@@ -83,13 +83,16 @@ try {
     # The image's own Node may occupy C:\Program Files\nodejs, so probe with
     # that prefix first and keep it on PATH for every branch below.
     $env:Path = "C:\Program Files\nodejs;$env:Path"
+    # NOTE: these locals are case-insensitively distinct from the $NodeVersion
+    # parameter; never reuse $nodeVersion here or it clobbers the pinned
+    # version before the MSI URL is built (dist/vv<image>/... -> 404).
     $nodeDir = ''
-    $nodeVersion = $null
-    if (Get-Command node -ErrorAction SilentlyContinue) { $nodeVersion = (& node --version).Trim() }
+    $imageNodeVersion = $null
+    if (Get-Command node -ErrorAction SilentlyContinue) { $imageNodeVersion = (& node --version).Trim() }
     $activeNodeMajor = 0
-    if ($nodeVersion -match '^v(\d+)\.') { $activeNodeMajor = [int]$Matches[1] }
+    if ($imageNodeVersion -match '^v(\d+)\.') { $activeNodeMajor = [int]$Matches[1] }
     if ($activeNodeMajor -ne $NodeMajor) {
-        $found = if ($nodeVersion) { $nodeVersion } else { 'none' }
+        $found = if ($imageNodeVersion) { $imageNodeVersion } else { 'none' }
         Write-Host "Node $NodeMajor.x is required (image has $found); installing Node $NodeVersion via the official MSI (winget is not on the hosted image)."
         $msiName = "node-v$NodeVersion-x64.msi"
         $nodeMsi = Join-Path $env:TEMP $msiName
@@ -110,12 +113,12 @@ try {
         if ($proc.ExitCode -ne 0) { throw "msiexec install exited with code $($proc.ExitCode)" }
         $nodeExe = Join-Path $nodeDir 'node.exe'
         if (-not (Test-Path $nodeExe)) { throw 'node.exe is still unavailable after MSI provisioning.' }
-        $nodeVersion = (& $nodeExe --version).Trim()
-        $activeNodeMajor = [int]($nodeVersion -replace '^v(\d+)\..*$', '$1')
-        if ($activeNodeMajor -ne $NodeMajor) { throw "Node $nodeVersion is installed; required major $NodeMajor." }
+        $installedNodeVersion = (& $nodeExe --version).Trim()
+        $activeNodeMajor = [int]($installedNodeVersion -replace '^v(\d+)\..*$', '$1')
+        if ($activeNodeMajor -ne $NodeMajor) { throw "Node $installedNodeVersion is installed; required major $NodeMajor." }
     }
     $env:Path = "$(if ($nodeDir) { "$nodeDir;" })$env:Path"
-    Write-Host "[ok] Node $nodeVersion"
+    Write-Host "[ok] Node $installedNodeVersion"
 
     # --- pnpm ---------------------------------------------------------------
     $pnpmShimDir = Join-Path $env:LOCALAPPDATA 'CodexBar\ci-toolchain\pnpm'

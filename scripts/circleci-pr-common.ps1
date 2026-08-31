@@ -19,7 +19,7 @@ function Test-DocsOnlyDiff {
     param([AllowEmptyCollection()][string[]]$ChangedFiles)
 
     $codeFiles = @(
-        $ChangedFiles | Where-Object { $_ -and ($_ -notmatch '^(docs/.*)|(.*\.md)$') }
+        $ChangedFiles | Where-Object { $_ -and ($_ -notmatch '^(docs/.*|.*\.md)$') }
     )
     return ($codeFiles.Count -eq 0)
 }

@@ -13,14 +13,15 @@ use crate::core::{
 
 const CROF_USAGE_URL: &str = "https://crof.ai/usage_api/";
 const CROF_CREDENTIAL_TARGET: &str = "codexbar-crof";
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
 #[derive(Debug, Deserialize)]
 struct CrofUsageResponse {
     credits: f64,
-    #[serde(rename = "requests_plan")]
-    requests_plan: f64,
-    #[serde(rename = "usable_requests")]
-    usable_requests: f64,
+    #[serde(default, rename = "requests_plan")]
+    requests_plan: Option<f64>,
+    #[serde(default, rename = "usable_requests")]
+    usable_requests: Option<f64>,
 }
 
 pub struct CrofProvider {
@@ -34,8 +35,8 @@ impl CrofProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Crof,
                 display_name: "Crof",
-                session_label: "Requests",
-                weekly_label: "Credits",
+                session_label: "Balance",
+                weekly_label: "Requests",
                 supports_opus: false,
                 supports_credits: true,
                 default_enabled: false,
@@ -51,7 +52,7 @@ impl CrofProvider {
     }
 
     fn api_key(api_key: Option<&str>) -> Result<String, ProviderError> {
-        super_key(api_key, CROF_CREDENTIAL_TARGET, &["CROF_API_KEY"])
+        super_key(api_key, CROF_CREDENTIAL_TARGET, &["CROF_API_KEY", "CROFAI_API_KEY"])
     }
 
     async fn fetch_api(&self, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
@@ -60,49 +61,63 @@ impl CrofProvider {
             .get(CROF_USAGE_URL)
             .bearer_auth(api_key)
             .header("Accept", "application/json")
+            .header("User-Agent", BROWSER_USER_AGENT)
             .send()
             .await?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::FORBIDDEN
-        {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(ProviderError::AuthRequired);
         }
-        if !response.status().is_success() {
+        if status == reqwest::StatusCode::FORBIDDEN {
+            if body.contains("cloudflare") || body.contains("Error 1010") {
+                return Err(ProviderError::Other(
+                    "Crof usage API blocked by Cloudflare (1010). Retry from the desktop app.".into(),
+                ));
+            }
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
             return Err(ProviderError::Other(format!(
-                "Crof API returned status {}",
-                response.status()
+                "Crof API returned status {status}"
             )));
         }
 
-        let usage: CrofUsageResponse = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse Crof usage: {e}")))?;
+        let usage: CrofUsageResponse = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::Parse(format!("Failed to parse Crof usage: {e}"))
+        })?;
         Ok(snapshot_from_usage(&usage))
     }
 }
 
 fn snapshot_from_usage(usage: &CrofUsageResponse) -> UsageSnapshot {
-    let used = (usage.requests_plan - usage.usable_requests).max(0.0);
-    let used_percent = if usage.requests_plan > 0.0 {
-        used / usage.requests_plan * 100.0
+    let credits = usage.credits.max(0.0);
+    let display = if credits <= 0.0 {
+        "$0.00".to_string()
+    } else if credits >= 0.01 {
+        format!("${:.2}", (credits * 100.0).floor() / 100.0)
     } else {
-        0.0
+        format!("${credits:.4}")
     };
+    let mut primary = RateWindow::new(if credits > 0.0 { 0.0 } else { 100.0 });
+    primary.reset_description = Some(display.clone());
 
-    let mut primary = RateWindow::new(used_percent);
-    primary.reset_description = Some(format!(
-        "{:.0}/{:.0} requests used",
-        used, usage.requests_plan
-    ));
+    let mut snapshot = UsageSnapshot::new(primary).with_login_method(format!("{display} balance"));
 
-    let mut secondary = RateWindow::new(0.0);
-    secondary.reset_description = Some(format!("{:.2} credits remaining", usage.credits));
+    if let (Some(plan), Some(usable)) = (usage.requests_plan, usage.usable_requests) {
+        let remaining = usable.max(0.0).min(plan.max(0.0));
+        let remaining_percent = if plan > 0.0 {
+            ((remaining / plan) * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        let mut requests = RateWindow::new(100.0 - remaining_percent);
+        requests.reset_description = Some(format!("{remaining:.0} requests left"));
+        snapshot = snapshot.with_secondary(requests);
+    }
 
-    UsageSnapshot::new(primary)
-        .with_secondary(secondary)
-        .with_login_method(format!("{:.2} credits", usage.credits))
+    snapshot
 }
 
 impl Default for CrofProvider {
@@ -178,13 +193,52 @@ mod tests {
     fn crof_snapshot_formats_request_and_credit_windows() {
         let snapshot = snapshot_from_usage(&CrofUsageResponse {
             credits: 12.5,
-            requests_plan: 100.0,
-            usable_requests: 25.0,
+            requests_plan: Some(100.0),
+            usable_requests: Some(25.0),
         });
-        assert_eq!(snapshot.primary.used_percent, 75.0);
+        assert_eq!(snapshot.primary.used_percent, 0.0);
         assert_eq!(
-            snapshot.secondary.unwrap().reset_description.unwrap(),
-            "12.50 credits remaining"
+            snapshot.primary.reset_description.as_deref(),
+            Some("$12.50")
         );
+        assert_eq!(snapshot.secondary.unwrap().used_percent, 75.0);
+    }
+
+    #[test]
+    fn crof_payg_balance_only_does_not_require_request_quota() {
+        let snapshot = snapshot_from_usage(&CrofUsageResponse {
+            credits: 3.019,
+            requests_plan: None,
+            usable_requests: None,
+        });
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+        assert_eq!(snapshot.primary.reset_description.as_deref(), Some("$3.01"));
+        assert!(snapshot.secondary.is_none());
+        assert_eq!(snapshot.login_method.as_deref(), Some("$3.01 balance"));
+    }
+
+    #[test]
+    fn crof_sub_cent_balance_is_not_exhausted() {
+        let snapshot = snapshot_from_usage(&CrofUsageResponse {
+            credits: 0.0073,
+            requests_plan: None,
+            usable_requests: None,
+        });
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("$0.0073")
+        );
+    }
+
+    #[test]
+    fn crof_zero_balance_is_exhausted() {
+        let snapshot = snapshot_from_usage(&CrofUsageResponse {
+            credits: 0.0,
+            requests_plan: None,
+            usable_requests: None,
+        });
+        assert_eq!(snapshot.primary.used_percent, 100.0);
+        assert_eq!(snapshot.primary.reset_description.as_deref(), Some("$0.00"));
     }
 }

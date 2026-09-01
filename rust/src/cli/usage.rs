@@ -1,5 +1,6 @@
 //! Usage command implementation
 
+use chrono::Utc;
 use clap::Args;
 use serde::Serialize;
 
@@ -480,7 +481,7 @@ pub fn render_text_with_status(
     lines.push(render_usage_header(provider, result, status, use_color));
     append_status_line(&mut lines, status);
     append_account_lines(&mut lines, &result.usage);
-    append_usage_window_lines(&mut lines, &result.usage, &metadata, use_color);
+    append_usage_window_lines(&mut lines, provider, &result.usage, &metadata, use_color);
     append_cost_line(&mut lines, result.cost.as_ref());
 
     lines.join("\n")
@@ -550,15 +551,29 @@ fn append_account_lines(lines: &mut Vec<String>, usage: &UsageSnapshot) {
 
 fn append_usage_window_lines(
     lines: &mut Vec<String>,
+    provider: ProviderId,
     usage: &UsageSnapshot,
     metadata: &crate::core::ProviderMetadata,
     use_color: bool,
 ) {
-    append_window_line(lines, metadata.session_label, &usage.primary, use_color);
+    let primary_label = if provider == ProviderId::Grok {
+        crate::providers::grok::display_label(&usage.primary, Utc::now())
+            .unwrap_or(metadata.session_label)
+    } else {
+        metadata.session_label
+    };
+    append_window_line(lines, primary_label, &usage.primary, use_color);
     // Upstream 0.50.1 #2957: pace for the 5-hour session window.
-    if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES)
-        && let Some(pace) =
-            UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
+    let pace_minutes = usage
+        .primary
+        .window_minutes
+        .filter(|minutes| {
+            *minutes == crate::core::SESSION_WINDOW_MINUTES
+                || *minutes == crate::core::WEEKLY_WINDOW_MINUTES
+                || *minutes >= crate::core::MONTHLY_WINDOW_MINUTES
+        });
+    if let Some(minutes) = pace_minutes
+        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes)
     {
         lines.push(format!(
             "  Pace:    {} {}",

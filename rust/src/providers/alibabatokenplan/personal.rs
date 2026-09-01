@@ -542,4 +542,43 @@ mod tests {
         );
         assert_eq!(usage_snap.login_method.as_deref(), Some("Pro"));
     }
+
+    #[test]
+    fn weekly_only_personal_payload_promotes_weekly_window() {
+        let usage = serde_json::json!({
+            "code": "200",
+            "data": {
+                "DataV2": {
+                    "ret": [{}],
+                    "data": {
+                        "msg": "",
+                        "code": "SUCCESS",
+                        "data": {
+                            "per1WeekResetTime": 1788640320000_i64,
+                            "per1WeekPercentage": 0.4145182484706
+                        },
+                        "success": true
+                    }
+                },
+                "success": true,
+                "httpStatus": 200,
+                "errorCode": "",
+                "api": "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage",
+                "errorMsg": ""
+            },
+            "successResponse": true
+        });
+
+        let snapshot = parse_personal_usage(usage.to_string().as_bytes(), None, None).unwrap();
+        assert!(snapshot.five_hour_used_percent.is_none());
+        assert!((snapshot.weekly_used_percent.unwrap() - 41.45182484706).abs() < 1e-9);
+        assert!(snapshot.weekly_resets_at.is_some());
+
+        let usage_snap: UsageSnapshot =
+            AlibabaTokenPlanProvider::snapshot_to_usage(snapshot).unwrap();
+        assert!((usage_snap.primary.used_percent - 41.45182484706).abs() < 1e-9);
+        assert_eq!(usage_snap.primary.window_minutes, Some(10080));
+        assert!(usage_snap.secondary.is_none());
+        assert_eq!(usage_snap.login_method.as_deref(), Some("Personal"));
+    }
 }

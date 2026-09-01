@@ -33,7 +33,7 @@ impl GrokProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Grok,
                 display_name: "Grok",
-                session_label: "Monthly",
+                session_label: "Weekly",
                 weekly_label: "On-demand",
                 supports_opus: false,
                 supports_credits: false,
@@ -443,10 +443,17 @@ fn result_from_billing(
     team_id: Option<String>,
     login_method: Option<String>,
 ) -> ProviderFetchResult {
-    // Upstream #2431 / #2566: do not infer windowMinutes from time-until-reset.
-    // A monthly quota near its reset would otherwise be misclassified as weekly.
+    // grok.com SuperGrok quota is a 7-day rolling limit. Leaving window_minutes
+    // unset hid pace/budgets (UsagePace and getPaceBudget need a duration) and
+    // labeled the card Monthly. Do not infer cadence from time-until-reset.
+    const GROK_WEEKLY_MINUTES: u32 = 7 * 24 * 60;
     let primary = match billing.used_percent {
-        Some(used_percent) => RateWindow::with_details(used_percent, None, billing.resets_at, None),
+        Some(used_percent) => RateWindow::with_details(
+            used_percent,
+            Some(GROK_WEEKLY_MINUTES),
+            billing.resets_at,
+            None,
+        ),
         None => {
             let mut window = RateWindow::informational("Usage unavailable");
             window.resets_at = billing.resets_at;
@@ -794,8 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn billing_snapshot_leaves_window_minutes_unset() {
-        // A monthly quota with six days left must not be reported as weekly.
+    fn billing_snapshot_marks_supergrok_as_weekly() {
         let resets = Utc::now() + chrono::Duration::days(6);
         let result = result_from_billing(
             GrokBillingSnapshot {
@@ -807,9 +813,11 @@ mod tests {
             None,
             Some("SuperGrok".into()),
         );
-        assert_eq!(result.usage.primary.window_minutes, None);
+        assert_eq!(result.usage.primary.window_minutes, Some(7 * 24 * 60));
         assert_eq!(result.usage.primary.resets_at, Some(resets));
         assert_eq!(result.usage.login_method.as_deref(), Some("SuperGrok"));
+        let pace = crate::core::UsagePace::weekly(&result.usage.primary, None, 7 * 24 * 60);
+        assert!(pace.is_some(), "weekly window + reset must yield pace");
     }
 
     #[test]

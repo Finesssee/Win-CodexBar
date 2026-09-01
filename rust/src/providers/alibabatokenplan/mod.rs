@@ -319,18 +319,29 @@ impl AlibabaTokenPlanProvider {
                 ),
             )
         });
-        let primary = five_hour.or(legacy).ok_or_else(|| {
-            ProviderError::Parse("Alibaba Token Plan quota totals missing".into())
-        })?;
-        let mut usage = UsageSnapshot::new(primary);
-
-        if let Some(weekly_percent) = snapshot.weekly_used_percent {
-            usage = usage.with_secondary(RateWindow::with_details(
-                weekly_percent,
+        let weekly = snapshot.weekly_used_percent.map(|percent| {
+            RateWindow::with_details(
+                percent,
                 Some(WEEKLY_MINUTES),
                 snapshot.weekly_resets_at,
-                quota_detail_percent(weekly_percent, snapshot.weekly_total_quota),
-            ));
+                quota_detail_percent(percent, snapshot.weekly_total_quota),
+            )
+        });
+        // Prefer the 5-hour window, then the Team/legacy credit envelope. Personal/Solo
+        // payloads sometimes expose only `per1WeekPercentage`; promote that window to
+        // primary instead of failing the whole fetch.
+        let (primary, secondary) = match (five_hour.or(legacy), weekly) {
+            (Some(primary), secondary) => (primary, secondary),
+            (None, Some(weekly)) => (weekly, None),
+            (None, None) => {
+                return Err(ProviderError::Parse(
+                    "Alibaba Token Plan quota totals missing".into(),
+                ));
+            }
+        };
+        let mut usage = UsageSnapshot::new(primary);
+        if let Some(secondary) = secondary {
+            usage = usage.with_secondary(secondary);
         }
 
         if let Some(plan) = snapshot.plan_name.filter(|plan| !plan.trim().is_empty()) {

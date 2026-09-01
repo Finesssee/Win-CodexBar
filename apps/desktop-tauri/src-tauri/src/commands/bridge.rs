@@ -252,6 +252,19 @@ pub(crate) fn filter_hidden_codex_spark_rows(
     }
 }
 
+fn grok_aware_primary_label(
+    id: ProviderId,
+    metadata: &ProviderMetadata,
+    window: &RateWindow,
+) -> String {
+    if id == ProviderId::Grok {
+        if let Some(label) = codexbar::providers::grok::display_label(window, chrono::Utc::now()) {
+            return label.to_string();
+        }
+    }
+    metadata.session_label.to_string()
+}
+
 pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
     use codexbar::core::PaceStage;
     match stage {
@@ -326,7 +339,7 @@ impl ProviderUsageSnapshot {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
             primary: primary_snap,
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: Some(grok_aware_primary_label(id, metadata, &usage.primary)),
             secondary: secondary_snap,
             secondary_label: usage
                 .secondary

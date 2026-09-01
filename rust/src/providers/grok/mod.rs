@@ -33,7 +33,7 @@ impl GrokProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Grok,
                 display_name: "Grok",
-                session_label: "Monthly",
+                session_label: "Credits",
                 weekly_label: "On-demand",
                 supports_opus: false,
                 supports_credits: false,
@@ -436,6 +436,49 @@ struct GrokBillingSnapshot {
     resets_at: Option<DateTime<Utc>>,
 }
 
+/// Upstream `GrokProviderDescriptor.primaryLabel(duration:)`: round remaining
+/// time to days, then Weekly for 4...12 and Monthly for 20...45.
+pub fn primary_label_for_duration(seconds: f64) -> Option<&'static str> {
+    if seconds <= 3600.0 {
+        return None;
+    }
+    let days = (seconds / 86_400.0).round() as i64;
+    if (4..=12).contains(&days) {
+        Some("Weekly")
+    } else if (20..=45).contains(&days) {
+        Some("Monthly")
+    } else {
+        None
+    }
+}
+
+/// Upstream `displayLabel`: prefer an explicit duration/reset cycle, else keep
+/// Weekly near the end of an untyped credits window (#2929).
+pub fn display_label(window: &RateWindow, now: DateTime<Utc>) -> Option<&'static str> {
+    if let Some(minutes) = window.window_minutes {
+        return primary_label_for_duration(f64::from(minutes) * 60.0);
+    }
+    if let Some(resets_at) = window.resets_at {
+        if let Some(label) = primary_label_for_duration((resets_at - now).num_seconds() as f64) {
+            return Some(label);
+        }
+        return Some("Weekly");
+    }
+    None
+}
+
+fn grok_window_minutes(resets_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Option<u32> {
+    let resets_at = resets_at?;
+    match primary_label_for_duration((resets_at - now).num_seconds() as f64) {
+        Some("Weekly") => Some(crate::core::WEEKLY_WINDOW_MINUTES),
+        Some("Monthly") => {
+            RateWindow::monthly_window_minutes(Some(resets_at)).or(Some(crate::core::MONTHLY_WINDOW_MINUTES))
+        }
+        // Untyped reset (e.g. 2 days left in SuperGrok weekly): keep weekly so pace works.
+        _ => Some(crate::core::WEEKLY_WINDOW_MINUTES),
+    }
+}
+
 fn result_from_billing(
     billing: GrokBillingSnapshot,
     source_label: &str,
@@ -443,10 +486,33 @@ fn result_from_billing(
     team_id: Option<String>,
     login_method: Option<String>,
 ) -> ProviderFetchResult {
-    // Upstream #2431 / #2566: do not infer windowMinutes from time-until-reset.
-    // A monthly quota near its reset would otherwise be misclassified as weekly.
+    result_from_billing_at(
+        billing,
+        source_label,
+        email,
+        team_id,
+        login_method,
+        Utc::now(),
+    )
+}
+
+fn result_from_billing_at(
+    billing: GrokBillingSnapshot,
+    source_label: &str,
+    email: Option<String>,
+    team_id: Option<String>,
+    login_method: Option<String>,
+    now: DateTime<Utc>,
+) -> ProviderFetchResult {
+    // Upstream docs/grok.md: live bar is Credits; Weekly/Monthly come from whether
+    // resetsAt matches a common cycle. Win-CodexBar also needs window_minutes for pace.
     let primary = match billing.used_percent {
-        Some(used_percent) => RateWindow::with_details(used_percent, None, billing.resets_at, None),
+        Some(used_percent) => RateWindow::with_details(
+            used_percent,
+            grok_window_minutes(billing.resets_at, now),
+            billing.resets_at,
+            None,
+        ),
         None => {
             let mut window = RateWindow::informational("Usage unavailable");
             window.resets_at = billing.resets_at;
@@ -794,10 +860,10 @@ mod tests {
     }
 
     #[test]
-    fn billing_snapshot_leaves_window_minutes_unset() {
-        // A monthly quota with six days left must not be reported as weekly.
-        let resets = Utc::now() + chrono::Duration::days(6);
-        let result = result_from_billing(
+    fn billing_snapshot_classifies_weekly_from_reset_distance() {
+        let now = Utc::now();
+        let resets = now + chrono::Duration::days(6);
+        let result = result_from_billing_at(
             GrokBillingSnapshot {
                 used_percent: Some(12.0),
                 resets_at: Some(resets),
@@ -806,10 +872,71 @@ mod tests {
             None,
             None,
             Some("SuperGrok".into()),
+            now,
         );
-        assert_eq!(result.usage.primary.window_minutes, None);
-        assert_eq!(result.usage.primary.resets_at, Some(resets));
-        assert_eq!(result.usage.login_method.as_deref(), Some("SuperGrok"));
+        assert_eq!(
+            result.usage.primary.window_minutes,
+            Some(crate::core::WEEKLY_WINDOW_MINUTES)
+        );
+        assert_eq!(
+            display_label(&result.usage.primary, now),
+            Some("Weekly")
+        );
+        let pace = crate::core::UsagePace::weekly(
+            &result.usage.primary,
+            Some(now),
+            crate::core::WEEKLY_WINDOW_MINUTES,
+        );
+        assert!(pace.is_some(), "weekly window + reset must yield pace");
+    }
+
+    #[test]
+    fn billing_snapshot_classifies_monthly_from_reset_distance() {
+        let now = Utc::now();
+        let resets = now + chrono::Duration::days(28);
+        let result = result_from_billing_at(
+            GrokBillingSnapshot {
+                used_percent: Some(40.0),
+                resets_at: Some(resets),
+            },
+            "cli",
+            None,
+            None,
+            Some("SuperGrok Heavy".into()),
+            now,
+        );
+        assert_eq!(display_label(&result.usage.primary, now), Some("Monthly"));
+        assert!(
+            result.usage.primary.window_minutes.unwrap() >= 27 * 24 * 60,
+            "monthly window should be a calendar month, got {:?}",
+            result.usage.primary.window_minutes
+        );
+    }
+
+    #[test]
+    fn untyped_near_reset_keeps_weekly_label_and_duration() {
+        let now = Utc::now();
+        let resets = now + chrono::Duration::days(2);
+        assert_eq!(primary_label_for_duration(2.0 * 86_400.0), None);
+        let result = result_from_billing_at(
+            GrokBillingSnapshot {
+                used_percent: Some(80.0),
+                resets_at: Some(resets),
+            },
+            "web",
+            None,
+            None,
+            Some("SuperGrok".into()),
+            now,
+        );
+        assert_eq!(
+            result.usage.primary.window_minutes,
+            Some(crate::core::WEEKLY_WINDOW_MINUTES)
+        );
+        assert_eq!(
+            display_label(&result.usage.primary, now),
+            Some("Weekly")
+        );
     }
 
     #[test]

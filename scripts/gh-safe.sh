@@ -54,6 +54,21 @@ if [[ "$verify_kind" != repo ]]; then
   ((${#gh_args[@]} >= 3)) || { echo "Forwarded command must carry its object as the third token (gh <object> <verb> <number>)." >&2; exit 3; }
   [[ "${gh_args[2]}" == "$target" ]] || { echo "Forwarded command object '${gh_args[2]:-}' is not the verified target '$target'." >&2; exit 3; }
 fi
+api_passthrough=0
+if [[ "$verify_kind" == repo && "${gh_args[0]}" == api ]]; then
+  ((${#gh_args[@]} >= 2)) || { echo 'gh api requires a repository-scoped REST path.' >&2; exit 3; }
+  api_path="${gh_args[1]}"
+  expected_api_prefix="repos/$repo/"
+  shopt -s nocasematch
+  [[ "$api_path" == "$expected_api_prefix"* ]] || {
+    shopt -u nocasematch
+    echo "Repository API write path '$api_path' is outside '$expected_api_prefix'." >&2
+    exit 3
+  }
+  shopt -u nocasematch
+  [[ "$api_path" != *'..'* ]] || { echo "Repository API write path may not contain '..'." >&2; exit 3; }
+  api_passthrough=1
+fi
 
 case "$verify_kind" in
   repo)
@@ -81,8 +96,15 @@ echo "Verified GitHub write target: $verified_url"
 if ((what_if == 1)); then
   printf 'WhatIf: gh'
   printf ' %q' "${gh_args[@]}"
-  printf ' --repo %q\n' "$repo"
+  if ((api_passthrough == 0)); then
+    printf ' --repo %q' "$repo"
+  fi
+  printf '\n'
   exit 0
 fi
 
-gh "${gh_args[@]}" --repo "$repo"
+if ((api_passthrough == 1)); then
+  gh "${gh_args[@]}"
+else
+  gh "${gh_args[@]}" --repo "$repo"
+fi

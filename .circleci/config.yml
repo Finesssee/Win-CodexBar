@@ -212,11 +212,13 @@ workflows:
           filters: *release-tag-filter
 
   pr-check:
+    # Semantic CI boundary: release-integration micro PRs target port/upstream-*.
+    # A micro-named head aimed directly at main still receives full hosted CI.
+    # Guard the PR-only value behind event.name so push pipelines compile safely.
+    when: pipeline.event.name == "push" or (pipeline.event.name == "pull_request" and not (pipeline.event.github.pull_request.base.ref starts-with "port/upstream-"))
     jobs:
       - pr-check:
           filters:
             tags:
               ignore:
                 - /^v[0-9]+\.[0-9]+\.[0-9]+$/
-            branches:
-              only: /.*/

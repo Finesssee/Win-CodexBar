@@ -52,7 +52,11 @@ impl CrofProvider {
     }
 
     fn api_key(api_key: Option<&str>) -> Result<String, ProviderError> {
-        super_key(api_key, CROF_CREDENTIAL_TARGET, &["CROF_API_KEY", "CROFAI_API_KEY"])
+        super_key(
+            api_key,
+            CROF_CREDENTIAL_TARGET,
+            &["CROF_API_KEY", "CROFAI_API_KEY"],
+        )
     }
 
     async fn fetch_api(&self, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
@@ -73,7 +77,8 @@ impl CrofProvider {
         if status == reqwest::StatusCode::FORBIDDEN {
             if body.contains("cloudflare") || body.contains("Error 1010") {
                 return Err(ProviderError::Other(
-                    "Crof usage API blocked by Cloudflare (1010). Retry from the desktop app.".into(),
+                    "Crof usage API blocked by Cloudflare (1010). Retry from the desktop app."
+                        .into(),
                 ));
             }
             return Err(ProviderError::AuthRequired);
@@ -84,9 +89,8 @@ impl CrofProvider {
             )));
         }
 
-        let usage: CrofUsageResponse = serde_json::from_str(&body).map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse Crof usage: {e}"))
-        })?;
+        let usage: CrofUsageResponse = serde_json::from_str(&body)
+            .map_err(|e| ProviderError::Parse(format!("Failed to parse Crof usage: {e}")))?;
         Ok(snapshot_from_usage(&usage))
     }
 }

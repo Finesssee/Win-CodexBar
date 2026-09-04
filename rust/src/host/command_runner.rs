@@ -159,12 +159,16 @@ impl CommandRunner {
         let (output, stderr, timed_out) = match self.capture_output(&mut child, options, deadline) {
             Ok(captured) => captured,
             Err(e) => {
-                let _exit_code = Self::finish_child(&mut child);
+                let _exit_code = Self::terminate_child(&mut child);
                 return Err(e);
             }
         };
 
-        let exit_code = Self::finish_child(&mut child);
+        let exit_code = if timed_out {
+            Self::terminate_child(&mut child)
+        } else {
+            Self::finish_child_after_eof(&mut child)
+        };
 
         Ok(CommandResult {
             text: output,
@@ -268,11 +272,12 @@ impl CommandRunner {
     /// Windows is the motivating case: PowerShell tears down its console
     /// handles slightly before the process object transitions to signaled, so
     /// a single `try_wait` right after capture sees `Ok(None)` even though the
-    /// process exited successfully milliseconds later. Waiting (instead of
-    /// immediately killing) preserves the real exit code.
-    const EXIT_GRACE_PERIOD: Duration = Duration::from_millis(250);
+    /// process exited successfully shortly afterward. Hosted Windows runners
+    /// have occasionally exceeded 250 ms here; keep the wait bounded but long
+    /// enough to preserve the real exit code instead of killing a clean exit.
+    const EXIT_GRACE_PERIOD: Duration = Duration::from_secs(1);
 
-    fn finish_child(child: &mut Child) -> Option<i32> {
+    fn finish_child_after_eof(child: &mut Child) -> Option<i32> {
         let mut remaining = Self::EXIT_GRACE_PERIOD;
         loop {
             match child.try_wait() {
@@ -287,10 +292,13 @@ impl CommandRunner {
             std::thread::sleep(step);
             remaining -= step;
         }
-        // Teardown after timeout/capture or a transient try_wait error
-        // (e.g. ECHILD/handle race). If the process already exited, kill
-        // fails and `wait` still yields the true exit status; when the kill
-        // lands, the code is ours and already reported separately.
+        Self::terminate_child(child)
+    }
+
+    /// Terminate a command whose capture ended because of timeout/error.
+    /// Do not apply the clean-EOF grace here: the command has already exceeded
+    /// its execution contract and should be torn down immediately.
+    fn terminate_child(child: &mut Child) -> Option<i32> {
         let killed = child.kill().is_ok();
         let reaped = child.wait().ok();
         if killed {
@@ -581,7 +589,7 @@ mod tests {
                 "-NoProfile".to_string(),
                 "-NonInteractive".to_string(),
                 "-Command".to_string(),
-                "Start-Sleep -Seconds 5".to_string(),
+                "Start-Sleep -Seconds 30".to_string(),
             ],
             ..CommandOptions::default()
         };

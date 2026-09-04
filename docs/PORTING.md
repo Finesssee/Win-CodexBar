@@ -10,9 +10,10 @@ wire-shape source**, not code to cherry-pick.
 | Item | Value |
 |------|--------|
 | Upstream repo | `steipete/CodexBar` |
-| Last landed baseline | **v0.54.0** (`1181138ac`) |
-| Current port branch | **v0.54.0** |
-| PR naming | One PR per upstream release: `Port upstream CodexBar X.Y.Z` |
+| Last landed baseline | **v0.55.0** (`061593c`) |
+| Current port base | `main` at Win-CodexBar **0.55.0** |
+| Canonical PR | One final PR per upstream release: `Port upstream CodexBar X.Y.Z` |
+| Review topology | Behavioral micro PRs -> release integration branch -> canonical PR -> `main` |
 
 Version bumps of *this* repo are a **separate later step**. A port PR lands
 behavior; it does not have to ship a release tag.
@@ -73,16 +74,48 @@ guess-port. Example from the 0.47.0 pass: Claude cold-boot items
 (`#2493` / `#2494`) were deferred — not portable as written, not silently
 half-implemented.
 
-### 3. Split into workstreams
+### 3. Split into behavioral micro PRs
 
-Group PORT items into independent commits / mini-PRs on the port branch:
+Prefer many small review PRs, but stop at a complete behavioral boundary. A micro
+PR should be independently understandable, testable, and revertible. Do not split
+a parser, its fixture, and its regression test into separate ceremonial PRs.
 
-- One provider or one vertical feature per commit when practical
-- Shared infrastructure (factory, icons, settings schema) lands with the first
-  consumer that needs it, or as its own scoped commit if several consumers share
-  it
-- Keep SKIP / DEFER notes in the final PR body — do not open empty stub modules
-  “for later”
+For upstream `X.Y.Z`:
+
+1. Create a release integration branch: `port/upstream-X.Y.Z`.
+2. Create each workstream on `port/micro-X.Y.Z-<slug>` and open that PR **into
+   `port/upstream-X.Y.Z`**, not `main`.
+3. One provider or one vertical feature per micro PR when practical. Include the
+   implementation, fixtures, tests, and directly required shared plumbing in the
+   same review unit.
+4. Shared infrastructure used by several workstreams can be its own micro PR when
+   that makes later PRs smaller and independently reviewable.
+5. Merge reviewed micro PRs into the release integration branch. Do **not** open
+   the canonical PR to `main` until the release audit is complete and the branch
+   is ready for full integration validation.
+6. Open one canonical `Port upstream CodexBar X.Y.Z` PR from
+   `port/upstream-X.Y.Z` to `main`. It should contain no surprise work; its job is
+   to prove the release-wide PORT / SKIP / DEFER audit and integration result.
+7. Keep SKIP / DEFER notes in that canonical PR body. Do not open empty stub
+   modules "for later".
+
+#### CI budget rule for micro PRs
+
+Hosted CI and review granularity are intentionally different:
+
+- Micro PRs targeting `port/upstream-*` are filtered out at CircleCI workflow
+  compilation time, before Windows compute starts. The decision uses the PR base/target
+  branch, not the head-branch name; a `port/micro-*` head opened directly to `main`
+  still receives the full hosted gate. Their required evidence is focused local tests
+  plus any broader local gate justified by the change.
+- High-risk Windows-native micro PRs may use the manual Blacksmith backup workflow
+  as a deliberate second opinion, but it is not automatic.
+- The canonical `port/upstream-X.Y.Z` -> `main` PR receives the full CircleCI
+  Windows gate. Run full local checks, CUA for UI-affecting work, and thermo review
+  before relying on hosted CI.
+- CircleCI Project Settings should have **Auto-cancel redundant workflows** enabled
+  so superseded non-default-branch runs stop consuming credits.
+- Do not use `[skip ci]` to bypass the canonical release PR gate.
 
 ### 4. Port fixtures from exact wire shapes
 
@@ -127,22 +160,30 @@ If the port changes any of those surfaces:
 
 Details: root [AGENTS.md](../AGENTS.md) (Testing & QA) and the PR template.
 
-### 7. Gate before PR
+### 7. Gate before review
+
+For every micro PR, run the focused tests that prove its behavior. Add broader local
+checks when the work touches shared infrastructure, account state, persistence, or
+Windows-native behavior.
 
 ```powershell
-# Repo gate
-.\scripts\local-check.ps1
-
-# Focused provider / parser tests (example)
+# Focused provider / parser examples
 cargo test -p codexbar notion
 cargo test -p codexbar xai
 
-# CLI smoke (adjust -p ids)
+# CLI smoke examples
 cargo run -p codexbar -- usage -p notion -v
 cargo run -p codexbar -- config providers
 ```
 
-UI-affecting work: CUA (or documented manual) proof on top of the above.
+Before opening the canonical release PR to `main`, run the full local mirror:
+
+```powershell
+.\scripts\local-check.ps1 -Slice ci
+```
+
+Run the normal developer gate as well when the host supports its shell-dependent
+checks. UI-affecting work requires CUA (or documented equivalent manual proof).
 
 ### 8. PR body and follow-ups
 
@@ -164,7 +205,10 @@ port PR unless that is an explicit separate decision. Port first; release later.
 | Rule | Detail |
 |------|--------|
 | No upstream interaction | No issues/PRs/comments on `steipete/CodexBar` |
-| Commit scope | One workstream per commit; message prefix `Port upstream X.Y.Z: …` |
+| Review scope | One complete behavior per micro PR; branch `port/micro-X.Y.Z-<slug>` |
+| Canonical scope | One release-wide PR from `port/upstream-X.Y.Z` to `main` |
+| Commit scope | One workstream per commit; message prefix `Port upstream X.Y.Z: ...` |
+| Hosted CI | Micro branches skip automatic CircleCI; canonical release PR gets full CircleCI; Blacksmith is manual reserve |
 | Source pin | Always `vX.Y.Z` tag URLs / compare range — never `main` |
 | Locales | Add keys in existing catalog style; machine translation allowed |
 | Ambiguity | **DEFER-with-evidence** > guess-port |

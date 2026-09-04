@@ -13,15 +13,16 @@ permissions:
 
 jobs:
   guard:
-    # Skip maintainer-authored events entirely: no runner spin-up, no
-    # billed minutes. The guard only exists for untrusted authors.
-    # The association list must match trustedAssociations in
-    # .github/scripts/interaction-guard.mjs.
+    # Skip maintainer-authored events entirely: no runner spin-up. The guard only
+    # exists for untrusted authors. Keep this tiny Node policy job on GitHub's
+    # standard Ubuntu runner, which is free for this public repository, so the
+    # Blacksmith allowance stays reserved for manual Windows backup CI.
     if: >-
       vars.CI_BUDGET_MODE != 'off' &&
       !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
         github.event.pull_request.author_association || github.event.issue.author_association)
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: node .github/scripts/interaction-guard.mjs

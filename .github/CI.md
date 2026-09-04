@@ -1,19 +1,20 @@
 # CI — Win-CodexBar
 
-Win-CodexBar has two deliberately separate hosted CI responsibilities:
+Win-CodexBar separates primary validation, reserve validation, and interaction policy:
 
-- **CircleCI** hosts the primary PR/push validation path: the `pr-check`
-  job/workflow in `.circleci/config.yml` runs the full local-check slice on
-  CircleCI's hosted Windows executor for every branch pipeline that passes
-  its gates.
-- The **Blacksmith GitHub Actions** PR check
-  (`.github/workflows/pr-check.yml`) is a manual-dispatch-only fallback: its
-  `on:` block holds `workflow_dispatch` only, so it no longer schedules
-  automatically and is run by hand only for Blacksmith diagnostics.
+- **CircleCI Windows** is the primary PR/push validation path. Its `pr-check`
+  job/workflow in `.circleci/config.yml` runs the canonical local-check CI slice.
+- **Blacksmith Windows** is manual reserve CI only. `.github/workflows/pr-check.yml`
+  has `workflow_dispatch` only and uses the repo-proven 4-vCPU Windows runner.
+  Use it for an independent Windows second opinion when CircleCI is degraded or a
+  high-risk native change merits extra evidence.
+- The lightweight **interaction guard** runs automatically on GitHub's standard
+  `ubuntu-latest` runner for untrusted authors. This public repository gets that
+  standard GitHub-hosted compute without consuming the Blacksmith allowance.
 
-These responsibilities do not overlap: the CircleCI PR check replaces the
-former Blacksmith PR/push gate (see ADR 0005). Its build job has no GitHub
-write credential; only the post-approval release publisher receives the
+The primary and reserve Windows jobs deliberately execute the same
+`scripts/local-check.ps1 -Slice ci` contract. Neither build job receives a GitHub
+write credential; only the approval-gated CircleCI release publisher receives its
 restricted `GH_TOKEN` context.
 
 ## CircleCI hosted PR check (primary PR/push gate)
@@ -33,36 +34,49 @@ pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
 ```
 
-Auto-cancel of superseded pushes is a CircleCI **project setting** ("Auto-cancel
-redundant workflows", Project Settings → Advanced), not GitHub `concurrency`
-YAML — the CircleCI job has none.
+Auto-cancel of superseded non-default-branch work is a CircleCI **project setting**
+("Auto-cancel redundant workflows", Project Settings -> Advanced), not GitHub
+`concurrency` YAML. It is enabled for this project.
 
-### Interaction guard — `.github/workflows/interaction-guard.yml`
+CircleCI trigger configuration also lives outside this repository. The verified
+2026-09-05 setup has one enabled GitHub App trigger with explicit rules for PR
+opened/reopened/synchronize events and default-branch pushes only. Tag pushes are
+excluded because `.github/workflows/release.yml` deliberately triggers the release
+pipeline through the CircleCI API. Do not add overlapping subset triggers or tag
+rules; those create duplicate validation/release pipelines.
 
-The interaction guard remains on `blacksmith-2vcpu-ubuntu-2404` with its
-existing `contents: read`, `issues: write`, and `pull-requests: write`
-permissions. It is unrelated to release publication.
+Porting micro-review CI is enforced semantically in `.circleci/config.yml`: a PR
+whose **base/target** branch is `port/upstream-*` does not create the `pr-check`
+workflow. A `port/micro-*` head opened directly to `main` still receives the full
+hosted Windows gate. This uses CircleCI's GitHub App PR base-ref pipeline value,
+not a head-branch naming bypass.
+
+### Interaction guard - `.github/workflows/interaction-guard.yml`
+
+The interaction guard runs on GitHub's standard `ubuntu-latest`, not Blacksmith.
+It keeps `contents: read`, `issues: write`, and `pull-requests: write` permissions
+and skips maintainer-authored events before a runner starts. This preserves the
+Blacksmith pool for manual Windows fallback.
 
 ## GitHub Actions budget mode
 
-Only the interaction guard carries the `if: vars.CI_BUDGET_MODE != 'off'`
-gate now; it runs when the variable is unset (`normal`), `normal`, or
-`thin`, and skips only when it is `off`. This gate does not disable
-CircleCI releases.
+Both the interaction guard and manual Blacksmith reserve job honor
+`vars.CI_BUDGET_MODE != 'off'`. `off` is the emergency stop for GitHub Actions
+CI helpers; it does not disable CircleCI releases.
 
-Set `CI_BUDGET_MODE` in **Settings → Secrets and variables → Actions →
+Set `CI_BUDGET_MODE` in **Settings -> Secrets and variables -> Actions ->
 Variables**. Do not hard-code it in a workflow.
 
-| Mode   | Interaction guard | Circle release |
-|--------|-------------------|----------------|
-| normal | runs              | tag-triggered  |
-| thin   | runs              | tag-triggered  |
-| off    | skip              | tag-triggered  |
+| Mode | Interaction guard | Blacksmith reserve | Circle release |
+|------|-------------------|-------------------|----------------|
+| normal | runs when needed | manual only | tag-triggered |
+| thin | runs when needed | manual only | tag-triggered |
+| off | skip | skip | tag-triggered |
 
-The Blacksmith Pool minutes intent was roughly **60% Win-CodexBar**,
-**30% linear-cli**, and **10% buffer**; that allocation is historical for this
-repo — Win-CodexBar no longer draws on the pool. CircleCI credits are separate
-and must be budgeted in CircleCI.
+Blacksmith's allowance is now a reserve, not a recurring Win-CodexBar cost. The
+interaction guard uses free standard GitHub-hosted public-repo compute; the
+Blacksmith Windows workflow runs only when a maintainer deliberately dispatches
+it. CircleCI credits/OSS allowance are budgeted independently.
 
 ## CircleCI release pipeline
 
@@ -92,37 +106,44 @@ Both jobs use CircleCI's hosted Windows executor (`circleci/windows@5.0`).
 
 ### CircleCI project and context setup
 
-These steps require repository/CircleCI administrator access and are not
-automated by this repository:
+Provider settings are not stored in `.circleci/config.yml`. Verified on 2026-09-05:
 
-1. Add the canonical GitHub project `nesszer/Win-CodexBar` to the CircleCI
-   organization and enable `.circleci/config.yml`.
-2. Create a restricted context named `github-release-publisher`, scoped only to
+1. **Project Setup** has one enabled GitHub App trigger on the primary pipeline,
+   limited to PR opened/reopened/synchronize plus default-branch pushes;
+   overlapping subset/tag triggers were removed.
+2. **Advanced -> Auto-cancel redundant workflows** is enabled.
+3. Keep the restricted context named `github-release-publisher`, scoped only to
    this project (and the release job if organization policy supports expression
-   restrictions). Add `GH_TOKEN` as a secret; never add it as a project
-   variable or to the build job.
-3. Use a fine-grained GitHub token for only this repository with **Contents:
-   read and write** (release asset API access). Do not grant **Workflows**
-   permission; no workflow file is changed by the publisher.
-4. Protect the `v*` tag namespace with a GitHub ruleset/tag protection policy
-   that permits only authorized release maintainers to create canonical
-   `vX.Y.Z` tags. Protect `main` and require the `ci/circleci: pr-check`
-   status check.
-5. Configure CircleCI notifications and a spending/credit alert appropriate to
-   the organization. Do not approve a release until the build artifacts and
-   manifest have been reviewed.
+   restrictions). Add `GH_TOKEN` as a secret; never add it as a project variable
+   or to the build job.
+4. Use a fine-grained GitHub token for only this repository with **Contents: read
+   and write**. Do not grant **Workflows** permission.
+5. Protect the `v*` tag namespace with a GitHub ruleset/tag protection policy that
+   permits only authorized release maintainers to create canonical `vX.Y.Z` tags.
+   Protect `main` and require the `ci/circleci: pr-check` status check.
+6. Configure CircleCI notifications and a spending/credit alert appropriate to the
+   organization. Do not approve a release until artifacts and manifest are
+   reviewed.
 
 The GitHub token is intentionally not available to checkout, preflight,
 prerequisite provisioning, release-doctor, build, smoke, or artifact steps.
-CircleCI project setup and GitHub tag/context/ruleset changes are the current
-manual setup scope.
+CircleCI trigger cleanup and auto-cancel are already applied. GitHub `main`
+protection and future context/tag-policy changes remain repository-admin scope.
 
 ## Cost, retry, and rollback behavior
-CircleCI Windows credits are now the recurring PR cost (spent against the
-open-source allowance; see ADR 0005), plus release builds for protected
-semver tags and the short approval/publish job. Blacksmith minutes remain
-relevant only for the interaction guard and manual-dispatch diagnostics.
-Do not use CircleCI for ad-hoc release testing outside its gated triggers.
+
+CircleCI Windows is the recurring integration cost. The config avoids that compute
+for PRs targeting `port/upstream-*`; behavioral micro PRs rely on focused local
+evidence. A micro-named PR targeting `main` still runs the full hosted gate. The
+full job is also used for ordinary PRs and `main` validation. CircleCI's medium
+Windows executor is already its smallest managed Windows resource class, so the
+main savings levers are clean trigger topology, compile-time filtering, cache reuse,
+and auto-cancel.
+
+Blacksmith Windows is manual reserve only. Keep the proven 4-vCPU Windows runner
+for reliability. A 2-vCPU experiment was cancelled while queued before it could
+prove equivalent availability. Do not make Blacksmith an automatic second copy of
+CircleCI; if CircleCI is healthy, one hosted Windows gate is enough.
 
 Reruns are safe: the build is tied to the immutable SHA from the tag and
 produces a fresh temporary WorkRoot. If publication stops after some uploads,

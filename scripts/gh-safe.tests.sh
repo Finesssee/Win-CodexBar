@@ -23,7 +23,9 @@ elif [[ "${1:-}" == pr && "${2:-}" == view ]]; then
 elif [[ "${1:-}" == issue && "${2:-}" == view ]]; then
   printf '%s\n' 'https://github.com/nesszer/Win-CodexBar/issues/123'
 elif [[ "${1:-}" == api ]]; then
-  printf '%s\n' 'https://github.com/nesszer/Win-CodexBar/releases/tag/v1.2.3'
+  if [[ "${2:-}" == repos/nesszer/Win-CodexBar/releases/tags/v1.2.3 ]]; then
+    printf '%s\n' 'https://github.com/nesszer/Win-CodexBar/releases/tag/v1.2.3'
+  fi
 fi
 EOF
 chmod +x "$test_root/bin/gh"
@@ -70,6 +72,13 @@ expect_fail bash "$repo_root/scripts/gh-safe.sh" \
 FAKE_GH_MODE=cross expect_fail bash "$repo_root/scripts/gh-safe.sh" \
   --repo nesszer/Win-CodexBar --verify-kind repo --what-if -- \
   pr create --title test --body test
+expect_fail bash "$repo_root/scripts/gh-safe.sh" \
+  --repo nesszer/Win-CodexBar --verify-kind repo --what-if -- \
+  api repos/steipete/CodexBar/branches/main/protection -X PUT -f test=true
+
+expect_fail bash "$repo_root/scripts/gh-safe.sh" \
+  --repo nesszer/Win-CodexBar --verify-kind repo --what-if -- \
+  api graphql -f query=test
 
 : > "$log"
 bash "$repo_root/scripts/gh-safe.sh" \
@@ -81,6 +90,21 @@ grep -Fq 'pr comment 361 --body test --repo nesszer/Win-CodexBar' "$log" || {
   cat "$log" >&2
   exit 1
 }
+: > "$log"
+bash "$repo_root/scripts/gh-safe.sh" \
+  --repo nesszer/Win-CodexBar --verify-kind repo -- \
+  api repos/nesszer/Win-CodexBar/branches/main/protection -X PUT -f test=true >/dev/null
+
+grep -Fq 'api repos/nesszer/Win-CodexBar/branches/main/protection -X PUT -f test=true' "$log" || {
+  echo 'Safe wrapper did not preserve the verified repository-scoped API path.' >&2
+  cat "$log" >&2
+  exit 1
+}
+if grep -Fq -- '--repo nesszer/Win-CodexBar' "$log"; then
+  echo 'Safe wrapper incorrectly appended --repo to gh api.' >&2
+  cat "$log" >&2
+  exit 1
+fi
 : > "$log"
 bash "$repo_root/scripts/gh-safe.sh" \
   --repo nesszer/Win-CodexBar --verify-kind issue --target 123 --what-if -- \

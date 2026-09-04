@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "codexbar"
 version = "0.55.0"
 edition = "2024"

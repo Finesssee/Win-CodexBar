@@ -76,6 +76,11 @@ pub struct UsageSnapshot {
     /// Primary rate window (usually session-based, e.g., 5-hour for Claude)
     pub primary: RateWindow,
 
+    /// Provider-resolved label for the primary rate window when the stable
+    /// provider metadata label is not specific enough for this snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_label: Option<String>,
+
     /// Secondary rate window (usually weekly/monthly)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary: Option<RateWindow>,
@@ -113,6 +118,7 @@ impl UsageSnapshot {
     pub fn new(primary: RateWindow) -> Self {
         Self {
             primary,
+            primary_label: None,
             secondary: None,
             model_specific: None,
             tertiary: None,
@@ -122,6 +128,12 @@ impl UsageSnapshot {
             account_organization: None,
             login_method: None,
         }
+    }
+
+    /// Builder pattern: override the primary window label for this snapshot.
+    pub fn with_primary_label(mut self, label: impl Into<String>) -> Self {
+        self.primary_label = Some(label.into());
+        self
     }
 
     /// Builder pattern: set secondary window

@@ -326,7 +326,12 @@ impl ProviderUsageSnapshot {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
             primary: primary_snap,
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: Some(
+                usage
+                    .primary_label
+                    .clone()
+                    .unwrap_or_else(|| metadata.session_label.to_string()),
+            ),
             secondary: secondary_snap,
             secondary_label: usage
                 .secondary

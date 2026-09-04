@@ -554,11 +554,18 @@ fn append_usage_window_lines(
     metadata: &crate::core::ProviderMetadata,
     use_color: bool,
 ) {
-    append_window_line(lines, metadata.session_label, &usage.primary, use_color);
-    // Upstream 0.50.1 #2957: pace for the 5-hour session window.
-    if usage.primary.window_minutes == Some(crate::core::SESSION_WINDOW_MINUTES)
-        && let Some(pace) =
-            UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES)
+    let primary_label = usage
+        .primary_label
+        .as_deref()
+        .unwrap_or(metadata.session_label);
+    append_window_line(lines, primary_label, &usage.primary, use_color);
+    // Pace for primary windows whose provider published a common cadence.
+    let pace_minutes = usage.primary.window_minutes.filter(|minutes| {
+        *minutes == crate::core::SESSION_WINDOW_MINUTES
+            || *minutes >= crate::core::WEEKLY_WINDOW_MINUTES
+    });
+    if let Some(minutes) = pace_minutes
+        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes)
     {
         lines.push(format!(
             "  Pace:    {} {}",
@@ -643,14 +650,18 @@ fn append_model_specific_line(
 pub fn render_brief_text(provider: ProviderId, result: &ProviderFetchResult) -> String {
     let metadata = instantiate_provider(provider).metadata().clone();
     let usage = &result.usage;
+    let primary_label = usage
+        .primary_label
+        .as_deref()
+        .unwrap_or(metadata.session_label);
     let mut parts = Vec::new();
     let reset = if usage.primary.is_informational {
-        parts.push(format!("{} unavailable", metadata.session_label));
+        parts.push(format!("{primary_label} unavailable"));
         usage.secondary.as_ref().unwrap_or(&usage.primary)
     } else {
         parts.push(format!(
             "{} {}",
-            metadata.session_label,
+            primary_label,
             format_percent(usage.primary.used_percent)
         ));
         &usage.primary
@@ -797,6 +808,19 @@ mod tests {
             output,
             "Claude: Session (5h) <1%, Weekly 100%, resets n/a, Pro"
         );
+    }
+
+    #[test]
+    fn primary_label_override_is_shared_by_full_and_brief_renderers() {
+        let result =
+            fetch_result(UsageSnapshot::new(RateWindow::new(42.0)).with_primary_label("Monthly"));
+
+        let full = render_text_with_status(ProviderId::Grok, &result, None, false);
+        let brief = render_brief_text(ProviderId::Grok, &result);
+
+        assert!(full.contains("Monthly:"));
+        assert!(brief.contains("Grok: Monthly 42%"));
+        assert!(!brief.contains("Credits 42%"));
     }
 
     #[test]

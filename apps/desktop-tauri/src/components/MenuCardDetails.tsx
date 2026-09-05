@@ -108,10 +108,11 @@ function LocalUsageBlock({
 }) {
   const { t } = useLocale();
   const isCodex = providerId === "codex";
-  const visibleHistory = costHistory
-    .slice(-30)
-    .filter((point) => point.value > 0);
-  const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
+  const visibleHistory = costHistory.slice(-30);
+  const maxCost = Math.max(
+    ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
+    0,
+  );
 
   return (
     <section className="menu-card__group menu-card__local-usage">
@@ -148,9 +149,10 @@ function LocalUsageBlock({
             <span
               key={`${point.date}-${index}`}
               style={{
-                height: `${Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
+                height: `${point.value == null || maxCost <= 0 ? 1 : Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
+                opacity: point.value == null ? 0 : undefined,
               }}
-              title={`${point.date}: ${formatCurrency(point.value, "USD")}`}
+              title={`${point.date}: ${point.value == null ? "Unknown" : formatCurrency(point.value, "USD")}`}
             />
           ))}
         </div>
@@ -443,7 +445,7 @@ export function describeCard(
   showPace = true,
 ): MenuCardPresence {
   const hasCostHistory =
-    chartData !== null && chartData.costHistory.some((point) => point.value > 0);
+    chartData !== null && chartData.costHistory.some((point) => point.value != null);
   const hasCreditsHistory =
     chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =

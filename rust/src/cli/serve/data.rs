@@ -65,6 +65,11 @@ pub async fn cost_response(provider: Option<&str>) -> String {
     let scanner = CostScanner::new(30).with_options(CostScanOptions::app_driven());
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
+        if provider_id == ProviderId::Antigravity {
+            let history = crate::providers::antigravity::local_sessions::summarize(30);
+            results.push(antigravity_cost_payload(history, 30));
+            continue;
+        }
         let (supported, summary) = match provider_id {
             ProviderId::Codex => (true, scanner.scan_codex()),
             ProviderId::Claude => (true, scanner.scan_claude()),
@@ -106,8 +111,33 @@ pub async fn cost_response(provider: Option<&str>) -> String {
     json_response(200, serde_json::Value::Array(results))
 }
 
+fn antigravity_cost_payload(
+    history: crate::providers::antigravity::local_sessions::LocalSessionSummary,
+    days: u32,
+) -> serde_json::Value {
+    use crate::providers::antigravity::local_sessions::LocalHistoryCoverage;
+    let coverage = match history.coverage {
+        LocalHistoryCoverage::Complete => "complete",
+        LocalHistoryCoverage::Partial => "partial",
+        LocalHistoryCoverage::Unavailable => "unavailable",
+    };
+    let complete = matches!(history.coverage, LocalHistoryCoverage::Complete);
+    json!({
+        "provider": "antigravity",
+        "supported": true,
+        "days_scanned": days,
+        "cost": {"total_usd": serde_json::Value::Null, "currency": serde_json::Value::Null},
+        "daily": [],
+        "tokens": {"total": complete.then_some(history.total_tokens)},
+        "sessions_count": complete.then_some(history.session_count),
+        "historyCoverage": coverage,
+        "knownZero": complete && history.total_tokens == 0,
+        "note": "Local token history; dollar costs unavailable"
+    })
+}
+
 /// Dashboard-charts shape for one provider's daily spend: [{date, totalCost}].
-fn daily_json(daily: Vec<(String, f64)>) -> serde_json::Value {
+fn daily_json(daily: Vec<(String, Option<f64>)>) -> serde_json::Value {
     serde_json::Value::Array(
         daily
             .into_iter()
@@ -123,20 +153,51 @@ mod tests {
     #[test]
     fn daily_array_shape_matches_dashboard_charts_contract() {
         let daily = daily_json(vec![
-            ("2026-08-07".to_string(), 0.0),
-            ("2026-08-08".to_string(), 4.25),
+            ("2026-08-07".to_string(), Some(0.0)),
+            ("2026-08-08".to_string(), Some(4.25)),
+            ("2026-08-09".to_string(), None),
         ]);
         let rows = daily.as_array().unwrap();
         assert_eq!(rows[0]["date"], "2026-08-07");
         assert_eq!(rows[1]["totalCost"], 4.25);
         assert_eq!(rows[0]["totalCost"], 0.0);
+        assert!(rows[2]["totalCost"].is_null());
     }
 
     #[test]
+    fn antigravity_cost_payload_is_token_only_and_preserves_partial_unknown() {
+        use crate::providers::antigravity::local_sessions::{
+            LocalHistoryCoverage, LocalSessionSummary,
+        };
+        let complete = antigravity_cost_payload(
+            LocalSessionSummary {
+                total_tokens: 42,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Complete,
+            },
+            30,
+        );
+        assert!(complete["cost"]["total_usd"].is_null());
+        assert_eq!(complete["tokens"]["total"], 42);
+        assert_eq!(complete["historyCoverage"], "complete");
+
+        let partial = antigravity_cost_payload(
+            LocalSessionSummary {
+                total_tokens: 42,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Partial,
+            },
+            30,
+        );
+        assert!(partial["tokens"]["total"].is_null());
+        assert_eq!(partial["historyCoverage"], "partial");
+    }
+    #[test]
     fn daily_rows_use_upstream_total_cost_key_only() {
         let daily = daily_json(vec![
-            ("2026-08-07".to_string(), 0.0),
-            ("2026-08-08".to_string(), 4.25),
+            ("2026-08-07".to_string(), Some(0.0)),
+            ("2026-08-08".to_string(), Some(4.25)),
+            ("2026-08-09".to_string(), None),
         ]);
         let serialized = daily.to_string();
         assert!(
@@ -161,5 +222,6 @@ mod tests {
         let rows = daily.as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["totalCost"], 0.0);
+        assert!(rows[2]["totalCost"].is_null());
     }
 }

@@ -133,10 +133,10 @@ pub struct CostUsageCache {
     pub scan_since_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_until_key: Option<String>,
-    /// Last validated cost report, kept so spend surfaces can keep showing
-    /// totals while a (re)scan catches up after the cache was trimmed or the
-    /// debounce window expired (upstream 0.48.0 #2628). `None` once a scan
-    /// completes for the current window.
+    /// Last validated cost report retained when the persisted cache needs future
+    /// catch-up after trimming or expiry. A completed in-memory scan may still
+    /// leave this populated when persistence-budget pruning follows; current
+    /// publication completeness is carried separately on `CostSummary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_report: Option<CachedCostReport>,
 }

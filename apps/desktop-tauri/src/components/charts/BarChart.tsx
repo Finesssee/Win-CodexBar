@@ -15,7 +15,7 @@ import { useChartAnimation } from "./useChartAnimation";
 
 export interface BarChartPoint {
   label: string;
-  value: number;
+  value: number | null;
 }
 
 export interface BarChartProps {
@@ -45,6 +45,7 @@ export function BarChart({
   emptyMessage,
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
+  const fmtPoint = (value: number | null) => (value == null ? "Unknown" : fmt(value));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
 
@@ -59,7 +60,7 @@ export function BarChart({
     let p = -1;
     for (let i = 0; i < data.length; i++) {
       const v = data[i].value;
-      if (v > m) {
+      if (v != null && v > m) {
         m = v;
         p = i;
       }
@@ -101,7 +102,7 @@ export function BarChart({
         aria-label={ariaLabel}
       >
         {data.map((p, i) => {
-          const base = p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
+          const base = p.value == null ? 1 : p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
           const eased = anim.barProgress(i);
           const barH = base * eased;
           const x = i * (barWidth + BAR_GAP);
@@ -119,14 +120,14 @@ export function BarChart({
                 width={barWidth}
                 height={bodyH}
                 fill={color}
-                opacity={p.value === 0 ? 0.25 : isHovered ? 1 : 0.9}
+                opacity={p.value == null ? 0 : p.value === 0 ? 0.25 : isHovered ? 1 : 0.9}
                 rx={1}
                 className="chart__bar"
                 onMouseMove={(e) => onMove(e, i)}
                 onMouseLeave={onLeave}
               >
                 <title>
-                  {p.label}: {fmt(p.value)}
+                  {p.label}: {fmtPoint(p.value)}
                 </title>
               </rect>
               {isPeak && (
@@ -157,7 +158,7 @@ export function BarChart({
           role="tooltip"
         >
           <span className="chart__tooltip-label">{data[hover.i].label}</span>
-          <strong>{fmt(data[hover.i].value)}</strong>
+          <strong>{fmtPoint(data[hover.i].value)}</strong>
         </div>
       )}
     </div>

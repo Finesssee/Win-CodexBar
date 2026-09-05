@@ -179,18 +179,6 @@ fn build_usage_spend_summary(
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
 
-    let codex_cache_status =
-        codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None);
-    let codex_stale = codex_cache_status.has_days && codex_cache_status.previous_report.is_some();
-    let codex_stale_updated_at = codex_stale
-        .then(|| {
-            codex_cache_status
-                .previous_report
-                .as_ref()
-                .and_then(|report| report.updated_at.clone())
-        })
-        .flatten();
-
     // Upstream 0.55.0 #3105: independent provider baselines load in parallel.
     // Keep each provider's 7d/30d scans serial so they can safely share that
     // provider's incremental cache, while Codex and Claude run concurrently.
@@ -214,11 +202,21 @@ fn build_usage_spend_summary(
             )
         });
 
+    let codex_stale = !codex_30_summary.history_coverage_established;
+    let codex_stale_updated_at = codex_stale
+        .then(|| {
+            codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None)
+                .previous_report
+                .and_then(|report| report.updated_at)
+        })
+        .flatten();
+
     let codex_7_contract = build_local_spend_contract_from_summary(
         "codex",
         7,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         codex_7_summary.clone(),
     );
     let codex_30_contract = build_local_spend_contract_from_summary(
@@ -226,6 +224,7 @@ fn build_usage_spend_summary(
         30,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         codex_30_summary.clone(),
     );
 
@@ -415,6 +414,7 @@ fn build_usage_spend_summary(
         history_days,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         selected_summary,
     );
     UsageSpendSummary { rows, contract }

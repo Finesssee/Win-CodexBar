@@ -24,7 +24,7 @@ export function CreditsHistoryChart({
   emptyMessage,
 }: Props) {
   const recent = data.slice(-30);
-  const points = recent.map((p) => ({ label: p.date, value: p.value }));
+  const points = recent.map((p) => ({ label: p.date, value: p.value ?? 0 }));
   return (
     <div className="provider-detail-chart">
       <div className="provider-detail-chart__title">{title}</div>

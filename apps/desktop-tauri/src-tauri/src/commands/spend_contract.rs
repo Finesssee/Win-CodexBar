@@ -33,6 +33,7 @@ pub async fn get_spend_contract(
             history_days,
             include_import,
             settings.hide_native_codex_cost_when_open_codex_present && provider == "codex",
+            settings.hide_personal_info,
             summary,
         )
     })

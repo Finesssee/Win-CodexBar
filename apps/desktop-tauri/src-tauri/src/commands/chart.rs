@@ -25,7 +25,7 @@ const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 #[serde(rename_all = "camelCase")]
 pub struct DailyCostPoint {
     pub date: String,
-    pub value: f64,
+    pub value: Option<f64>,
 }
 
 /// A single (date, tokens) point for the Tokens chart mode (upstream 0.50.0
@@ -494,7 +494,7 @@ fn load_openai_dashboard_chart_data(
         .iter()
         .map(|d| DailyCostPoint {
             date: d.day.clone(),
-            value: d.total_credits_used,
+            value: Some(d.total_credits_used),
         })
         .collect();
 

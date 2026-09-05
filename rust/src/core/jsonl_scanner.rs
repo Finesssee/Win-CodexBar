@@ -589,7 +589,7 @@ fn contained_total_delta(
             // Only growth above the historical high watermark counts.
             (current - water.max(counted)).max(0)
         } else {
-            // Below watermark: rewind / interleaved lineage — do not re-add
+            // Below watermark: rewind / interleaved lineage â€” do not re-add
             // mid-range climbs that would inflate totals after a fork reset.
             0
         }
@@ -1185,7 +1185,7 @@ impl JsonlScanner {
                 Vec::new()
             };
             // A16 (upstream 0.48.0): when entries were trimmed for budget, the persisted
-            // artifact no longer covers the full window — set previous_report so the
+            // artifact no longer covers the full window â€” set previous_report so the
             // next refresh can signal catch-up is pending (and spend surfaces can show
             // the last-validated snapshot during the rescan).
             if (!pruned.is_empty() || !trimmed.is_empty()) && cache.previous_report.is_none() {
@@ -1235,7 +1235,7 @@ impl JsonlScanner {
             // Fallback direct write when copy fails; the copy error already surfaced.
             let _fallback_written = fs::write(&cache_path, json.as_bytes());
         }
-        // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
+        // Best-effort temp cleanup (ignore errors â€” unique name avoids clashes).
         let _truncated_tmp = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));
     }
 
@@ -1662,8 +1662,8 @@ mod tests {
 
     #[test]
     fn interleaved_lineage_mid_range_climb_below_watermark_does_not_readd() {
-        // 100 → 5 (rewind) → 80 (mid-range below water) → 101 (above water).
-        // Phase-1 containment: do not re-add the 5→80 climb; only growth above
+        // 100 â†’ 5 (rewind) â†’ 80 (mid-range below water) â†’ 101 (above water).
+        // Phase-1 containment: do not re-add the 5â†’80 climb; only growth above
         // the historical high watermark counts.
         let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(day, day);
@@ -1751,7 +1751,7 @@ line2
         // F2: offset pointing right after a newline is a valid boundary.
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("f.jsonl");
-        // "line1\nline2\n" — offset 6 is right after first \n
+        // "line1\nline2\n" â€” offset 6 is right after first \n
         std::fs::write(&path, b"line1\nline2\n").unwrap();
         assert!(JsonlScanner::is_line_boundary_offset(&path, 6));
     }
@@ -1761,7 +1761,7 @@ line2
         // F2: offset pointing mid-line (byte before is not \n) returns false.
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("f.jsonl");
-        // "line1\nline2\n" — offset 3 is mid-line (byte before is 'n')
+        // "line1\nline2\n" â€” offset 3 is mid-line (byte before is 'n')
         std::fs::write(&path, b"line1\nline2\n").unwrap();
         assert!(!JsonlScanner::is_line_boundary_offset(&path, 3));
     }
@@ -1794,7 +1794,7 @@ line2
             HashMap::from([("gpt-5.6-sol".to_string(), vec![1_000, 250, 100])]),
         );
 
-        let report = Self::cached_cost_report_from_days(&cache);
+        let report = JsonlScanner::cached_cost_report_from_days(&cache);
         let expected = CostUsagePricing::codex_cost_usd_at_date(
             "gpt-5.6-sol",
             1_000,
@@ -1817,7 +1817,7 @@ line2
     #[test]
     fn save_cache_persists_small_codex_artifact() {
         // F19 integration: a normal-sized Codex cache is persisted and
-        // reloadable — the MAX_LOAD_BYTES refusal does not false-positive.
+        // reloadable â€” the MAX_LOAD_BYTES refusal does not false-positive.
         let root = tempfile::tempdir().unwrap();
         let cache_root = root.path().to_path_buf();
         let mut cache = CostUsageCache {
@@ -1854,7 +1854,7 @@ line2
     #[test]
     fn save_cache_refuses_non_bounded_provider_oversize() {
         // F19: non-bounded providers (e.g. Claude) skip the refusal check
-        // entirely — the MAX_LOAD_BYTES guard only applies to bounded providers.
+        // entirely â€” the MAX_LOAD_BYTES guard only applies to bounded providers.
         // This test confirms the is_bounded_provider gate works: Claude cache
         // is saved regardless of the MAX_LOAD_BYTES check (which is Codex-only).
         let root = tempfile::tempdir().unwrap();
@@ -1928,7 +1928,7 @@ line2
         // Force refusal with a 1-byte limit: encoded cache will exceed it.
         JsonlScanner::save_cache_with_limit(ProviderId::Codex, &mut cache, Some(&cache_root), 1);
 
-        // Destination must be gone — no stale artifact may persist.
+        // Destination must be gone â€” no stale artifact may persist.
         assert!(
             !cache_path.exists(),
             "refusal must remove preexisting destination artifact"

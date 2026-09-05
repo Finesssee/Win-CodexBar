@@ -273,6 +273,11 @@ pub struct CostSnapshot {
     /// Exact daily spend points when the provider supplies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub daily: Vec<CostDailyPoint>,
+
+    /// Provider-owned presentation hint for spend that is itself a primary
+    /// usage signal and must remain visible when optional local summaries are hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_visible: bool,
 }
 
 impl CostSnapshot {
@@ -288,6 +293,7 @@ impl CostSnapshot {
             updated_at: Utc::now(),
             balance: None,
             daily: Vec::new(),
+            always_visible: false,
         }
     }
 
@@ -305,6 +311,12 @@ impl CostSnapshot {
 
     pub fn with_daily(mut self, daily: Vec<CostDailyPoint>) -> Self {
         self.daily = daily;
+        self
+    }
+
+    /// Keep this provider-metered spend visible even when optional local cost summaries are hidden.
+    pub fn always_visible(mut self) -> Self {
+        self.always_visible = true;
         self
     }
 

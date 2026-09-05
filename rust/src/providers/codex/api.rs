@@ -6,6 +6,7 @@ use super::{pat, weekly_reset};
 use crate::core::{
     CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
 };
+use base64::Engine;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
 /// refreshed it. Matches the CLI's own `needs_refresh` window (8 days) so a
 /// token the CLI considers fresh is also trusted here (upstream 0.50.1 #2944).
 const EXTERNAL_OAUTH_STALENESS_WINDOW: chrono::TimeDelta = chrono::Duration::days(8);
+const EXTERNAL_OAUTH_REFRESH_WINDOW: chrono::TimeDelta = chrono::Duration::minutes(5);
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
 
@@ -280,6 +282,7 @@ impl CodexApi {
                     access_token: trimmed.to_string(),
                     account_id: None,
                     is_external_oauth: false,
+                    access_token_expires_at: None,
                     last_refresh: None,
                 });
             }
@@ -317,10 +320,13 @@ impl CodexApi {
             .and_then(|v| v.as_str())
             .and_then(parse_timestamp);
 
+        let access_token_expires_at = parse_access_token_expiry(&access_token);
+
         Ok(CodexCredentials {
             access_token,
             account_id,
             is_external_oauth: has_refresh_token,
+            access_token_expires_at,
             last_refresh,
         })
     }
@@ -339,6 +345,13 @@ impl CodexApi {
             return Ok(());
         }
         let now = Utc::now();
+        if let Some(expires_at) = credentials.access_token_expires_at {
+            if expires_at - now > EXTERNAL_OAUTH_REFRESH_WINDOW {
+                return Ok(());
+            }
+            return Err(ProviderError::AuthRequired);
+        }
+
         let is_stale = credentials
             .last_refresh
             .is_none_or(|last| now - last > EXTERNAL_OAUTH_STALENESS_WINDOW);
@@ -881,6 +894,9 @@ struct CodexCredentials {
     /// `refresh_token`), as opposed to an `OPENAI_API_KEY`. Used by the
     /// `codex_external_oauth_sources_allowed` gate (upstream 0.50.1 #2944).
     is_external_oauth: bool,
+    /// Native access-token JWT expiry. When available, this is authoritative
+    /// for refresh scheduling; the CLI still owns the refresh lifecycle.
+    access_token_expires_at: Option<DateTime<Utc>>,
     /// `last_refresh` timestamp from auth.json, when present. Used to detect
     /// stale external OAuth tokens that should fail closed when the opt-in
     /// setting is OFF.
@@ -1039,6 +1055,16 @@ fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
 
 /// Parse an ISO-8601 / RFC-3339 timestamp from the `last_refresh` field of
 /// auth.json. Accepts the same formats the Codex CLI writes.
+fn parse_access_token_expiry(token: &str) -> Option<DateTime<Utc>> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let exp = json.get("exp")?.as_i64()?;
+    Utc.timestamp_opt(exp, 0).single()
+}
 fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1757,6 +1783,7 @@ mod tests {
         let creds = CodexApi::parse_credentials_json(r#"{"OPENAI_API_KEY": "sk-test"}"#)
             .expect("credentials");
         assert!(!creds.is_external_oauth);
+        assert!(creds.access_token_expires_at.is_none());
         assert!(creds.last_refresh.is_none());
         assert!(CodexApi::enforce_external_oauth_gate(&creds).is_ok());
     }
@@ -1774,6 +1801,7 @@ mod tests {
         )
         .expect("credentials");
         assert!(creds.is_external_oauth);
+        assert!(creds.access_token_expires_at.is_none());
         assert!(creds.last_refresh.is_none());
     }
 
@@ -1797,6 +1825,7 @@ mod tests {
             access_token: "access".to_string(),
             account_id: None,
             is_external_oauth: true,
+            access_token_expires_at: None,
             last_refresh: None,
         };
         let err = CodexApi::enforce_external_oauth_gate(&creds)
@@ -1811,6 +1840,7 @@ mod tests {
             access_token: "access".to_string(),
             account_id: None,
             is_external_oauth: true,
+            access_token_expires_at: None,
             last_refresh: Some(old),
         };
         let err = CodexApi::enforce_external_oauth_gate(&creds)
@@ -1825,11 +1855,52 @@ mod tests {
             access_token: "access".to_string(),
             account_id: None,
             is_external_oauth: true,
+            access_token_expires_at: None,
             last_refresh: Some(fresh),
         };
         assert!(CodexApi::enforce_external_oauth_gate(&creds).is_ok());
     }
 
+    #[test]
+    fn external_oauth_gate_prefers_future_jwt_expiry_over_old_refresh_timestamp() {
+        let future = Utc::now() + chrono::Duration::hours(2);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(format!(r#"{{"exp":{}}}"#, future.timestamp()));
+        let token = format!("header.{payload}.signature");
+        let json = format!(
+            r#"{{"tokens":{{"access_token":"{token}","refresh_token":"refresh"}},"last_refresh":"2026-01-01T00:00:00Z"}}"#
+        );
+        let creds = CodexApi::parse_credentials_json(&json).expect("credentials");
+        assert!(creds.access_token_expires_at.is_some());
+        assert!(CodexApi::enforce_external_oauth_gate(&creds).is_ok());
+    }
+
+    #[test]
+    fn external_oauth_gate_requires_cli_refresh_when_jwt_is_near_expiry() {
+        let soon = Utc::now() + chrono::Duration::minutes(2);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(format!(r#"{{"exp":{}}}"#, soon.timestamp()));
+        let token = format!("header.{payload}.signature");
+        let json = format!(
+            r#"{{"tokens":{{"access_token":"{token}","refresh_token":"refresh"}},"last_refresh":"{}"}}"#,
+            Utc::now().to_rfc3339()
+        );
+        let creds = CodexApi::parse_credentials_json(&json).expect("credentials");
+        let err = CodexApi::enforce_external_oauth_gate(&creds)
+            .expect_err("near-expiry native OAuth must refresh through the CLI");
+        assert!(matches!(err, ProviderError::AuthRequired));
+    }
+
+    #[test]
+    fn malformed_or_opaque_jwt_falls_back_to_last_refresh() {
+        let fresh = Utc::now().to_rfc3339();
+        let json = format!(
+            r#"{{"tokens":{{"access_token":"opaque-token","refresh_token":"refresh"}},"last_refresh":"{fresh}"}}"#
+        );
+        let creds = CodexApi::parse_credentials_json(&json).expect("credentials");
+        assert!(creds.access_token_expires_at.is_none());
+        assert!(CodexApi::enforce_external_oauth_gate(&creds).is_ok());
+    }
     #[test]
     fn parse_timestamp_reads_iso8601() {
         assert!(parse_timestamp("2026-08-17T10:00:00Z").is_some());

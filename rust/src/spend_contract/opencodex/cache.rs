@@ -338,34 +338,70 @@ fn log_identity(source_path: &Path) -> Option<LogIdentity> {
 
     Some(LogIdentity {
         source_path: source_path.to_string_lossy().to_string(),
-        file_identity: platform_file_identity(&metadata),
+        file_identity: platform_file_identity(source_path, &metadata)?,
         size: metadata.len(),
     })
 }
 
 #[cfg(windows)]
-fn platform_file_identity(metadata: &fs::Metadata) -> String {
-    use std::os::windows::fs::MetadataExt;
-    format!(
-        "{}:{}:{}",
-        metadata.volume_serial_number().unwrap_or(0),
-        metadata.file_index().unwrap_or(0),
-        metadata.creation_time()
-    )
+fn platform_file_identity(source_path: &Path, _metadata: &fs::Metadata) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let file = File::open(source_path).ok()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` is an open file handle and `info` is valid for writes for
+    // the duration of the call.
+    let ok = unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) };
+    if ok.is_err() {
+        return None;
+    }
+    let file_index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+    Some(format!("{}:{}", info.dwVolumeSerialNumber, file_index))
 }
 
 #[cfg(unix)]
-fn platform_file_identity(metadata: &fs::Metadata) -> String {
+fn platform_file_identity(_source_path: &Path, metadata: &fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
-    format!("{}:{}", metadata.dev(), metadata.ino())
+    Some(format!("{}:{}", metadata.dev(), metadata.ino()))
 }
 
 #[cfg(not(any(windows, unix)))]
-fn platform_file_identity(metadata: &fs::Metadata) -> String {
+fn platform_file_identity(_source_path: &Path, metadata: &fs::Metadata) -> Option<String> {
     metadata
         .created()
         .ok()
         .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|value| value.as_nanos().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_path_replacement_forces_reparse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("sessions.jsonl");
+        std::fs::write(&log_path, b"{\"a\":1}\n").expect("write log");
+
+        let identity_before = log_identity(&log_path).expect("identity before");
+
+        // Simulate replacement of the file at the same path (log rotation /
+        // re-creation by the provider CLI): move the old file aside, then
+        // re-create a fresh file at the original path.
+        std::fs::rename(&log_path, dir.path().join("sessions.jsonl.old")).expect("rotate log");
+        std::fs::write(&log_path, b"{\"a\":1}\n{\"b\":2}\n").expect("rewrite log");
+
+        let identity_after = log_identity(&log_path).expect("identity after");
+        assert_ne!(
+            identity_before.file_identity, identity_after.file_identity,
+            "re-created file must get a new file identity so the cache cursor is invalidated"
+        );
+        assert!(identity_after.size >= identity_before.size);
+    }
 }

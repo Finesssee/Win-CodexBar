@@ -91,6 +91,7 @@ windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_Storage_FileSystem",
 ] }
 
 winreg = "0.55"

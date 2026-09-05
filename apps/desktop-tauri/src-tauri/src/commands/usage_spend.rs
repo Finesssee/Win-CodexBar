@@ -351,13 +351,16 @@ fn build_usage_spend_summary(
                 spend
             }
             "antigravity" => {
+                use codexbar::providers::antigravity::local_sessions::LocalHistoryCoverage;
                 let seven = codexbar::providers::antigravity::local_sessions::summarize(7);
                 let thirty = codexbar::providers::antigravity::local_sessions::summarize(30);
                 let mut spend = cached_spend(cached_snapshot);
-                spend.seven_day_tokens = (seven.session_count > 0).then_some(seven.total_tokens);
-                spend.thirty_day_tokens = (thirty.session_count > 0).then_some(thirty.total_tokens);
-                if thirty.session_count > 0 {
-                    spend.source = "local Antigravity sessions".to_string();
+                spend.seven_day_tokens = matches!(seven.coverage, LocalHistoryCoverage::Complete)
+                    .then_some(seven.total_tokens);
+                spend.thirty_day_tokens = matches!(thirty.coverage, LocalHistoryCoverage::Complete)
+                    .then_some(thirty.total_tokens);
+                if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
+                    spend.source = "local Antigravity history".to_string();
                 }
                 spend
             }

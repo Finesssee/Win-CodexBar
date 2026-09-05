@@ -11,13 +11,33 @@ const MAX_SESSION_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LocalHistoryCoverage {
+    Complete,
+    Partial,
+    #[default]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSessionSummary {
     pub total_tokens: u64,
     pub session_count: usize,
+    pub coverage: LocalHistoryCoverage,
 }
 
 pub fn summarize(days: u32) -> LocalSessionSummary {
-    summarize_paths(&tokscale_paths(None), Utc::now(), days)
+    let now = Utc::now();
+    if let Some(home) = dirs::home_dir() {
+        match super::local_sqlite::summarize(&home, now, days) {
+            super::local_sqlite::SQLiteScan::Summary(summary) => return summary,
+            super::local_sqlite::SQLiteScan::NoDatabases => {}
+        }
+    }
+    let paths = tokscale_paths(None);
+    if paths.is_empty() {
+        return LocalSessionSummary::default();
+    }
+    summarize_paths(&paths, now, days)
 }
 
 /// Count local Antigravity conversation artifacts for the quota provider's
@@ -160,6 +180,11 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> LocalSes
     LocalSessionSummary {
         total_tokens,
         session_count: sessions_with_usage.len(),
+        coverage: if paths.is_empty() {
+            LocalHistoryCoverage::Unavailable
+        } else {
+            LocalHistoryCoverage::Complete
+        },
     }
 }
 

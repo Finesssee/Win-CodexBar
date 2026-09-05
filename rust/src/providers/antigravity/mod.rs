@@ -3,7 +3,9 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+mod local_proto;
 pub mod local_sessions;
+mod local_sqlite;
 
 use async_trait::async_trait;
 use regex_lite::Regex;

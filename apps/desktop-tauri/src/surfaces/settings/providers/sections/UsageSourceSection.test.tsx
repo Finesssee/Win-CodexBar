@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -7,15 +7,15 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("../../../../lib/tauri", () => tauriMocks);
 
-import { GrokUsageSourceSection } from "./GrokUsageSourceSection";
+import { UsageSourceSection } from "./UsageSourceSection";
 
-describe("GrokUsageSourceSection", () => {
+describe("UsageSourceSection", () => {
   it("offers Bailian Auto, CLI, and Web and persists explicit CLI selection", async () => {
     const onChanged = vi.fn();
     tauriMocks.setProviderUsageSource.mockResolvedValue(undefined);
 
     render(
-      <GrokUsageSourceSection
+      <UsageSourceSection
         providerId="alibabatokenplan"
         currentValue="auto"
         t={(key) => key}
@@ -37,7 +37,7 @@ describe("GrokUsageSourceSection", () => {
 
   it("does not render for unrelated providers", () => {
     const { container } = render(
-      <GrokUsageSourceSection providerId="codex" currentValue="auto" t={(key) => key} onChanged={vi.fn()} />,
+      <UsageSourceSection providerId="codex" currentValue="auto" t={(key) => key} onChanged={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
   });

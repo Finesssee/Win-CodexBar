@@ -50,7 +50,7 @@ const ALIBABA_TOKEN_PLAN_OPTIONS = [
 ] as const;
 
 
-export function GrokUsageSourceSection({
+export function UsageSourceSection({
   providerId,
   currentValue,
   t,

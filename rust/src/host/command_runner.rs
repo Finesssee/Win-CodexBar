@@ -109,8 +109,10 @@ impl std::error::Error for CommandError {}
 
 /// Command runner for executing CLI tools
 pub struct CommandRunner {
-    /// Environment variables to add
+    /// Environment variables to add.
     env_additions: HashMap<String, String>,
+    /// Whether the child inherits the ambient process environment.
+    inherit_environment: bool,
 }
 
 impl CommandRunner {
@@ -121,12 +123,22 @@ impl CommandRunner {
     pub fn new() -> Self {
         Self {
             env_additions: HashMap::new(),
+            inherit_environment: true,
         }
     }
 
-    /// Add an environment variable
+    /// Add an environment variable.
     pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env_additions.insert(key.into(), value.into());
+        self
+    }
+
+    /// Spawn the child from only explicitly supplied variables.
+    ///
+    /// This is for credential-sensitive passive probes that must not inherit
+    /// unrelated API keys, cookies, cloud credentials, or agent sockets.
+    pub fn without_inherited_env(mut self) -> Self {
+        self.inherit_environment = false;
         self
     }
 
@@ -219,7 +231,12 @@ impl CommandRunner {
     }
 
     fn configure_command_environment(&self, cmd: &mut Command) {
-        let mut env = std::env::vars().collect::<HashMap<_, _>>();
+        let mut env = if self.inherit_environment {
+            std::env::vars().collect::<HashMap<_, _>>()
+        } else {
+            cmd.env_clear();
+            HashMap::new()
+        };
         env.extend(self.env_additions.clone());
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
@@ -469,9 +486,13 @@ impl CommandRunner {
         let input = input.map(|s| s.to_string());
         let options = options.clone();
         let env = self.env_additions.clone();
+        let inherit_environment = self.inherit_environment;
 
         tokio::task::spawn_blocking(move || {
-            let runner = CommandRunner { env_additions: env };
+            let runner = CommandRunner {
+                env_additions: env,
+                inherit_environment,
+            };
             runner.run(&binary, input.as_deref(), &options)
         })
         .await
@@ -558,6 +579,7 @@ mod tests {
     fn test_command_runner_new() {
         let runner = CommandRunner::new();
         assert!(runner.env_additions.is_empty());
+        assert!(runner.inherit_environment);
     }
 
     #[test]
@@ -568,6 +590,18 @@ mod tests {
 
         assert_eq!(runner.env_additions.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(runner.env_additions.get("BAZ"), Some(&"qux".to_string()));
+    }
+
+    #[test]
+    fn clean_environment_is_opt_in() {
+        let runner = CommandRunner::new()
+            .without_inherited_env()
+            .with_env("PATH", "fixture");
+        assert!(!runner.inherit_environment);
+        assert_eq!(
+            runner.env_additions.get("PATH"),
+            Some(&"fixture".to_string())
+        );
     }
 
     #[test]

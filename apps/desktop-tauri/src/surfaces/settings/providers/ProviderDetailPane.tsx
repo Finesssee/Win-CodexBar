@@ -308,13 +308,15 @@ export function ProviderDetailPane({
         t={t}
         onChanged={reload}
       />
-      <CookieSourceSection
-        providerId={detail.id}
-        currentValue={detail.cookieSource}
-        options={cookieOptions}
-        t={t}
-        onChanged={reload}
-      />
+      {!(detail.id === "alibabatokenplan" && detail.usageSource === "cli") && (
+        <CookieSourceSection
+          providerId={detail.id}
+          currentValue={detail.cookieSource}
+          options={cookieOptions}
+          t={t}
+          onChanged={reload}
+        />
+      )}
       <RegionSection
         providerId={detail.id}
         currentValue={detail.region}

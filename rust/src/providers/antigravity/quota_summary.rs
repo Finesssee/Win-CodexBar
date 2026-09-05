@@ -252,7 +252,12 @@ fn parse_reset_time(raw: &str) -> Option<DateTime<Utc>> {
             if whole < i64::MIN as f64 || whole > i64::MAX as f64 {
                 return None;
             }
-            Utc.timestamp_opt(whole as i64, 0).single()
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "finite epoch seconds are range-checked before this conversion"
+            )]
+            let whole_seconds = whole as i64;
+            Utc.timestamp_opt(whole_seconds, 0).single()
         })
 }
 

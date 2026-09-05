@@ -127,21 +127,10 @@ impl GrokProvider {
         let billing = self
             .fetch_billing(None, Some(cookie_header.to_string()))
             .await?;
-        // Upstream 0.52 (#2991): the browser billing response does not carry
-        // the paid SuperGrok tier. If the local Grok principal is available,
-        // use its settings endpoint only as identity enrichment, never as a
-        // replacement for the validated browser usage result.
-        let plan = match Self::load_credentials(GrokAuthKind::Cli) {
-            Ok(credentials) => self.fetch_cli_subscription_tier(&credentials).await,
-            Err(_) => None,
-        };
-        Ok(result_from_billing(
-            billing,
-            "grok-browser",
-            None,
-            None,
-            plan,
-        ))
+        // v0.56.0: a browser session is its own principal. Never enrich a
+        // successful cookie billing result from ambient auth.json metadata,
+        // which may belong to a different account or change during the fetch.
+        Ok(result_from_cookie_billing(billing))
     }
 
     /// Cookie refresh path (upstream #2458):
@@ -455,6 +444,9 @@ fn primary_label_for_cycle_minutes(minutes: u32) -> Option<&'static str> {
     }
 }
 
+fn result_from_cookie_billing(billing: GrokBillingSnapshot) -> ProviderFetchResult {
+    result_from_billing(billing, "grok-browser", None, None, None)
+}
 fn result_from_billing(
     billing: GrokBillingSnapshot,
     source_label: &str,
@@ -850,6 +842,18 @@ mod tests {
         assert!(!is_cookie_authentication_failure(&ProviderError::NoCookies));
     }
 
+    #[test]
+    fn cookie_billing_stays_siloed_from_auth_file_identity() {
+        let result = result_from_cookie_billing(GrokBillingSnapshot {
+            used_percent: Some(23.0),
+            resets_at: None,
+            window_minutes: None,
+        });
+        assert_eq!(result.source_label, "grok-browser");
+        assert!(result.usage.account_email.is_none());
+        assert!(result.usage.account_organization.is_none());
+        assert!(result.usage.login_method.is_none());
+    }
     #[test]
     fn billing_snapshot_uses_full_weekly_cycle_for_pace() {
         let now = Utc::now();

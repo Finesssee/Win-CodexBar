@@ -603,7 +603,7 @@ mod tests {
                 },
             ],
         };
-        let inventory = inventory(Some(&reset), now()).expect("credit inventory");
+        let inventory = super::inventory(Some(&reset), now()).expect("credit inventory");
         assert_eq!(inventory.available_count, 1);
         assert_eq!(inventory.credits.len(), 3);
         assert!(

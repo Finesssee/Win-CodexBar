@@ -17,6 +17,53 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Default)]
+pub struct CachedCostReadStatus {
+    pub has_days: bool,
+    pub previous_report: Option<CachedCostReport>,
+}
+
+#[derive(Deserialize, Default)]
+struct CachedCostReadStatusProjection {
+    #[serde(
+        default,
+        rename = "days",
+        deserialize_with = "deserialize_nonempty_object"
+    )]
+    has_days: bool,
+    #[serde(default)]
+    previous_report: Option<CachedCostReport>,
+}
+
+fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{IgnoredAny, MapAccess, Visitor};
+
+    struct NonemptyObjectVisitor;
+
+    impl<'de> Visitor<'de> for NonemptyObjectVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut nonempty = false;
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {
+                nonempty = true;
+            }
+            Ok(nonempty)
+        }
+    }
+
+    deserializer.deserialize_map(NonemptyObjectVisitor)
+}
 /// Maximum retained Codex JSONL line size (upstream session-metadata bound).
 const CODEX_JSONL_MAX_LINE_BYTES: usize = 256 * 1024;
 
@@ -1059,6 +1106,39 @@ impl JsonlScanner {
         CostUsageCache::default()
     }
 
+    /// Read only the cache metadata needed by presentation surfaces.
+    ///
+    /// v0.56.0 performance parity: skip raw per-file scanner state and day
+    /// payloads when callers only need stale/catch-up status.
+    pub fn load_cache_status(
+        provider: ProviderId,
+        cache_root: Option<&Path>,
+    ) -> CachedCostReadStatus {
+        let cache_path = Self::cache_path(provider, cache_root);
+        if crate::core::is_bounded_provider(provider) {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "bounded artifacts fit usize on any supported target"
+            )]
+            let file_bytes = crate::core::artifact_file_size(&cache_path) as usize;
+            if file_bytes > crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES {
+                return CachedCostReadStatus::default();
+            }
+        }
+
+        let Ok(file) = File::open(cache_path) else {
+            return CachedCostReadStatus::default();
+        };
+        let Ok(projection) =
+            serde_json::from_reader::<_, CachedCostReadStatusProjection>(BufReader::new(file))
+        else {
+            return CachedCostReadStatus::default();
+        };
+        CachedCostReadStatus {
+            has_days: projection.has_days,
+            previous_report: projection.previous_report,
+        }
+    }
     fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {
         let mut total_cost_usd = 0.0;
         let mut input_tokens = 0_i32;

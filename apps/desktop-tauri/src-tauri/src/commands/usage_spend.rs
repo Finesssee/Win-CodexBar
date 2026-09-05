@@ -179,15 +179,15 @@ fn build_usage_spend_summary(
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
 
-    let codex_cache =
-        codexbar::core::JsonlScanner::load_cache(codexbar::core::ProviderId::Codex, None);
-    let codex_stale = !codex_cache.days.is_empty() && codex_cache.previous_report.is_some();
+    let codex_cache_status =
+        codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None);
+    let codex_stale = codex_cache_status.has_days && codex_cache_status.previous_report.is_some();
     let codex_stale_updated_at = codex_stale
         .then(|| {
-            codex_cache
+            codex_cache_status
                 .previous_report
                 .as_ref()
-                .and_then(|r| r.updated_at.clone())
+                .and_then(|report| report.updated_at.clone())
         })
         .flatten();
 

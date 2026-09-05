@@ -25,45 +25,87 @@ pub struct LocalSessionSummary {
     pub coverage: LocalHistoryCoverage,
 }
 
-pub fn summarize(days: u32) -> LocalSessionSummary {
-    let now = Utc::now();
-    if let Some(home) = dirs::home_dir() {
-        match super::local_sqlite::summarize(&home, now, days) {
-            super::local_sqlite::SQLiteScan::Summary(summary) => return summary,
-            super::local_sqlite::SQLiteScan::NoDatabases => {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScanContext {
+    database_roots: [PathBuf; 3],
+    tokscale_sessions: PathBuf,
+}
+
+impl ScanContext {
+    fn from_values(
+        home: &Path,
+        gemini_cli_home: Option<&str>,
+        tokscale_config_dir: Option<&str>,
+    ) -> Self {
+        let gemini_base = clean_env_path(gemini_cli_home).unwrap_or_else(|| home.join(".gemini"));
+        let tokscale_base = clean_env_path(tokscale_config_dir)
+            .unwrap_or_else(|| home.join(".config").join("tokscale"));
+        Self {
+            database_roots: super::local_sqlite::database_roots(&gemini_base),
+            tokscale_sessions: tokscale_base.join("antigravity-cache").join("sessions"),
         }
     }
-    let paths = tokscale_paths(None);
-    if paths.is_empty() {
-        return LocalSessionSummary::default();
+
+    fn capture() -> Option<Self> {
+        let home = dirs::home_dir()?;
+        let gemini = std::env::var("GEMINI_CLI_HOME").ok();
+        let tokscale = std::env::var("TOKSCALE_CONFIG_DIR").ok();
+        Some(Self::from_values(
+            &home,
+            gemini.as_deref(),
+            tokscale.as_deref(),
+        ))
     }
-    summarize_paths(&paths, now, days)
+}
+
+fn clean_env_path(value: Option<&str>) -> Option<PathBuf> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+pub fn summarize(days: u32) -> LocalSessionSummary {
+    let now = Utc::now();
+    let Some(context) = ScanContext::capture() else {
+        return LocalSessionSummary::default();
+    };
+    match super::local_sqlite::summarize(&context.database_roots, now, days) {
+        super::local_sqlite::SQLiteScan::Summary(summary) => summary,
+        super::local_sqlite::SQLiteScan::NoDatabases => {
+            let paths = tokscale_paths(&context.tokscale_sessions);
+            if paths.is_empty() {
+                LocalSessionSummary::default()
+            } else {
+                summarize_paths(&paths, now, days)
+            }
+        }
+    }
 }
 
 /// Count local Antigravity conversation artifacts for the quota provider's
 /// offline fallback. Mirrors upstream #3119 without opening SQLite files.
 pub fn offline_conversation_count() -> usize {
-    let Some(home) = dirs::home_dir() else {
+    let Some(context) = ScanContext::capture() else {
         return 0;
     };
-    offline_conversation_count_in(&home)
+    offline_conversation_count_context(&context)
 }
 
 fn offline_conversation_count_in(home: &Path) -> usize {
-    let gemini = home.join(".gemini");
-    let roots = [
-        gemini.join("antigravity-cli").join("conversations"),
-        gemini.join("antigravity"),
-        gemini.join("antigravity").join("conversations"),
-    ];
-    let db_count = roots
+    offline_conversation_count_context(&ScanContext::from_values(home, None, None))
+}
+
+fn offline_conversation_count_context(context: &ScanContext) -> usize {
+    let db_count = context
+        .database_roots
         .iter()
         .map(|root| count_extension(root, "db"))
         .sum::<usize>();
     if db_count > 0 {
         return db_count;
     }
-    tokscale_paths(Some(home)).len()
+    tokscale_paths(&context.tokscale_sessions).len()
 }
 
 fn count_extension(root: &Path, extension: &str) -> usize {
@@ -77,32 +119,18 @@ fn count_extension(root: &Path, extension: &str) -> usize {
         .count()
 }
 
-fn tokscale_paths(home: Option<&Path>) -> Vec<PathBuf> {
-    let base = if let Some(home) = home {
-        home.join(".config")
-            .join("tokscale")
-            .join("antigravity-cache")
-            .join("sessions")
-    } else if let Ok(root) = std::env::var("TOKSCALE_CONFIG_DIR") {
-        PathBuf::from(root)
-            .join("antigravity-cache")
-            .join("sessions")
-    } else {
-        let Some(home) = dirs::home_dir() else {
-            return Vec::new();
-        };
-        home.join(".config")
-            .join("tokscale")
-            .join("antigravity-cache")
-            .join("sessions")
-    };
+fn tokscale_paths(base: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(base) else {
         return Vec::new();
     };
     let mut paths: Vec<_> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+        .filter(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("jsonl"))
+        })
         .collect();
     paths.sort();
     if paths.len() > MAX_SESSION_FILES {
@@ -242,6 +270,37 @@ fn token_field(value: &Value, keys: &[&str]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_context_honors_non_empty_root_overrides() {
+        let home = Path::new(r"C:\Users\test");
+        let context =
+            ScanContext::from_values(home, Some(r"D:\gemini-root"), Some(r"E:\tokscale-root"));
+        assert_eq!(
+            context.database_roots[0],
+            PathBuf::from(r"D:\gemini-root")
+                .join("antigravity-cli")
+                .join("conversations")
+        );
+        assert_eq!(
+            context.tokscale_sessions,
+            PathBuf::from(r"E:\tokscale-root")
+                .join("antigravity-cache")
+                .join("sessions")
+        );
+        let defaults = ScanContext::from_values(home, Some("  "), Some(""));
+        assert_eq!(
+            defaults.database_roots[1],
+            home.join(".gemini").join("antigravity")
+        );
+        assert_eq!(
+            defaults.tokscale_sessions,
+            home.join(".config")
+                .join("tokscale")
+                .join("antigravity-cache")
+                .join("sessions")
+        );
+    }
 
     #[test]
     fn summarizes_tokscale_jsonl_and_deduplicates_response_ids() {

@@ -718,7 +718,7 @@ mod tests {
 
         let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
         use std::io::Write as _;
-        write!(file, "{}\n", &pending[split..]).unwrap();
+        writeln!(file, "{}", &pending[split..]).unwrap();
         drop(file);
         let second = load_entries_with_cache(&log, &cache).unwrap();
         assert_eq!(

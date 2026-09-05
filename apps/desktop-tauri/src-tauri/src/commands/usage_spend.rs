@@ -135,6 +135,22 @@ fn build_usage_spend_summary_cached(
 
 fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -> String {
     let settings = codexbar::settings::Settings::load();
+    usage_spend_cache_key_with_privacy(
+        cached,
+        selected_days,
+        settings.open_codex_usage_logs_enabled,
+        settings.hide_native_codex_cost_when_open_codex_present,
+        settings.hide_personal_info,
+    )
+}
+
+fn usage_spend_cache_key_with_privacy(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+    include_opencodex: bool,
+    hide_native: bool,
+    hide_personal_info: bool,
+) -> String {
     let mut revisions: Vec<String> = cached
         .iter()
         .map(|snapshot| {
@@ -162,11 +178,12 @@ fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -
         .collect();
     revisions.sort();
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         chrono::Local::now().date_naive(),
         selected_days,
-        settings.open_codex_usage_logs_enabled,
-        settings.hide_native_codex_cost_when_open_codex_present,
+        include_opencodex,
+        hide_native,
+        hide_personal_info,
         revisions.join(";")
     )
 }
@@ -505,5 +522,17 @@ fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
         },
         refreshing: false,
         stale_updated_at: None,
+    }
+}
+
+#[cfg(test)]
+mod cache_key_tests {
+    use super::*;
+
+    #[test]
+    fn privacy_mode_is_part_of_usage_spend_cache_identity() {
+        let public = usage_spend_cache_key_with_privacy(&[], 30, false, false, false);
+        let private = usage_spend_cache_key_with_privacy(&[], 30, false, false, true);
+        assert_ne!(public, private);
     }
 }

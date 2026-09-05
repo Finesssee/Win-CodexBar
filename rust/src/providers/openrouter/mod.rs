@@ -117,7 +117,7 @@ impl OpenRouterProvider {
                 id: ProviderId::OpenRouter,
                 display_name: "OpenRouter",
                 session_label: "Credits",
-                weekly_label: "Usage",
+                weekly_label: "API key limit",
                 supports_opus: false,
                 supports_credits: true,
                 default_enabled: false,
@@ -375,7 +375,9 @@ impl OpenRouterProvider {
 
         let key_percent = ((used / limit) * 100.0).clamp(0.0, 100.0);
         let mut key_window = RateWindow::new(key_percent);
-        key_window.reset_description = Some(format!("${used:.2}/${limit:.2} key quota"));
+        key_window.reset_description = Some(format!(
+            "${used:.2}/${limit:.2} spending cap · Spending cap, not balance"
+        ));
         *usage = usage.clone().with_secondary(key_window);
     }
 
@@ -501,6 +503,36 @@ mod tests {
         usage.secondary.map(|window| window.used_percent)
     }
 
+    #[test]
+    fn key_limit_copy_stays_distinct_from_account_balance() {
+        let provider = OpenRouterProvider::new();
+        assert_eq!(provider.metadata.weekly_label, "API key limit");
+
+        let credits = CreditsData {
+            total_credits: 5.0,
+            total_usage: 3.1,
+        };
+        let mut usage = OpenRouterProvider::build_credits_usage(&credits);
+        OpenRouterProvider::add_key_quota(
+            &mut usage,
+            &key_data(
+                Some(30.0),
+                Some(30.0),
+                Some("monthly"),
+                Some(0.0),
+                None,
+                None,
+                Some(0.0),
+            ),
+        );
+        assert_eq!(usage.login_method.as_deref(), Some("$1.90 balance"));
+        let key = usage.secondary.expect("key spending cap");
+        assert_eq!(key.used_percent, 0.0);
+        assert_eq!(
+            key.reset_description.as_deref(),
+            Some("$0.00/$30.00 spending cap · Spending cap, not balance")
+        );
+    }
     #[test]
     fn server_remaining_replaces_lifetime_usage_for_meter() {
         // limit 50, server says 12.50 left this period → 75% used, even though

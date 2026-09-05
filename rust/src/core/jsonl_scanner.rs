@@ -1164,7 +1164,7 @@ impl JsonlScanner {
             let established_report = cache
                 .previous_report
                 .clone()
-                .unwrap_or_else(|| cached_cost_report_from_days(cache));
+                .unwrap_or_else(|| Self::cached_cost_report_from_days(cache));
             let pruned = crate::core::prune_out_of_window_for_budget(
                 &mut cache.files,
                 &mut cache.days,
@@ -1794,7 +1794,7 @@ line2
             HashMap::from([("gpt-5.6-sol".to_string(), vec![1_000, 250, 100])]),
         );
 
-        let report = cached_cost_report_from_days(&cache);
+        let report = Self::cached_cost_report_from_days(&cache);
         let expected = CostUsagePricing::codex_cost_usd_at_date(
             "gpt-5.6-sol",
             1_000,

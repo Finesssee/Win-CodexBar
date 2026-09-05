@@ -1282,14 +1282,20 @@ mod tests {
             .with_timezone(&Utc);
         let credits = vec![
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-10T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-05T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-20T00:00:00Z".into()),
             },
@@ -1310,18 +1316,26 @@ mod tests {
             .with_timezone(&Utc);
         let credits = vec![
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-06-01T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("used".into()),
                 expires_at: Some("2026-07-03T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("AVAILABLE".into()),
                 expires_at: Some("2026-07-08T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: None,
                 expires_at: Some("2026-07-09T00:00:00Z".into()),
             },
@@ -1344,10 +1358,14 @@ mod tests {
             available_count: 2,
             credits: vec![
                 ResetCredit {
+                    id: None,
+                    reset_type: None,
                     status: Some("available".into()),
                     expires_at: Some("2026-07-15T12:00:00Z".into()),
                 },
                 ResetCredit {
+                    id: None,
+                    reset_type: None,
                     status: Some("available".into()),
                     expires_at: Some("2026-07-10T12:00:00Z".into()),
                 },

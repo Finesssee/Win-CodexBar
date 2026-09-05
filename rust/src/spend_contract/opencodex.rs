@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
@@ -488,6 +487,7 @@ fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 mod tests {
     use super::cache::{load_entries_with_cache, read_cache};
     use super::*;
+    use std::fs;
 
     #[test]
     fn aggregate_deduplicates_requests_and_applies_history_window() {

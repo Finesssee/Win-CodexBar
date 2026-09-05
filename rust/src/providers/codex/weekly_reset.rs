@@ -47,7 +47,7 @@ impl Default for AccountState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CreditInventory {
+pub(super) struct CreditInventory {
     available_count: u32,
     credits: Vec<CreditIdentity>,
 }

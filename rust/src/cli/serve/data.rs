@@ -218,10 +218,9 @@ mod tests {
 
     #[test]
     fn daily_zero_values_are_preserved_not_filtered() {
-        let daily = daily_json(vec![("2026-08-07".to_string(), 0.0)]);
+        let daily = daily_json(vec![("2026-08-07".to_string(), Some(0.0))]);
         let rows = daily.as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["totalCost"], 0.0);
-        assert!(rows[2]["totalCost"].is_null());
     }
 }

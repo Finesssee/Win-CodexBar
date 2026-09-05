@@ -45,7 +45,6 @@ export function BarChart({
   emptyMessage,
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
-  const fmtPoint = (value: number | null) => (value == null ? "Unknown" : fmt(value));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
 
@@ -123,11 +122,11 @@ export function BarChart({
                 opacity={p.value == null ? 0 : p.value === 0 ? 0.25 : isHovered ? 1 : 0.9}
                 rx={1}
                 className="chart__bar"
-                onMouseMove={(e) => onMove(e, i)}
+                onMouseMove={p.value == null ? undefined : (e) => onMove(e, i)}
                 onMouseLeave={onLeave}
               >
                 <title>
-                  {p.label}: {fmtPoint(p.value)}
+                  {p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`}
                 </title>
               </rect>
               {isPeak && (
@@ -158,7 +157,7 @@ export function BarChart({
           role="tooltip"
         >
           <span className="chart__tooltip-label">{data[hover.i].label}</span>
-          <strong>{fmtPoint(data[hover.i].value)}</strong>
+          <strong>{fmt(data[hover.i].value ?? 0)}</strong>
         </div>
       )}
     </div>

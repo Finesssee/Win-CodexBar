@@ -71,7 +71,7 @@ export function SimpleBarChart({
               rx={1}
             >
               <title>
-                {p.date}: {p.value == null ? "Unknown" : fmt(p.value)}
+                {p.value == null ? p.date : `${p.date}: ${fmt(p.value)}`}
               </title>
             </rect>
           );

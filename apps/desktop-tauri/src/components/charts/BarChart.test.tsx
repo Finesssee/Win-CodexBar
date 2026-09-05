@@ -19,7 +19,7 @@ describe("BarChart calendar slots", () => {
     expect(bars).toHaveLength(3);
     expect(bars[0]).toHaveAttribute("opacity", "0");
     expect(bars[1]).toHaveAttribute("opacity", "0.25");
-    expect(container).toHaveTextContent("unknown: Unknown");
+    expect(container).toHaveTextContent("unknown");
     expect(container).toHaveTextContent("zero: 0.00");
   });
 });

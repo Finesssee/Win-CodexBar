@@ -152,7 +152,7 @@ function LocalUsageBlock({
                 height: `${point.value == null || maxCost <= 0 ? 1 : Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
                 opacity: point.value == null ? 0 : undefined,
               }}
-              title={`${point.date}: ${point.value == null ? "Unknown" : formatCurrency(point.value, "USD")}`}
+              title={point.value == null ? point.date : `${point.date}: ${formatCurrency(point.value, "USD")}`}
             />
           ))}
         </div>

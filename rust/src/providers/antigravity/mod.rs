@@ -314,6 +314,17 @@ impl AntigravityProvider {
     /// v0.56.0: prefer the quota-summary endpoint so the 5-hour and weekly
     /// lanes can be resolved independently across model families. The legacy
     /// model-quota payload remains the compatibility fallback.
+    fn with_cadence_labels(mut usage: UsageSnapshot) -> UsageSnapshot {
+        if usage
+            .secondary
+            .as_ref()
+            .is_some_and(|window| window.window_minutes == Some(7 * 24 * 60))
+        {
+            usage.secondary_label = Some("Weekly".to_string());
+        }
+        usage
+    }
+
     async fn fetch_user_status(&self) -> Result<UsageSnapshot, ProviderError> {
         let process_info = Self::detect_process_info()?;
         let api_port = Self::find_api_port(process_info.extension_port, process_info.pid).await?;
@@ -619,7 +630,10 @@ impl Provider for AntigravityProvider {
         tracing::debug!("Fetching Antigravity usage via local probe");
 
         match self.fetch_user_status().await {
-            Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
+            Ok(usage) => Ok(ProviderFetchResult::new(
+                Self::with_cadence_labels(usage),
+                "local",
+            )),
             Err(e) => {
                 let count = local_sessions::offline_conversation_count();
                 if count > 0 {

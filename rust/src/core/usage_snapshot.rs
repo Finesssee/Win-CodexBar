@@ -85,6 +85,11 @@ pub struct UsageSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary: Option<RateWindow>,
 
+    /// Provider-resolved label for the secondary rate window when metadata
+    /// describes a model family rather than this snapshot's cadence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_label: Option<String>,
+
     /// Model-specific rate window (e.g., Opus quota for Claude)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_specific: Option<RateWindow>,
@@ -120,6 +125,7 @@ impl UsageSnapshot {
             primary,
             primary_label: None,
             secondary: None,
+            secondary_label: None,
             model_specific: None,
             tertiary: None,
             extra_rate_windows: Vec::new(),
@@ -139,6 +145,12 @@ impl UsageSnapshot {
     /// Builder pattern: set secondary window
     pub fn with_secondary(mut self, secondary: RateWindow) -> Self {
         self.secondary = Some(secondary);
+        self
+    }
+
+    /// Builder pattern: override the secondary window label for this snapshot.
+    pub fn with_secondary_label(mut self, label: impl Into<String>) -> Self {
+        self.secondary_label = Some(label.into());
         self
     }
 

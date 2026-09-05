@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn cadence_labels_are_owned_by_antigravity_snapshot() {
+    let usage = UsageSnapshot::new(RateWindow::new(10.0))
+        .with_secondary(RateWindow::new(20.0).with_window_minutes(7 * 24 * 60));
+    let usage = AntigravityProvider::with_cadence_labels(usage);
+    assert_eq!(usage.secondary_label.as_deref(), Some("Weekly"));
+}
+
+#[test]
 fn test_classify_model_families() {
     assert_eq!(classify_model("Claude 3.5 Sonnet"), ModelFamily::Claude);
     assert_eq!(classify_model("claude-4-opus"), ModelFamily::Claude);

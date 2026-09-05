@@ -341,15 +341,18 @@ impl CodexApi {
         if !credentials.is_external_oauth {
             return Ok(());
         }
-        if crate::settings::Settings::load().codex_external_oauth_sources_allowed {
-            return Ok(());
-        }
         let now = Utc::now();
+        // Upstream 0.56.0 #3221/#3222: native Codex auth.json JWT expiry is
+        // authoritative. CodexBar never refreshes these credentials itself;
+        // near-expiry native tokens must be rotated by the Codex CLI first.
         if let Some(expires_at) = credentials.access_token_expires_at {
             if expires_at - now > EXTERNAL_OAUTH_REFRESH_WINDOW {
                 return Ok(());
             }
             return Err(ProviderError::AuthRequired);
+        }
+        if crate::settings::Settings::load().codex_external_oauth_sources_allowed {
+            return Ok(());
         }
 
         let is_stale = credentials

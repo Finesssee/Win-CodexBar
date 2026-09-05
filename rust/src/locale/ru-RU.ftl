@@ -471,6 +471,7 @@ DetailPaceFarBehind = Далеко позади
 DetailPaceRunsOutIn = заканчивается в
 DetailPaceWillLastToReset = Продлится сброс
 DetailCostTitle = Стоимость
+ApiSpendTitle = API spend
 DetailCostUsed = Б/у
 DetailCostLimit = Лимит
 DetailCostRemaining = Осталось

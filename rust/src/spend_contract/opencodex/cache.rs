@@ -55,8 +55,11 @@ pub(super) fn load_entries_with_cache(
     source_path: &Path,
     cache_path: &Path,
 ) -> Option<Vec<OpenCodexEntry>> {
+    let mut latest_visible = None;
     for _ in 0..2 {
-        let identity = log_identity(source_path)?;
+        let Some(identity) = log_identity(source_path) else {
+            return latest_visible;
+        };
         let state = read_cache(cache_path);
         if let Some(state) = state.as_ref()
             && cursor_matches_source(&state.cursor, &identity, source_path)
@@ -77,6 +80,10 @@ pub(super) fn load_entries_with_cache(
                     parsed_offset: parsed.next_offset,
                     prefix_digest: prefix_digest(source_path, parsed.next_offset)?,
                 };
+                if !source_matches_snapshot(source_path, &identity) {
+                    continue;
+                }
+                latest_visible = Some(visible.clone());
                 match write_incremental_cache(
                     cache_path,
                     &state.cursor,
@@ -99,14 +106,13 @@ pub(super) fn load_entries_with_cache(
             parsed_offset: parsed.next_offset,
             prefix_digest: prefix_digest(source_path, parsed.next_offset)?,
         };
-        let current = log_identity(source_path)?;
-        if current.file_identity != identity.file_identity || current.size < identity.size {
+        if !source_matches_snapshot(source_path, &identity) {
             continue;
         }
         write_full_cache(cache_path, &cursor, &parsed.committed);
         return Some(visible);
     }
-    None
+    latest_visible
 }
 
 fn parse_segment(
@@ -155,6 +161,12 @@ fn parse_segment(
     })
 }
 
+fn source_matches_snapshot(source_path: &Path, identity: &LogIdentity) -> bool {
+    log_identity(source_path).is_some_and(|current| {
+        current.file_identity == identity.file_identity && current.size >= identity.size
+    })
+}
+
 fn cursor_matches_source(cursor: &ParseCursor, identity: &LogIdentity, source_path: &Path) -> bool {
     cursor.source_path == identity.source_path
         && cursor.file_identity == identity.file_identity
@@ -179,7 +191,7 @@ fn dedup_entries(entries: Vec<OpenCodexEntry>) -> Vec<OpenCodexEntry> {
 
 fn cache_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|root| {
-        root.join("openCodexBar")
+        root.join("CodexBar")
             .join("opencodex")
             .join("usage-cache-v2.sqlite")
     })
@@ -401,6 +413,10 @@ mod tests {
         assert_ne!(
             identity_before.file_identity, identity_after.file_identity,
             "re-created file must get a new file identity so the cache cursor is invalidated"
+        );
+        assert!(
+            !source_matches_snapshot(&log_path, &identity_before),
+            "a replacement must be rejected before incremental cache commit"
         );
         assert!(identity_after.size >= identity_before.size);
     }

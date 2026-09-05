@@ -162,7 +162,6 @@ pub(super) fn inventory(
     let mut credits = reset
         .credits
         .iter()
-        .filter(|credit| credit_is_available(credit))
         .filter_map(|credit| credit_identity(credit, observed_at))
         .collect::<Vec<_>>();
     credits.sort_by(|left, right| {
@@ -172,7 +171,11 @@ pub(super) fn inventory(
             .then_with(|| left.status.cmp(&right.status))
             .then_with(|| left.expires_at.cmp(&right.expires_at))
     });
-    if reset.available_count > 0 && credits.len() != usize::try_from(reset.available_count).ok()? {
+    let available = credits
+        .iter()
+        .filter(|credit| credit_identity_is_available(credit))
+        .count();
+    if available != usize::try_from(reset.available_count).ok()? {
         return None;
     }
     Some(CreditInventory {
@@ -181,11 +184,8 @@ pub(super) fn inventory(
     })
 }
 
-fn credit_is_available(credit: &ResetCredit) -> bool {
-    credit
-        .status
-        .as_deref()
-        .is_none_or(|status| status.is_empty() || status.eq_ignore_ascii_case("available"))
+fn credit_identity_is_available(credit: &CreditIdentity) -> bool {
+    credit.status.is_empty() || credit.status.eq_ignore_ascii_case("available")
 }
 
 fn credit_identity(credit: &ResetCredit, observed_at: DateTime<Utc>) -> Option<CreditIdentity> {
@@ -578,6 +578,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inventory_retains_consumed_status_rows_but_counts_only_available_credits() {
+        let reset = ResetCredits {
+            available_count: 1,
+            credits: vec![
+                ResetCredit {
+                    id: Some("available-a".into()),
+                    reset_type: Some("weekly".into()),
+                    status: Some("available".into()),
+                    expires_at: None,
+                },
+                ResetCredit {
+                    id: Some("redeeming-b".into()),
+                    reset_type: Some("weekly".into()),
+                    status: Some("redeeming".into()),
+                    expires_at: None,
+                },
+                ResetCredit {
+                    id: Some("redeemed-c".into()),
+                    reset_type: Some("weekly".into()),
+                    status: Some("redeemed".into()),
+                    expires_at: None,
+                },
+            ],
+        };
+        let inventory = inventory(Some(&reset), now()).expect("credit inventory");
+        assert_eq!(inventory.available_count, 1);
+        assert_eq!(inventory.credits.len(), 3);
+        assert!(
+            inventory
+                .credits
+                .iter()
+                .any(|credit| credit.status == "redeeming")
+        );
+        assert!(
+            inventory
+                .credits
+                .iter()
+                .any(|credit| credit.status == "redeemed")
+        );
+    }
     #[test]
     fn early_low_usage_requires_confirmation_without_spending_credit() {
         let mut state = baseline();

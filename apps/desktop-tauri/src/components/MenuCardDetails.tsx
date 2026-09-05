@@ -546,7 +546,7 @@ export default function MenuCardDetails({
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
-              ? "API spend"
+              ? t("ApiSpendTitle")
               : provider.cost.balance != null && provider.cost.limit == null
                 ? provider.cost.period || t("CreditsLabel")
               : `${t("DetailCostTitle")} — ${provider.cost.period}`}

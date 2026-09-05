@@ -129,8 +129,24 @@ impl CodexApi {
                 Ok((usage, first_cost))
             }
             weekly_reset::InitialDecision::RequiresConfirmation => {
+                let confirmation = self.fetch_usage_once(&creds, &base_url).await;
                 let (confirmation_usage, confirmation_cost, confirmation_credits) =
-                    self.fetch_usage_once(&creds, &base_url).await?;
+                    match confirmation {
+                        Ok(value) => value,
+                        Err(error) => {
+                            tracing::debug!(
+                                %error,
+                                "Codex weekly reset confirmation failed; preserving first successful usage"
+                            );
+                            let result = Self::preserve_after_confirmation_failure(
+                                &state,
+                                first_usage,
+                                first_cost,
+                            );
+                            weekly_reset::save(&scope, &state);
+                            return Ok(result);
+                        }
+                    };
                 let confirmation_inventory =
                     weekly_reset::inventory(confirmation_credits.as_ref(), Utc::now());
                 match weekly_reset::confirmation_decision(
@@ -159,6 +175,17 @@ impl CodexApi {
                 }
             }
         }
+    }
+
+    fn preserve_after_confirmation_failure(
+        state: &weekly_reset::AccountState,
+        first_usage: UsageSnapshot,
+        first_cost: Option<CostSnapshot>,
+    ) -> (UsageSnapshot, Option<CostSnapshot>) {
+        (
+            weekly_reset::preserve_weekly(state, first_usage),
+            first_cost,
+        )
     }
 
     async fn fetch_usage_once(
@@ -338,27 +365,32 @@ impl CodexApi {
     /// not an API key). "Stale" means the CLI has not refreshed the token
     /// recently (no `last_refresh`, or older than the staleness window).
     fn enforce_external_oauth_gate(credentials: &CodexCredentials) -> Result<(), ProviderError> {
+        Self::enforce_external_oauth_gate_at(
+            credentials,
+            crate::settings::Settings::load().codex_external_oauth_sources_allowed,
+            Utc::now(),
+        )
+    }
+
+    fn enforce_external_oauth_gate_at(
+        credentials: &CodexCredentials,
+        external_sources_allowed: bool,
+        now: DateTime<Utc>,
+    ) -> Result<(), ProviderError> {
         if !credentials.is_external_oauth {
             return Ok(());
         }
-        let now = Utc::now();
-        // Upstream 0.56.0 #3221/#3222: native Codex auth.json JWT expiry is
-        // authoritative. CodexBar never refreshes these credentials itself;
-        // near-expiry native tokens must be rotated by the Codex CLI first.
-        if let Some(expires_at) = credentials.access_token_expires_at {
-            if expires_at - now > EXTERNAL_OAUTH_REFRESH_WINDOW {
-                return Ok(());
+        if !external_sources_allowed {
+            let is_stale = credentials
+                .last_refresh
+                .is_none_or(|last| now - last > EXTERNAL_OAUTH_STALENESS_WINDOW);
+            if is_stale {
+                return Err(ProviderError::AuthRequired);
             }
-            return Err(ProviderError::AuthRequired);
         }
-        if crate::settings::Settings::load().codex_external_oauth_sources_allowed {
-            return Ok(());
-        }
-
-        let is_stale = credentials
-            .last_refresh
-            .is_none_or(|last| now - last > EXTERNAL_OAUTH_STALENESS_WINDOW);
-        if is_stale {
+        if let Some(expires_at) = credentials.access_token_expires_at
+            && expires_at - now <= EXTERNAL_OAUTH_REFRESH_WINDOW
+        {
             return Err(ProviderError::AuthRequired);
         }
         Ok(())
@@ -1782,6 +1814,15 @@ mod tests {
     // ── Upstream 0.50.1 #2944: external OAuth source gate ──────────────────
 
     #[test]
+    fn confirmation_failure_fallback_keeps_first_successful_usage_and_cost() {
+        let state = weekly_reset::AccountState::default();
+        let first = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(RateWindow::new(0.5));
+        let cost = Some(CostSnapshot::new(3.25, "USD", "Monthly"));
+        let (usage, kept_cost) = CodexApi::preserve_after_confirmation_failure(&state, first, cost);
+        assert!((usage.secondary.expect("weekly").used_percent - 0.5).abs() < f64::EPSILON);
+        assert_eq!(kept_cost.expect("cost").used, 3.25);
+    }
+    #[test]
     fn api_key_credentials_are_not_external_oauth() {
         let creds = CodexApi::parse_credentials_json(r#"{"OPENAI_API_KEY": "sk-test"}"#)
             .expect("credentials");
@@ -1865,8 +1906,9 @@ mod tests {
     }
 
     #[test]
-    fn external_oauth_gate_prefers_future_jwt_expiry_over_old_refresh_timestamp() {
-        let future = Utc::now() + chrono::Duration::hours(2);
+    fn external_oauth_staleness_gate_precedes_future_jwt_expiry() {
+        let now = Utc::now();
+        let future = now + chrono::Duration::hours(2);
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(format!(r#"{{"exp":{}}}"#, future.timestamp()));
         let token = format!("header.{payload}.signature");
@@ -1875,7 +1917,10 @@ mod tests {
         );
         let creds = CodexApi::parse_credentials_json(&json).expect("credentials");
         assert!(creds.access_token_expires_at.is_some());
-        assert!(CodexApi::enforce_external_oauth_gate(&creds).is_ok());
+        let err = CodexApi::enforce_external_oauth_gate_at(&creds, false, now)
+            .expect_err("stale external OAuth must not be revived by JWT expiry");
+        assert!(matches!(err, ProviderError::AuthRequired));
+        assert!(CodexApi::enforce_external_oauth_gate_at(&creds, true, now).is_ok());
     }
 
     #[test]

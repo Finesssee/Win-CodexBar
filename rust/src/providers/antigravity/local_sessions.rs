@@ -8,6 +8,7 @@ use serde_json::Value;
 
 const MAX_SESSION_FILES: usize = 2048;
 const MAX_SESSION_FILE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SESSION_FILE_BYTES_U64: u64 = 32 * 1024 * 1024;
 const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -73,11 +74,11 @@ pub fn summarize(days: u32) -> LocalSessionSummary {
     match super::local_sqlite::summarize(&context.database_roots, now, days) {
         super::local_sqlite::SQLiteScan::Summary(summary) => summary,
         super::local_sqlite::SQLiteScan::NoDatabases => {
-            let paths = tokscale_paths(&context.tokscale_sessions);
+            let (paths, truncated) = tokscale_paths(&context.tokscale_sessions);
             if paths.is_empty() {
                 LocalSessionSummary::default()
             } else {
-                summarize_paths(&paths, now, days)
+                summarize_paths(&paths, now, days, truncated)
             }
         }
     }
@@ -105,7 +106,7 @@ fn offline_conversation_count_context(context: &ScanContext) -> usize {
     if db_count > 0 {
         return db_count;
     }
-    tokscale_paths(&context.tokscale_sessions).len()
+    tokscale_paths(&context.tokscale_sessions).0.len()
 }
 
 fn count_extension(root: &Path, extension: &str) -> usize {
@@ -119,9 +120,9 @@ fn count_extension(root: &Path, extension: &str) -> usize {
         .count()
 }
 
-fn tokscale_paths(base: &Path) -> Vec<PathBuf> {
+fn tokscale_paths(base: &Path) -> (Vec<PathBuf>, bool) {
     let Ok(entries) = fs::read_dir(base) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let mut paths: Vec<_> = entries
         .flatten()
@@ -133,27 +134,51 @@ fn tokscale_paths(base: &Path) -> Vec<PathBuf> {
         })
         .collect();
     paths.sort();
-    if paths.len() > MAX_SESSION_FILES {
+    let truncated = paths.len() > MAX_SESSION_FILES;
+    if truncated {
         paths.drain(..paths.len() - MAX_SESSION_FILES);
     }
-    paths
+    (paths, truncated)
 }
 
-fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> LocalSessionSummary {
+fn summarize_paths(
+    paths: &[PathBuf],
+    now: DateTime<Utc>,
+    days: u32,
+    truncated: bool,
+) -> LocalSessionSummary {
     let first_day = now.with_timezone(&Local).date_naive()
         - Duration::days(i64::from(days.clamp(1, 365).saturating_sub(1)));
     let mut total_tokens = 0_u64;
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();
+    let mut complete = !truncated;
 
     for path in paths.iter().take(MAX_SESSION_FILES) {
-        let Ok(file) = File::open(path) else {
-            continue;
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
         };
+        match file.metadata() {
+            Ok(metadata) if metadata.len() > MAX_SESSION_FILE_BYTES_U64 => complete = false,
+            Ok(_) => {}
+            Err(_) => complete = false,
+        }
         let mut reader = BufReader::new(file);
         let mut remaining = MAX_SESSION_FILE_BYTES;
         let mut path_had_usage = false;
-        while let Ok(Some(line)) = read_bounded_jsonl_line(&mut reader, &mut remaining) {
+        loop {
+            let line = match read_bounded_jsonl_line(&mut reader, &mut remaining) {
+                Ok(Some(line)) => line,
+                Ok(None) => break,
+                Err(_) => {
+                    complete = false;
+                    break;
+                }
+            };
             if line.is_empty() {
                 continue;
             }
@@ -210,8 +235,10 @@ fn summarize_paths(paths: &[PathBuf], now: DateTime<Utc>, days: u32) -> LocalSes
         session_count: sessions_with_usage.len(),
         coverage: if paths.is_empty() {
             LocalHistoryCoverage::Unavailable
-        } else {
+        } else if complete {
             LocalHistoryCoverage::Complete
+        } else {
+            LocalHistoryCoverage::Partial
         },
     }
 }
@@ -312,11 +339,27 @@ mod tests {
             "{\"type\":\"usage\",\"response_id\":\"r1\",\"timestamp\":1787572800000,\"input\":100,\"output\":20}\n"
         )).unwrap();
         let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
-        let summary = summarize_paths(&[path], now, 7);
+        let summary = summarize_paths(&[path], now, 7, false);
         assert_eq!(summary.total_tokens, 135);
         assert_eq!(summary.session_count, 1);
     }
 
+    #[test]
+    fn truncated_or_unreadable_tokscale_history_is_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-a.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"usage\",\"timestamp\":1787572800000,\"input\":10}\n",
+        )
+        .unwrap();
+        let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
+        let truncated = summarize_paths(std::slice::from_ref(&path), now, 7, true);
+        assert_eq!(truncated.coverage, LocalHistoryCoverage::Partial);
+
+        let missing = summarize_paths(&[dir.path().join("missing.jsonl")], now, 7, false);
+        assert_eq!(missing.coverage, LocalHistoryCoverage::Partial);
+    }
     #[test]
     fn offline_count_prefers_cli_and_app_db_artifacts_then_tokscale() {
         let dir = tempfile::tempdir().unwrap();
@@ -360,7 +403,7 @@ mod tests {
         )
         .unwrap();
         let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
-        let summary = summarize_paths(&[path], now, 7);
+        let summary = summarize_paths(&[path], now, 7, false);
         assert_eq!(summary.total_tokens, 15);
         assert_eq!(summary.session_count, 1);
     }
@@ -378,7 +421,7 @@ mod tests {
         text.push('\n');
         fs::write(&path, text).unwrap();
         let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
-        let summary = summarize_paths(&[path], now, 7);
+        let summary = summarize_paths(&[path], now, 7, false);
         assert_eq!(summary.total_tokens, 15);
         assert_eq!(summary.session_count, 1);
     }

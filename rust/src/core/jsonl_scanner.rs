@@ -1156,9 +1156,11 @@ impl JsonlScanner {
                 cached_tokens = cached_tokens.saturating_add(cached);
                 output_tokens = output_tokens.saturating_add(output);
 
-                if CostUsagePricing::is_codex_unattributed_model(model)
-                    || !CostUsagePricing::counts_toward_codex_subscription(model)
-                {
+                if CostUsagePricing::is_codex_unattributed_model(model) {
+                    partial = true;
+                    continue;
+                }
+                if !CostUsagePricing::counts_toward_codex_subscription(model) {
                     continue;
                 }
                 let priced = pricing_day

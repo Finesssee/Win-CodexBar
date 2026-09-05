@@ -544,6 +544,7 @@ DetailPaceFarBehind = Far behind
 DetailPaceRunsOutIn = Runs out in
 DetailPaceWillLastToReset = Will last to reset
 DetailCostTitle = Cost
+ApiSpendTitle = API spend
 DetailCostUsed = Used
 DetailCostLimit = Limit
 DetailCostRemaining = Remaining

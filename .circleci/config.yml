@@ -191,6 +191,66 @@ jobs:
             - target
 
 
+  package-manager-benchmark:
+    parameters:
+      manager:
+        type: enum
+        enum: ["pnpm-11.24", "pnpm-11.25", "bun"]
+    executor:
+      name: win/default
+      size: medium
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore << parameters.manager >> dependency cache
+          keys:
+            - pm-benchmark-v1-<< parameters.manager >>-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}-{{ checksum "apps/desktop-tauri/bun.lock" }}
+            - pm-benchmark-v1-<< parameters.manager >>-
+      - run:
+          name: Benchmark << parameters.manager >>
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          no_output_timeout: 20m
+          command: |
+            $ErrorActionPreference = 'Stop'
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-package-manager-benchmark.ps1') -Manager '<< parameters.manager >>'
+            if ($LASTEXITCODE -ne 0) { throw "package-manager benchmark failed with exit code $LASTEXITCODE" }
+      - save_cache:
+          name: Save << parameters.manager >> dependency cache
+          key: pm-benchmark-v1-<< parameters.manager >>-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}-{{ checksum "apps/desktop-tauri/bun.lock" }}
+          paths:
+            - .ci-pm-cache
+      - store_artifacts:
+          path: benchmark-results
+          destination: package-manager-benchmark/<< parameters.manager >>
+
+  bun-only-runtime-benchmark:
+    executor:
+      name: win/default
+      size: medium
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore Bun-only runtime cache
+          keys:
+            - bun-only-runtime-v1-{{ checksum "apps/desktop-tauri/bun.lock" }}
+            - bun-only-runtime-v1-
+      - run:
+          name: Benchmark Bun-only runtime
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          no_output_timeout: 20m
+          command: |
+            $ErrorActionPreference = 'Stop'
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-bun-only-runtime-benchmark.ps1')
+            if ($LASTEXITCODE -ne 0) { throw "Bun-only runtime benchmark harness failed with exit code $LASTEXITCODE" }
+      - save_cache:
+          name: Save Bun-only runtime cache
+          key: bun-only-runtime-v1-{{ checksum "apps/desktop-tauri/bun.lock" }}
+          paths:
+            - .ci-bun-runtime-cache
+      - store_artifacts:
+          path: bun-runtime-results
+          destination: bun-only-runtime-benchmark
+
 workflows:
   release:
     jobs:
@@ -219,6 +279,39 @@ workflows:
     jobs:
       - pr-check:
           filters:
+            branches:
+              ignore:
+                - experiment/bun-pnpm-circleci-20260906
             tags:
               ignore:
                 - /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+  pm-benchmark:
+    jobs:
+      - package-manager-benchmark:
+          name: pm-benchmark-pnpm-11-24
+          manager: pnpm-11.24
+          filters: &pm-benchmark-filter
+            branches:
+              only:
+                - experiment/bun-pnpm-circleci-completed
+            tags:
+              ignore: /.*/
+      - package-manager-benchmark:
+          name: pm-benchmark-pnpm-11-25
+          manager: pnpm-11.25
+          filters: *pm-benchmark-filter
+      - package-manager-benchmark:
+          name: pm-benchmark-bun
+          manager: bun
+          filters: *pm-benchmark-filter
+
+  bun-only-runtime:
+    jobs:
+      - bun-only-runtime-benchmark:
+          filters:
+            branches:
+              only:
+                - experiment/bun-pnpm-circleci-20260906
+            tags:
+              ignore: /.*/

@@ -199,7 +199,7 @@ async fn collect_costs() -> HashMap<String, RawCostPayload> {
             cost_scanner::get_daily_cost_history(provider, 30)
                 .into_iter()
                 .find(|(day, _)| day == &today)
-                .map(|(_, cost)| cost)
+                .and_then(|(_, cost)| cost)
         };
         let mut costs = HashMap::new();
         costs.insert(

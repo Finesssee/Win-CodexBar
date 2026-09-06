@@ -94,6 +94,69 @@ pub(super) enum DelayedDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetDiagnosticReason {
+    CandidateCreated,
+    SourceNotExactOAuth,
+    MissingPreviousSnapshot,
+    MissingWeeklyWindow,
+    ResetThresholdMismatch,
+    InvalidResetBoundary,
+    InconsistentResetBoundary,
+    UnsupportedResetBoundary,
+    PlanMismatch,
+    MissingCreditInventory,
+    ChangedCreditInventory,
+    EvidenceVersionMismatch,
+    FutureCandidate,
+    ExpiredCandidate,
+    StaleObservation,
+    MinimumDelay,
+    ConfirmedObservation,
+    StoreUnavailable,
+    StoreRequested,
+}
+
+impl ResetDiagnosticReason {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::CandidateCreated => "candidateCreated",
+            Self::SourceNotExactOAuth => "sourceNotExactOAuth",
+            Self::MissingPreviousSnapshot => "missingPreviousSnapshot",
+            Self::MissingWeeklyWindow => "missingWeeklyWindow",
+            Self::ResetThresholdMismatch => "resetThresholdMismatch",
+            Self::InvalidResetBoundary => "invalidResetBoundary",
+            Self::InconsistentResetBoundary => "inconsistentResetBoundary",
+            Self::UnsupportedResetBoundary => "unsupportedResetBoundary",
+            Self::PlanMismatch => "planMismatch",
+            Self::MissingCreditInventory => "missingCreditInventory",
+            Self::ChangedCreditInventory => "changedCreditInventory",
+            Self::EvidenceVersionMismatch => "evidenceVersionMismatch",
+            Self::FutureCandidate => "futureCandidate",
+            Self::ExpiredCandidate => "expiredCandidate",
+            Self::StaleObservation => "staleObservation",
+            Self::MinimumDelay => "minimumDelay",
+            Self::ConfirmedObservation => "confirmedObservation",
+            Self::StoreUnavailable => "storeUnavailable",
+            Self::StoreRequested => "storeRequested",
+        }
+    }
+}
+
+fn log_reset_diagnostic(
+    stage: &'static str,
+    decision: &'static str,
+    reason: ResetDiagnosticReason,
+) {
+    tracing::debug!(
+        target: "codex_weekly_reset",
+        stage,
+        decision,
+        reason = reason.code(),
+        "Codex weekly-reset decision"
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResetCreditEvidence {
     None,
     Consumed,
@@ -128,6 +191,11 @@ pub(super) fn load(scope: &str) -> AccountState {
 
 pub(super) fn save(scope: &str, state: &AccountState) {
     let Some(path) = state_path() else {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     };
     let mut file = crate::secure_file::read_string(&path)
@@ -140,13 +208,28 @@ pub(super) fn save(scope: &str, state: &AccountState) {
         });
     file.accounts.insert(scope.to_string(), state.clone());
     let Some(parent) = path.parent() else {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     };
     if std::fs::create_dir_all(parent).is_err() {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     }
     if let Ok(raw) = serde_json::to_string_pretty(&file) {
         let _written = crate::secure_file::write_string(&path, &raw);
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "requested",
+            ResetDiagnosticReason::StoreRequested,
+        );
     }
 }
 
@@ -359,32 +442,88 @@ fn maybe_store_delayed_candidate(
     exact_oauth: bool,
     observed_at: DateTime<Utc>,
 ) {
-    if !exact_oauth || !plans_match(state.plan.as_deref(), initial, confirmation) {
+    if !exact_oauth {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::SourceNotExactOAuth,
+        );
+        return;
+    }
+    if !plans_match(state.plan.as_deref(), initial, confirmation) {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::PlanMismatch,
+        );
         return;
     }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingPreviousSnapshot,
+        );
         return;
     };
     let Some(initial_weekly) = weekly(initial) else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return;
     };
     let Some(confirmation_weekly) = weekly(confirmation) else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return;
     };
     let Some(previous_inventory) = state.credit_inventory.as_ref() else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingCreditInventory,
+        );
         return;
     };
     let Some(confirmation_inventory) = confirmation_inventory else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingCreditInventory,
+        );
         return;
     };
     if previous_inventory.available_count == 0 || previous_inventory != confirmation_inventory {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::ChangedCreditInventory,
+        );
         return;
     }
     if !supported_delayed_boundary(previous_weekly, initial_weekly)
         || !supported_delayed_boundary(previous_weekly, confirmation_weekly)
-        || boundary_distance_seconds(initial_weekly, confirmation_weekly).abs()
-            >= RESET_TOLERANCE_SECONDS
     {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::UnsupportedResetBoundary,
+        );
+        return;
+    }
+    if boundary_distance_seconds(initial_weekly, confirmation_weekly).abs()
+        >= RESET_TOLERANCE_SECONDS
+    {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::InconsistentResetBoundary,
+        );
         return;
     }
     state.candidate = Some(DelayedCandidate {
@@ -396,6 +535,11 @@ fn maybe_store_delayed_candidate(
         plan: confirmation.login_method.clone(),
         inventory: confirmation_inventory.clone(),
     });
+    log_reset_diagnostic(
+        "candidateCreation",
+        "created",
+        ResetDiagnosticReason::CandidateCreated,
+    );
 }
 
 fn delayed_candidate_decision(
@@ -409,36 +553,126 @@ fn delayed_candidate_decision(
     let age = observed_at
         .signed_duration_since(candidate.created_at)
         .num_seconds();
-    if candidate.evidence_version != EVIDENCE_VERSION
-        || !(0..=CANDIDATE_MAXIMUM_AGE_SECONDS).contains(&age)
-    {
+    if candidate.evidence_version != EVIDENCE_VERSION {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::EvidenceVersionMismatch,
+        );
         return DelayedDecision::Discard;
     }
-    if !exact_oauth || !plans_match(state.plan.as_deref(), current, current) {
+    if age < 0 {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::FutureCandidate,
+        );
+        return DelayedDecision::Discard;
+    }
+    if age > CANDIDATE_MAXIMUM_AGE_SECONDS {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ExpiredCandidate,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !exact_oauth {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::SourceNotExactOAuth,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !plans_match(state.plan.as_deref(), current, current) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::PlanMismatch,
+        );
         return DelayedDecision::Discard;
     }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::MissingPreviousSnapshot,
+        );
         return DelayedDecision::Discard;
     };
     let Some(current_weekly) = weekly(current) else {
-        // Later v0.56.2 explicitly protects candidate evidence through credits-only
-        // refreshes. Keeping it here makes that follow-up an invariant, not a fork.
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "retain",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return DelayedDecision::Retain;
     };
     if previous_weekly.used_percent <= RESET_THRESHOLD
         || current_weekly.used_percent > RESET_THRESHOLD
-        || current.updated_at <= candidate.snapshot_updated_at
-        || !is_valid_boundary(current_weekly, current.updated_at)
-        || boundary_distance_seconds(&candidate.weekly, current_weekly).abs()
-            >= RESET_TOLERANCE_SECONDS
-        || !supported_delayed_boundary(previous_weekly, current_weekly)
-        || current_inventory != Some(&candidate.inventory)
     {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ResetThresholdMismatch,
+        );
+        return DelayedDecision::Discard;
+    }
+    if current.updated_at <= candidate.snapshot_updated_at {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::StaleObservation,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !is_valid_boundary(current_weekly, current.updated_at) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::InvalidResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() >= RESET_TOLERANCE_SECONDS
+    {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::InconsistentResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !supported_delayed_boundary(previous_weekly, current_weekly) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::UnsupportedResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if current_inventory != Some(&candidate.inventory) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ChangedCreditInventory,
+        );
         return DelayedDecision::Discard;
     }
     if age >= CANDIDATE_MINIMUM_AGE_SECONDS {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "publish",
+            ResetDiagnosticReason::ConfirmedObservation,
+        );
         DelayedDecision::Publish
     } else {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "retain",
+            ResetDiagnosticReason::MinimumDelay,
+        );
         DelayedDecision::Retain
     }
 }
@@ -536,6 +770,33 @@ fn reset_credit_evidence(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn reset_diagnostic_codes_are_fixed_and_redacted() {
+        let codes = [
+            ResetDiagnosticReason::CandidateCreated.code(),
+            ResetDiagnosticReason::SourceNotExactOAuth.code(),
+            ResetDiagnosticReason::ExpiredCandidate.code(),
+            ResetDiagnosticReason::ChangedCreditInventory.code(),
+            ResetDiagnosticReason::StoreRequested.code(),
+        ];
+        assert_eq!(
+            codes,
+            [
+                "candidateCreated",
+                "sourceNotExactOAuth",
+                "expiredCandidate",
+                "changedCreditInventory",
+                "storeRequested",
+            ]
+        );
+        assert!(codes.iter().all(|code| {
+            !code.contains('@')
+                && !code.contains(':')
+                && !code.contains('/')
+                && !code.contains('\\')
+        }));
+    }
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 8, 25, 12, 0, 0).unwrap()

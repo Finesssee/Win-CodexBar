@@ -113,7 +113,8 @@ fn build_usage_spend_summary_cached(
     selected_days: u32,
     force_refresh: bool,
 ) -> Result<UsageSpendSummary, String> {
-    let key = usage_spend_cache_key(cached, selected_days);
+    let settings = codexbar::settings::Settings::load();
+    let key = usage_spend_cache_key(cached, selected_days, &settings);
     let mut guard = usage_spend_summary_cache()
         .lock()
         .map_err(|error| error.to_string())?;
@@ -125,7 +126,7 @@ fn build_usage_spend_summary_cached(
     }
     // Hold the cache mutex while building: callers for the same app revision
     // coalesce behind this single scan instead of starting parallel rescans.
-    let summary = build_usage_spend_summary(cached, selected_days);
+    let summary = build_usage_spend_summary(cached, selected_days, &settings);
     *guard = Some(CachedUsageSpendSummary {
         key,
         summary: summary.clone(),
@@ -133,8 +134,27 @@ fn build_usage_spend_summary_cached(
     Ok(summary)
 }
 
-fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -> String {
-    let settings = codexbar::settings::Settings::load();
+fn usage_spend_cache_key(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+    settings: &codexbar::settings::Settings,
+) -> String {
+    usage_spend_cache_key_with_privacy(
+        cached,
+        selected_days,
+        settings.open_codex_usage_logs_enabled,
+        settings.hide_native_codex_cost_when_open_codex_present,
+        settings.hide_personal_info,
+    )
+}
+
+fn usage_spend_cache_key_with_privacy(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+    include_opencodex: bool,
+    hide_native: bool,
+    hide_personal_info: bool,
+) -> String {
     let mut revisions: Vec<String> = cached
         .iter()
         .map(|snapshot| {
@@ -162,11 +182,12 @@ fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -
         .collect();
     revisions.sort();
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         chrono::Local::now().date_naive(),
         selected_days,
-        settings.open_codex_usage_logs_enabled,
-        settings.hide_native_codex_cost_when_open_codex_present,
+        include_opencodex,
+        hide_native,
+        hide_personal_info,
         revisions.join(";")
     )
 }
@@ -174,22 +195,10 @@ fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -
 fn build_usage_spend_summary(
     cached: &[ProviderUsageSnapshot],
     selected_days: u32,
+    settings: &codexbar::settings::Settings,
 ) -> UsageSpendSummary {
-    let settings = codexbar::settings::Settings::load();
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
-
-    let codex_cache_status =
-        codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None);
-    let codex_stale = codex_cache_status.has_days && codex_cache_status.previous_report.is_some();
-    let codex_stale_updated_at = codex_stale
-        .then(|| {
-            codex_cache_status
-                .previous_report
-                .as_ref()
-                .and_then(|report| report.updated_at.clone())
-        })
-        .flatten();
 
     // Upstream 0.55.0 #3105: independent provider baselines load in parallel.
     // Keep each provider's 7d/30d scans serial so they can safely share that
@@ -214,11 +223,21 @@ fn build_usage_spend_summary(
             )
         });
 
+    let codex_stale = !codex_30_summary.history_coverage_established;
+    let codex_stale_updated_at = codex_stale
+        .then(|| {
+            codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None)
+                .previous_report
+                .and_then(|report| report.updated_at)
+        })
+        .flatten();
+
     let codex_7_contract = build_local_spend_contract_from_summary(
         "codex",
         7,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         codex_7_summary.clone(),
     );
     let codex_30_contract = build_local_spend_contract_from_summary(
@@ -226,6 +245,7 @@ fn build_usage_spend_summary(
         30,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         codex_30_summary.clone(),
     );
 
@@ -415,6 +435,7 @@ fn build_usage_spend_summary(
         history_days,
         include_opencodex,
         hide_native,
+        settings.hide_personal_info,
         selected_summary,
     );
     UsageSpendSummary { rows, contract }
@@ -505,5 +526,17 @@ fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
         },
         refreshing: false,
         stale_updated_at: None,
+    }
+}
+
+#[cfg(test)]
+mod cache_key_tests {
+    use super::*;
+
+    #[test]
+    fn privacy_mode_is_part_of_usage_spend_cache_identity() {
+        let public = usage_spend_cache_key_with_privacy(&[], 30, false, false, false);
+        let private = usage_spend_cache_key_with_privacy(&[], 30, false, false, true);
+        assert_ne!(public, private);
     }
 }

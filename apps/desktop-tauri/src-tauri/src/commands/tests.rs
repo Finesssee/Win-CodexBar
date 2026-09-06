@@ -1117,16 +1117,16 @@ fn chart_data_serde_roundtrip_preserves_fields() {
         cost_history: vec![
             DailyCostPoint {
                 date: "2025-01-01".into(),
-                value: 1.25,
+                value: Some(1.25),
             },
             DailyCostPoint {
                 date: "2025-01-02".into(),
-                value: 0.0,
+                value: Some(0.0),
             },
         ],
         credits_history: vec![DailyCostPoint {
             date: "2025-01-01".into(),
-            value: 42.0,
+            value: Some(42.0),
         }],
         usage_breakdown: vec![DailyUsageBreakdown {
             day: "2025-01-01".into(),
@@ -1169,7 +1169,7 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert_eq!(back.provider_id, "codex");
     assert_eq!(back.cost_history.len(), 2);
     assert_eq!(back.cost_history[0].date, "2025-01-01");
-    assert_eq!(back.credits_history[0].value, 42.0);
+    assert_eq!(back.credits_history[0].value, Some(42.0));
     assert_eq!(back.usage_breakdown[0].services.len(), 2);
     assert_eq!(back.usage_breakdown[0].total_credits_used, 13.5);
     assert_eq!(back.tokens_history[0].tokens, 123_456);

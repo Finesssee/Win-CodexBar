@@ -41,7 +41,11 @@ pub fn models_dev_target(model: &str, normalized: String) -> Option<(&'static st
         .any(|prefix| lower.starts_with(prefix))
     {
         "google"
-    } else if lower == "kimi-for-coding" || lower == "k3" || lower.starts_with("k3-") {
+    } else if lower == "kimi-for-coding"
+        || lower == "k3"
+        || lower == "k3[1m]"
+        || lower.starts_with("k3-")
+    {
         "kimi-for-coding"
     } else if lower.starts_with("kimi-") || lower.starts_with("moonshot-") {
         "moonshot"
@@ -56,6 +60,17 @@ pub fn models_dev_target(model: &str, normalized: String) -> Option<(&'static st
     Some((provider, normalized))
 }
 
+fn models_dev_targets(model: &str, normalized: String) -> Vec<(&'static str, String)> {
+    let Some(primary) = models_dev_target(model, normalized) else {
+        return Vec::new();
+    };
+    let mut targets = vec![primary.clone()];
+    if primary.0 == "kimi-for-coding" && primary.1.eq_ignore_ascii_case("k3[1m]") {
+        targets.push(("kimi-for-coding", "k3".to_string()));
+    }
+    targets
+}
+
 pub fn cost_usd(
     model: &str,
     normalized: String,
@@ -64,8 +79,9 @@ pub fn cost_usd(
     cache_write: i32,
     output: i32,
 ) -> Option<f64> {
-    let (provider, lookup_model) = models_dev_target(model, normalized)?;
-    let pricing = models_dev_pricing::lookup(provider, &lookup_model)?;
+    let pricing = models_dev_targets(model, normalized)
+        .into_iter()
+        .find_map(|(provider, lookup_model)| models_dev_pricing::lookup(provider, &lookup_model))?;
     let input = input.max(0);
     let cache_read = cache_read.max(0);
     let cache_write = cache_write.max(0);
@@ -118,6 +134,38 @@ pub fn cost_usd(
 }
 
 pub fn input_cost_per_token(model: &str, normalized: String) -> Option<f64> {
-    let (provider, lookup_model) = models_dev_target(model, normalized)?;
-    models_dev_pricing::lookup(provider, &lookup_model).map(|pricing| pricing.input_cost_per_token)
+    models_dev_targets(model, normalized)
+        .into_iter()
+        .find_map(|(provider, lookup_model)| models_dev_pricing::lookup(provider, &lookup_model))
+        .map(|pricing| pricing.input_cost_per_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kimi_context_alias_falls_back_only_inside_kimi_vendor() {
+        assert_eq!(
+            models_dev_targets("k3[1m]", "k3[1m]".to_string()),
+            vec![
+                ("kimi-for-coding", "k3[1m]".to_string()),
+                ("kimi-for-coding", "k3".to_string()),
+            ]
+        );
+        assert_eq!(
+            models_dev_targets(
+                "kimi-for-coding/k3[1m]",
+                "kimi-for-coding/k3[1m]".to_string()
+            ),
+            vec![
+                ("kimi-for-coding", "k3[1m]".to_string()),
+                ("kimi-for-coding", "k3".to_string()),
+            ]
+        );
+        assert_eq!(
+            models_dev_targets("moonshot/k3[1m]", "moonshot/k3[1m]".to_string()),
+            vec![("moonshot", "k3[1m]".to_string())]
+        );
+    }
 }

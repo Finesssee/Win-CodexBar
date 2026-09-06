@@ -64,7 +64,9 @@ codexbar cost
 codexbar cost -p codex -f json --pretty
 ```
 
-Claude/Codex costs come from local session logs. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
+Claude/Codex costs come from local session logs. Antigravity exposes local **token history only** through `cost`; dollar cost remains unknown rather than becoming a false `$0`. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
+
+Codex local-history scans use a 60-second scanner-side debounce for ordinary disk-cache reads. This is separate from the desktop provider refresh setting. With Adaptive refresh off, **Manual** (`refresh_interval_secs = 0`) disables the recurring desktop refresh timer, but it does not forbid startup/stale-aware reads, explicit refreshes, or pending Codex catch-up scans. Low Power Mode floors recurring automatic refreshes to 30 minutes; explicit/manual work remains immediate.
 
 ### Guard
 

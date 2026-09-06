@@ -7,6 +7,7 @@
 //! Team path: `GetSubscriptionSummary` / BssOpenAPI-V3 (+ optional sec_token).
 //! Personal/Solo path: OneConsole personal token-plan APIs (+ best-effort sec_token).
 
+mod cli;
 mod personal;
 mod region;
 
@@ -79,6 +80,11 @@ impl AlibabaTokenPlanProvider {
 
     fn resolve_region(ctx: &FetchContext) -> Region {
         Region::from_settings_value(ctx.api_region.as_deref())
+    }
+
+    async fn fetch_via_cli(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
+        let snapshot = cli::fetch_cli_usage(Self::resolve_region(ctx)).await?;
+        Self::snapshot_to_usage(snapshot)
     }
 
     async fn fetch_via_web(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
@@ -369,21 +375,34 @@ impl Provider for AlibabaTokenPlanProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
+            SourceMode::Auto => match self.fetch_via_cli(ctx).await {
+                Ok(usage) => Ok(ProviderFetchResult::new(usage, "cli")),
+                Err(_) => {
+                    let usage = self.fetch_via_web(ctx).await?;
+                    Ok(ProviderFetchResult::new(usage, "web"))
+                }
+            },
+            SourceMode::Cli => {
+                let usage = self.fetch_via_cli(ctx).await?;
+                Ok(ProviderFetchResult::new(usage, "cli"))
+            }
+            SourceMode::Web => {
                 let usage = self.fetch_via_web(ctx).await?;
                 Ok(ProviderFetchResult::new(usage, "web"))
             }
-            SourceMode::Cli | SourceMode::OAuth => {
-                Err(ProviderError::UnsupportedSource(ctx.source_mode))
-            }
+            SourceMode::OAuth => Err(ProviderError::UnsupportedSource(ctx.source_mode)),
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::Web]
+        vec![SourceMode::Auto, SourceMode::Cli, SourceMode::Web]
     }
 
     fn supports_web(&self) -> bool {
+        true
+    }
+
+    fn supports_cli(&self) -> bool {
         true
     }
 }

@@ -28,7 +28,7 @@ import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
-import { GrokUsageSourceSection } from "./sections/GrokUsageSourceSection";
+import { UsageSourceSection } from "./sections/UsageSourceSection";
 import { RegionSection } from "./sections/RegionSection";
 import { CodexUsageOptions } from "./sections/credentials/CodexUsageOptions";
 import { CodexAccountsSection } from "./sections/credentials/CodexAccountsSection";
@@ -302,19 +302,21 @@ export function ProviderDetailPane({
       <PaceSection pace={detail.pace} t={t} />
       <CostSection cost={detail.cost} t={t} />
 
-      <GrokUsageSourceSection
+      <UsageSourceSection
         providerId={detail.id}
         currentValue={detail.usageSource}
         t={t}
         onChanged={reload}
       />
-      <CookieSourceSection
-        providerId={detail.id}
-        currentValue={detail.cookieSource}
-        options={cookieOptions}
-        t={t}
-        onChanged={reload}
-      />
+      {!(detail.id === "alibabatokenplan" && detail.usageSource === "cli") && (
+        <CookieSourceSection
+          providerId={detail.id}
+          currentValue={detail.cookieSource}
+          options={cookieOptions}
+          t={t}
+          onChanged={reload}
+        />
+      )}
       <RegionSection
         providerId={detail.id}
         currentValue={detail.region}

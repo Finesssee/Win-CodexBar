@@ -2,7 +2,7 @@
 //!
 //! Uses OAuth tokens stored by the Codex CLI in ~/.codex/auth.json
 
-use super::pat;
+use super::{pat, weekly_reset};
 use crate::core::{
     CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
 };
@@ -89,19 +89,82 @@ impl CodexApi {
         Ok((usage, cost))
     }
 
-    /// Fetch usage information from Codex API
-    /// Returns (UsageSnapshot, optional CostSnapshot)
+    /// Fetch usage information from Codex API.
+    ///
+    /// v0.55.1 weekly-reset publication is account-scoped and persistent: a
+    /// suspicious early drop to <=1% is confirmed before it can replace the
+    /// last published weekly window, and reset-credit inventory is evidence
+    /// only. The app never redeems or decrements credits on observation.
     pub async fn fetch_usage(
         &self,
     ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
-        // Load credentials
         let creds = self.load_credentials()?;
-
-        // Build request URL
         let base_url = self.resolve_base_url();
-        let url = format!("{}{}", base_url, USAGE_PATH);
+        let auth_path = self.get_auth_path();
+        let scope = weekly_reset::scope_key(creds.account_id.as_deref(), &auth_path);
+        let exact_oauth = creds.is_external_oauth;
+        let mut state = weekly_reset::load(&scope);
 
-        // Build request
+        let (first_usage, first_cost, first_credits) =
+            self.fetch_usage_once(&creds, &base_url).await?;
+        let observed_at = Utc::now();
+        let first_inventory = weekly_reset::inventory(first_credits.as_ref(), observed_at);
+        match weekly_reset::initial_decision(
+            &mut state,
+            &first_usage,
+            first_inventory.as_ref(),
+            exact_oauth,
+            observed_at,
+        ) {
+            weekly_reset::InitialDecision::Publish => {
+                weekly_reset::commit_publication(&mut state, &first_usage, first_inventory);
+                weekly_reset::save(&scope, &state);
+                Ok((first_usage, first_cost))
+            }
+            weekly_reset::InitialDecision::Preserve => {
+                let usage = weekly_reset::preserve_weekly(&state, first_usage);
+                weekly_reset::save(&scope, &state);
+                Ok((usage, first_cost))
+            }
+            weekly_reset::InitialDecision::RequiresConfirmation => {
+                let (confirmation_usage, confirmation_cost, confirmation_credits) =
+                    self.fetch_usage_once(&creds, &base_url).await?;
+                let confirmation_inventory =
+                    weekly_reset::inventory(confirmation_credits.as_ref(), Utc::now());
+                match weekly_reset::confirmation_decision(
+                    &mut state,
+                    &first_usage,
+                    first_inventory.as_ref(),
+                    &confirmation_usage,
+                    confirmation_inventory.as_ref(),
+                    exact_oauth,
+                    observed_at,
+                ) {
+                    weekly_reset::ConfirmationDecision::Publish => {
+                        weekly_reset::commit_publication(
+                            &mut state,
+                            &confirmation_usage,
+                            confirmation_inventory,
+                        );
+                        weekly_reset::save(&scope, &state);
+                        Ok((confirmation_usage, confirmation_cost))
+                    }
+                    weekly_reset::ConfirmationDecision::Preserve => {
+                        let usage = weekly_reset::preserve_weekly(&state, first_usage);
+                        weekly_reset::save(&scope, &state);
+                        Ok((usage, first_cost))
+                    }
+                }
+            }
+        }
+    }
+
+    async fn fetch_usage_once(
+        &self,
+        creds: &CodexCredentials,
+        base_url: &str,
+    ) -> Result<(UsageSnapshot, Option<CostSnapshot>, Option<ResetCredits>), ProviderError> {
+        let url = format!("{}{}", base_url, USAGE_PATH);
         let mut request = self
             .client
             .get(&url)
@@ -109,40 +172,37 @@ impl CodexApi {
             .header("User-Agent", "CodexBar")
             .header("Accept", "application/json")
             .timeout(std::time::Duration::from_secs(30));
-
         if let Some(account_id) = &creds.account_id
             && !account_id.is_empty()
         {
             request = request.header("ChatGPT-Account-Id", account_id);
         }
-
         let response = request.send().await?;
-
         if response.status() == 401 || response.status() == 403 {
             return Err(ProviderError::AuthRequired);
         }
-
         if !response.status().is_success() {
             return Err(ProviderError::Other(format!(
                 "Codex API returned {}",
                 response.status()
             )));
         }
-
-        // Parse as raw JSON first for flexibility
         let json: serde_json::Value = response
             .json()
             .await
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
-
         let (mut usage, cost) = self.build_result_from_json(&json)?;
-        if let Ok(reset_credits) = self.fetch_rate_limit_reset_credits(&creds, &base_url).await
+        let reset_credits = self
+            .fetch_rate_limit_reset_credits(creds, base_url)
+            .await
+            .ok();
+        if let Some(reset_credits) = reset_credits.as_ref()
             && reset_credits.available_count > 0
         {
-            let window = reset_credits_rate_window(&reset_credits, Utc::now());
+            let window = reset_credits_rate_window(reset_credits, Utc::now());
             usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
         }
-        Ok((usage, cost))
+        Ok((usage, cost, reset_credits))
     }
 
     async fn fetch_rate_limit_reset_credits(
@@ -877,19 +937,23 @@ struct SpendControlLimitSnapshot {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ResetCredit {
+pub(super) struct ResetCredit {
     #[serde(default)]
-    status: Option<String>,
+    pub(super) id: Option<String>,
+    #[serde(default, alias = "resetType")]
+    pub(super) reset_type: Option<String>,
     #[serde(default)]
-    expires_at: Option<String>,
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ResetCredits {
+pub(super) struct ResetCredits {
     #[serde(default)]
-    credits: Vec<ResetCredit>,
+    pub(super) credits: Vec<ResetCredit>,
     #[serde(default)]
-    available_count: u32,
+    pub(super) available_count: u32,
 }
 
 fn decode_reset_credits(data: &[u8]) -> Result<ResetCredits, ProviderError> {
@@ -1218,14 +1282,20 @@ mod tests {
             .with_timezone(&Utc);
         let credits = vec![
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-10T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-05T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-07-20T00:00:00Z".into()),
             },
@@ -1246,18 +1316,26 @@ mod tests {
             .with_timezone(&Utc);
         let credits = vec![
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("available".into()),
                 expires_at: Some("2026-06-01T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("used".into()),
                 expires_at: Some("2026-07-03T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: Some("AVAILABLE".into()),
                 expires_at: Some("2026-07-08T00:00:00Z".into()),
             },
             ResetCredit {
+                id: None,
+                reset_type: None,
                 status: None,
                 expires_at: Some("2026-07-09T00:00:00Z".into()),
             },
@@ -1280,10 +1358,14 @@ mod tests {
             available_count: 2,
             credits: vec![
                 ResetCredit {
+                    id: None,
+                    reset_type: None,
                     status: Some("available".into()),
                     expires_at: Some("2026-07-15T12:00:00Z".into()),
                 },
                 ResetCredit {
+                    id: None,
+                    reset_type: None,
                     status: Some("available".into()),
                     expires_at: Some("2026-07-10T12:00:00Z".into()),
                 },

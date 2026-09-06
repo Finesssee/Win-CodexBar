@@ -102,6 +102,8 @@ pub struct CostSnapshotBridge {
     pub formatted_balance: Option<String>,
     #[serde(default)]
     pub daily: Vec<CostDailyPointBridge>,
+    #[serde(default)]
+    pub always_visible: bool,
 }
 
 fn default_currency() -> String {
@@ -385,6 +387,7 @@ impl ProviderUsageSnapshot {
                         amount: point.amount,
                     })
                     .collect(),
+                always_visible: c.always_visible,
             }),
             plan_name: usage.login_method.clone(),
             account_email: usage.account_email.clone(),

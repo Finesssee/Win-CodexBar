@@ -81,6 +81,13 @@ impl AlibabaTokenPlanRegion {
         }
     }
 
+    pub fn cli_console_site(self) -> &'static str {
+        match self {
+            Self::Intl | Self::IntlPersonal => "international",
+            Self::Cn | Self::CnPersonal => "domestic",
+        }
+    }
+
     pub fn product_code(self) -> &'static str {
         match self {
             Self::Cn => "sfm_tokenplanteams_dp_cn",

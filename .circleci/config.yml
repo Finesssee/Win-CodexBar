@@ -191,6 +191,38 @@ jobs:
             - target
 
 
+  package-manager-benchmark:
+    parameters:
+      manager:
+        type: enum
+        enum: ["pnpm-11.24", "pnpm-11.25", "bun"]
+    executor:
+      name: win/default
+      size: medium
+    steps:
+      - checkout
+      - restore_cache:
+          name: Restore << parameters.manager >> dependency cache
+          keys:
+            - pm-benchmark-v1-<< parameters.manager >>-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}-{{ checksum "apps/desktop-tauri/bun.lock" }}
+            - pm-benchmark-v1-<< parameters.manager >>-
+      - run:
+          name: Benchmark << parameters.manager >>
+          shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          no_output_timeout: 20m
+          command: |
+            $ErrorActionPreference = 'Stop'
+            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path (Get-Location).Path 'scripts\circleci-package-manager-benchmark.ps1') -Manager '<< parameters.manager >>'
+            if ($LASTEXITCODE -ne 0) { throw "package-manager benchmark failed with exit code $LASTEXITCODE" }
+      - save_cache:
+          name: Save << parameters.manager >> dependency cache
+          key: pm-benchmark-v1-<< parameters.manager >>-{{ checksum "apps/desktop-tauri/pnpm-lock.yaml" }}-{{ checksum "apps/desktop-tauri/bun.lock" }}
+          paths:
+            - .ci-pm-cache
+      - store_artifacts:
+          path: benchmark-results
+          destination: package-manager-benchmark/<< parameters.manager >>
+
 workflows:
   release:
     jobs:
@@ -219,6 +251,29 @@ workflows:
     jobs:
       - pr-check:
           filters:
+            branches:
+              ignore:
+                - experiment/bun-pnpm-circleci-20260906
             tags:
               ignore:
                 - /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+  pm-benchmark:
+    jobs:
+      - package-manager-benchmark:
+          name: pm-benchmark-pnpm-11-24
+          manager: pnpm-11.24
+          filters: &pm-benchmark-filter
+            branches:
+              only:
+                - experiment/bun-pnpm-circleci-20260906
+            tags:
+              ignore: /.*/
+      - package-manager-benchmark:
+          name: pm-benchmark-pnpm-11-25
+          manager: pnpm-11.25
+          filters: *pm-benchmark-filter
+      - package-manager-benchmark:
+          name: pm-benchmark-bun
+          manager: bun
+          filters: *pm-benchmark-filter

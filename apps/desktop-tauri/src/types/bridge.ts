@@ -551,8 +551,6 @@ export interface CostSnapshotBridge {
   balance?: number | null;
   formattedBalance?: string | null;
   daily?: CostDailyPoint[];
-  /** Provider-metered spend that is itself a primary usage signal. */
-  alwaysVisible?: boolean;
 }
 
 export interface PaceSnapshot {

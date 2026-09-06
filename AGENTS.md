@@ -108,7 +108,7 @@ pnpm run tauri:build
 
 ## Runtime/Tooling Preferences
 
-- Package manager: **pnpm@11.24.0** (`packageManager` in `apps/desktop-tauri/package.json` + lockfile). Do not introduce npm or yarn lockfiles.
+- Package manager: **pnpm@11.25.0** (`packageManager` in `apps/desktop-tauri/package.json` + lockfile). Do not introduce npm or yarn lockfiles.
 - Node: CircleCI pins **Node 24.18.0**; no `.nvmrc` in repo. Prefer Node 24.18.0 locally for hosted parity.
 - Rust: edition **2024**, stable toolchain; CI target `x86_64-pc-windows-msvc`. No committed `rust-toolchain.toml` / `rustfmt.toml` / `clippy.toml` — defaults plus CI flags (`clippy -- -D warnings`).
 - Tray / DPAPI / browser-cookie behavior: validate on **Windows-native** hosts. WSL/Linux is insufficient for those paths.

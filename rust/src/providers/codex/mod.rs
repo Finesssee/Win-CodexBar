@@ -5,7 +5,6 @@
 
 mod api;
 mod pat;
-mod weekly_reset;
 
 use async_trait::async_trait;
 #[cfg(windows)]

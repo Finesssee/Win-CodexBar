@@ -487,7 +487,6 @@ DetailPaceFarBehind = 大きく遅れ
 DetailPaceRunsOutIn = 残り
 DetailPaceWillLastToReset = リセットまで持ちます
 DetailCostTitle = コスト
-ApiSpendTitle = API 費用
 DetailCostUsed = 使用済み
 DetailCostLimit = 上限
 DetailCostRemaining = 残り

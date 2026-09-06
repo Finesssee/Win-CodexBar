@@ -31,8 +31,7 @@ export function SimpleBarChart({
     );
   }
 
-  const knownValues = points.flatMap((p) => (p.value == null ? [] : [p.value]));
-  const max = Math.max(...knownValues, 0.0001);
+  const max = Math.max(...points.map((p) => p.value), 0.0001);
   const BAR_GAP = 2;
   const fmt = formatValue ?? ((v: number) => v.toFixed(2));
 
@@ -56,7 +55,7 @@ export function SimpleBarChart({
         aria-label={label ?? t("BarChartAriaLabel")}
       >
         {visible.map((p, i) => {
-          const barH = p.value == null ? 1 : Math.max(1, (p.value / max) * (height - 4));
+          const barH = Math.max(1, (p.value / max) * (height - 4));
           const x = i * (barWidth + BAR_GAP);
           const y = height - barH;
           return (
@@ -67,11 +66,11 @@ export function SimpleBarChart({
               width={barWidth}
               height={barH}
               fill={color}
-              opacity={p.value == null ? 0 : p.value === 0 ? 0.25 : 0.9}
+              opacity={p.value === 0 ? 0.25 : 0.9}
               rx={1}
             >
               <title>
-                {p.value == null ? p.date : `${p.date}: ${fmt(p.value)}`}
+                {p.date}: {fmt(p.value)}
               </title>
             </rect>
           );

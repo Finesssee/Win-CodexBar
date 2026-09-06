@@ -137,7 +137,6 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "opencode" => ProviderId::OpenCode,
         "factory" => ProviderId::Factory,
         "alibaba" => ProviderId::Alibaba,
-        "alibabatokenplan" => ProviderId::AlibabaTokenPlan,
         "kimi" | "kimik2" => ProviderId::Kimi,
         "minimax" => ProviderId::MiniMax,
         "augment" => ProviderId::Augment,
@@ -548,7 +547,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 None,
             ),
         ],
-        "alibaba" | "alibabatokenplan" => vec![
+        "alibaba" => vec![
             cookie_option(
                 lang,
                 "auto",

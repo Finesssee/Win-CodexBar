@@ -253,7 +253,6 @@ pub fn build_local_spend_contract(
         history_days,
         include_opencodex,
         false,
-        crate::settings::Settings::load().hide_personal_info,
         summary,
     )
 }
@@ -264,7 +263,6 @@ pub fn build_local_spend_contract_from_summary(
     history_days: u32,
     include_opencodex: bool,
     hide_native_codex_when_opencodex_present: bool,
-    hide_personal_info: bool,
     summary: CostSummary,
 ) -> SpendContract {
     let history_days = history_days.clamp(1, 365);
@@ -280,7 +278,7 @@ pub fn build_local_spend_contract_from_summary(
         reasoning_tokens: None,
     };
 
-    let native = load_native_spend(provider_id, history_days, hide_personal_info);
+    let native = load_native_spend(provider_id, history_days);
     let imports: Vec<_> = if include_opencodex {
         opencodex::load_for_subscription(provider_id, history_days, &custom)
             .into_iter()
@@ -352,11 +350,7 @@ pub fn build_local_spend_contract_from_summary(
     }
 }
 
-fn load_native_spend(
-    provider_id: &str,
-    history_days: u32,
-    hide_personal_info: bool,
-) -> NativeSpendData {
+fn load_native_spend(provider_id: &str, history_days: u32) -> NativeSpendData {
     if provider_id != "codex" {
         return NativeSpendData {
             projects: Vec::new(),
@@ -367,10 +361,7 @@ fn load_native_spend(
         };
     }
     match CodexWorkspacesIndex::new(history_days).load_snapshot(false, |_| {}) {
-        Ok(mut snapshot) => {
-            if hide_personal_info {
-                snapshot.redact_for_privacy();
-            }
+        Ok(snapshot) => {
             let activity = activity_from_sessions(&snapshot.sessions);
             let daily = snapshot
                 .daily
@@ -522,14 +513,14 @@ fn known_subtotal(models: &[SpendModelRow], summary: &CostSummary) -> Option<f64
 }
 
 fn daily_points(provider_id: &str, days: u32) -> Vec<SpendDailyPoint> {
-    let costs: HashMap<String, Option<f64>> = get_daily_cost_history(provider_id, days)
+    let costs: HashMap<String, f64> = get_daily_cost_history(provider_id, days)
         .into_iter()
         .collect();
     let (tokens, incomplete) = get_daily_token_history(provider_id, days);
     tokens
         .into_iter()
         .map(|(day, total_tokens)| SpendDailyPoint {
-            cost_usd: costs.get(&day).copied().flatten().filter(|_| !incomplete),
+            cost_usd: costs.get(&day).copied().filter(|_| !incomplete),
             day,
             total_tokens: (!incomplete).then_some(total_tokens),
         })

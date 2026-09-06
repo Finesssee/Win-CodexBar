@@ -14,7 +14,7 @@ $PnpmCurrentVersion = '11.24.0'
 $PnpmLatestVersion = '11.25.0'
 $BunVersion = '1.4.2'
 $BunWindowsX64Sha256 = 'ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405'
-$NodeVersion = '24.18.0'
+$RequiredNodeVersion = '24.18.0'
 $NodeMajor = 24
 
 if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
@@ -54,25 +54,25 @@ function Get-DirectoryStats {
 
 function Ensure-Node24 {
     $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
-    $nodeVersion = if ($nodeCommand) { (& $nodeCommand.Source --version).Trim() } else { '' }
+    $imageNodeVersion = if ($nodeCommand) { (& $nodeCommand.Source --version).Trim() } else { '' }
     $activeMajor = 0
-    if ($nodeVersion -match '^v(\d+)\.') { $activeMajor = [int]$Matches[1] }
+    if ($imageNodeVersion -match '^v(\d+)\.') { $activeMajor = [int]$Matches[1] }
     if ($activeMajor -eq $NodeMajor) {
         return $nodeCommand.Source
     }
 
-    $msiName = "node-v$NodeVersion-x64.msi"
+    $msiName = "node-v$RequiredNodeVersion-x64.msi"
     $nodeMsi = Join-Path $env:TEMP $msiName
-    $sumsPath = Join-Path $env:TEMP "node-v$NodeVersion-SHASUMS256.txt"
-    Invoke-Native -FilePath 'curl.exe' -ArgumentList @('-sSfL','-o',$nodeMsi,"https://nodejs.org/dist/v$NodeVersion/$msiName")
-    Invoke-Native -FilePath 'curl.exe' -ArgumentList @('-sSfL','-o',$sumsPath,"https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt")
+    $sumsPath = Join-Path $env:TEMP "node-v$RequiredNodeVersion-SHASUMS256.txt"
+    Invoke-Native -FilePath 'curl.exe' -ArgumentList @('-sSfL','-o',$nodeMsi,"https://nodejs.org/dist/v$RequiredNodeVersion/$msiName")
+    Invoke-Native -FilePath 'curl.exe' -ArgumentList @('-sSfL','-o',$sumsPath,"https://nodejs.org/dist/v$RequiredNodeVersion/SHASUMS256.txt")
     $line = Get-Content -LiteralPath $sumsPath | Where-Object { $_ -match "\s+$([regex]::Escape($msiName))$" } | Select-Object -First 1
     if (-not $line -or $line -notmatch '^([a-fA-F0-9]{64})\s+') { throw "Missing checksum for $msiName" }
     $expected = $Matches[1].ToLowerInvariant()
     $actual = (Get-FileHash -LiteralPath $nodeMsi -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "Node MSI SHA-256 mismatch: $actual != $expected" }
 
-    $nodeDir = "C:\node-v$NodeVersion"
+    $nodeDir = "C:\node-v$RequiredNodeVersion"
     $proc = Start-Process msiexec.exe -ArgumentList @('/i',$nodeMsi,'/qn','/norestart',"INSTALLDIR=$nodeDir") -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "Node MSI install exited with code $($proc.ExitCode)" }
     $nodeExe = Join-Path $nodeDir 'node.exe'

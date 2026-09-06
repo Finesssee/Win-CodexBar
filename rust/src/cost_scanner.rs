@@ -398,9 +398,9 @@ impl CostScanner {
         {
             stats.used_cache_debounce = true;
             // A16 (upstream 0.48.0): cache hit within debounce = coverage established
-            // when the cache has data and no catch-up is pending (previous_report set
-            // means entries were trimmed for budget → re-scan may be needed).
-            summary.history_coverage_established =
+            // when the cache has data and no catch-up is pending. Final publication
+            // also waits for the cancellable Pi/OMP scan below.
+            let cached_history_coverage_established =
                 !cache.days.is_empty() && cache.previous_report.is_none();
             let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
             summary.total_cost_usd += cost;
@@ -429,6 +429,8 @@ impl CostScanner {
                     &mut seen_pi,
                 );
             }
+            summary.history_coverage_established =
+                cached_history_coverage_established && !is_cancelled(cancel);
             // Upstream 0.50.1 #2932: debounce cache hit with coverage
             // established but zero sessions in-range is a known-zero.
             summary.known_zero =
@@ -465,17 +467,6 @@ impl CostScanner {
             JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
 
-        // v0.56.1 #3279: the just-completed in-memory scan is authoritative for
-        // this publication. Persistence-budget pruning may retain
-        // `previous_report` so a future refresh can rebuild the bounded cache,
-        // but it must not retroactively turn this completed result into a stale
-        // one or trigger an immediate rescan just to publish it.
-        summary.history_coverage_established = !is_cancelled(cancel);
-        // Upstream 0.50.1 #2932: a completed scan with zero results is a
-        // *known* zero. Only set when coverage is established; an incomplete
-        // scan must NOT fabricate a zero.
-        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
-
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
         // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
@@ -489,6 +480,17 @@ impl CostScanner {
                 &mut seen_pi,
             );
         }
+
+        // v0.56.1 #3279: only publish authoritative coverage after all
+        // cancellable scan work, including Pi/OMP, has completed. Persistence
+        // pruning may retain `previous_report`, but that must not make a
+        // completed in-memory scan stale or make a cancelled partial scan look
+        // complete.
+        summary.history_coverage_established = !is_cancelled(cancel);
+        // Upstream 0.50.1 #2932: a completed scan with zero results is a
+        // *known* zero. Only set when coverage is established; an incomplete
+        // scan must NOT fabricate a zero.
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
 
         (summary, stats)
     }
@@ -1569,6 +1571,51 @@ mod tests {
         assert!(!stats4.used_cache_debounce);
         assert_eq!(stats4.files_skipped, 2);
         assert_eq!(stats4.files_parsed, 0);
+    }
+
+    #[test]
+    fn cancelled_fresh_cache_hit_is_not_authoritative() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().join("cache");
+        let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let usage = HashMap::from([(
+            today.clone(),
+            HashMap::from([("gpt-5.6-sol".to_string(), vec![100, 0, 10])]),
+        )]);
+        let mut cache = CostUsageCache {
+            last_scan_unix_ms: unix_now_ms(),
+            files: HashMap::from([(
+                "cached.jsonl".to_string(),
+                CostUsageFileUsage {
+                    mtime_unix_ms: 0,
+                    size: 100,
+                    days: usage.clone(),
+                    parsed_bytes: Some(100),
+                    last_model: Some("gpt-5.6-sol".to_string()),
+                    last_totals: None,
+                },
+            )]),
+            days: usage,
+            ..Default::default()
+        };
+        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+        let cancel = AtomicBool::new(true);
+        let scanner = CostScanner::new(7)
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![root.path().join("sessions")]);
+        let (summary, stats) = scanner.scan_codex_detailed(Some(&cancel));
+
+        assert!(
+            stats.used_cache_debounce,
+            "fresh cache should use debounce path"
+        );
+        assert_eq!(summary.sessions_count, 1, "cached usage is still visible");
+        assert!(
+            !summary.history_coverage_established,
+            "cancelled cache publication must not claim complete history"
+        );
+        assert!(!summary.known_zero);
     }
 
     #[test]

@@ -113,7 +113,8 @@ fn build_usage_spend_summary_cached(
     selected_days: u32,
     force_refresh: bool,
 ) -> Result<UsageSpendSummary, String> {
-    let key = usage_spend_cache_key(cached, selected_days);
+    let settings = codexbar::settings::Settings::load();
+    let key = usage_spend_cache_key(cached, selected_days, &settings);
     let mut guard = usage_spend_summary_cache()
         .lock()
         .map_err(|error| error.to_string())?;
@@ -125,7 +126,7 @@ fn build_usage_spend_summary_cached(
     }
     // Hold the cache mutex while building: callers for the same app revision
     // coalesce behind this single scan instead of starting parallel rescans.
-    let summary = build_usage_spend_summary(cached, selected_days);
+    let summary = build_usage_spend_summary(cached, selected_days, &settings);
     *guard = Some(CachedUsageSpendSummary {
         key,
         summary: summary.clone(),
@@ -133,8 +134,11 @@ fn build_usage_spend_summary_cached(
     Ok(summary)
 }
 
-fn usage_spend_cache_key(cached: &[ProviderUsageSnapshot], selected_days: u32) -> String {
-    let settings = codexbar::settings::Settings::load();
+fn usage_spend_cache_key(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+    settings: &codexbar::settings::Settings,
+) -> String {
     usage_spend_cache_key_with_privacy(
         cached,
         selected_days,
@@ -191,8 +195,8 @@ fn usage_spend_cache_key_with_privacy(
 fn build_usage_spend_summary(
     cached: &[ProviderUsageSnapshot],
     selected_days: u32,
+    settings: &codexbar::settings::Settings,
 ) -> UsageSpendSummary {
-    let settings = codexbar::settings::Settings::load();
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
 

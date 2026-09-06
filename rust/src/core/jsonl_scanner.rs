@@ -1189,7 +1189,14 @@ impl JsonlScanner {
             }
         }
 
-        let sessions_count = i32::try_from(cache.files.len()).unwrap_or(i32::MAX);
+        let sessions_count = i32::try_from(
+            cache
+                .files
+                .values()
+                .filter(|usage| !usage.days.is_empty())
+                .count(),
+        )
+        .unwrap_or(i32::MAX);
         CachedCostReport {
             total_cost_usd,
             input_tokens,
@@ -1865,9 +1872,23 @@ line2
             CostUsageFileUsage {
                 mtime_unix_ms: 0,
                 size: 100,
-                days: HashMap::new(),
+                days: HashMap::from([(
+                    "2026-08-20".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![1_000, 250, 100])]),
+                )]),
                 parsed_bytes: Some(100),
                 last_model: Some("gpt-5.6-sol".to_string()),
+                last_totals: None,
+            },
+        );
+        cache.files.insert(
+            "empty.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 10,
+                days: HashMap::new(),
+                parsed_bytes: Some(10),
+                last_model: None,
                 last_totals: None,
             },
         );

@@ -86,6 +86,7 @@ function renderCard(
     showResetWhenExhausted?: boolean;
     showPace?: boolean;
     onLayoutChange?: () => void;
+    costSummaryDisplayStyle?: "compact" | "detailed" | "hidden";
   } = {},
 ) {
   return render(
@@ -98,6 +99,7 @@ function renderCard(
           showAsUsed: opts.showAsUsed,
           showResetWhenExhausted: opts.showResetWhenExhausted,
           showPace: opts.showPace,
+          costSummaryDisplayStyle: opts.costSummaryDisplayStyle,
         }}
         onLayoutChange={opts.onLayoutChange}
       />
@@ -111,6 +113,7 @@ describe("MenuCard", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionCopyError: "Copy error",
+        ApiSpendTitle: "API spend",
         DetailPaceRunsOutIn: "Runs out in",
         PanelEstimatedFromLocalLogs: "Estimated from local logs",
         PanelLeftSuffix: "left",
@@ -167,6 +170,31 @@ describe("MenuCard", () => {
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
+  it("keeps Fireworks vendor API spend visible when local cost summaries are hidden", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.providerId = "fireworks";
+    snapshot.displayName = "Fireworks";
+    snapshot.cost = {
+      used: 12.34,
+      limit: null,
+      remaining: null,
+      currencyCode: "USD",
+      currencySymbol: "$",
+      period: "30 days",
+      resetsAt: null,
+      formattedUsed: "$12.34",
+      formattedLimit: null,
+      balance: null,
+      formattedBalance: null,
+      daily: [],
+      alwaysVisible: true,
+    };
+
+    renderCard(snapshot, { costSummaryDisplayStyle: "hidden" });
+
+    expect(await screen.findByText("API spend")).toBeInTheDocument();
+    expect(document.querySelector(".menu-card__cost-line")).toHaveTextContent("$12.34");
+  });
   it("does not mix stale local usage into an error card", async () => {
     const { container } = renderCard(
       provider("OAuth error: Claude OAuth credentials not found."),

@@ -331,7 +331,7 @@ fn test_locale_key_turkish() {
     );
     assert_eq!(
         get_text(Language::Turkish, LocaleKey::StartAtLogin),
-        "Oturum Açılışında Başlat"
+        "Girişte başlat"
     );
 }
 

@@ -283,6 +283,7 @@ pub struct AmpSubscriptionUsage {
 /// Win Amp currently uses the Sourcegraph Cody API schema, which does not emit this text.
 /// Kept as a pure helper for future CLI/text integration and parity tests.
 pub fn parse_amp_free_percent_remaining(text: &str) -> Option<f64> {
+    let text = text.replace("**", "");
     for line in text.lines() {
         let line = line.trim();
         let lower = line.to_ascii_lowercase();
@@ -340,6 +341,7 @@ pub fn parse_amp_subscription_usage(
     text: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<AmpSubscriptionUsage> {
+    let text = text.replace("**", "");
     let re = regex_lite::Regex::new(
         r"(?im)^\s*Subscription\s+(.+?):\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*%\s+other\s+usage\s+and\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s*%\s+orb\s+usage\s+remaining\s*-\s*resets\s+upon\s+renewal\s+in\s+([0-9][0-9,]*)\s+(days?|months?)(?:\s+-\s+https?://\S+)?\s*$",
     )
@@ -492,6 +494,25 @@ mod tests {
     fn parses_amp_free_percent_resets_daily() {
         let text = "Amp Free: 100% remaining (resets daily)";
         assert_eq!(parse_amp_free_percent_remaining(text), Some(0.0));
+    }
+
+    #[test]
+    fn parses_bold_amp_free_and_current_subscription_labels() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap();
+        assert_eq!(
+            parse_amp_free_percent_remaining("**Amp Free:** 0% remaining today (resets daily)"),
+            Some(100.0)
+        );
+
+        let sub = parse_amp_subscription_usage(
+            "**Amp Megawatt Subscription:** 68% other usage and 97% orb usage remaining - resets upon renewal in 5 days",
+            now,
+        )
+        .expect("bold subscription");
+        assert_eq!(sub.plan, "Megawatt");
+        assert!((sub.other_used_percent - 32.0).abs() < f64::EPSILON);
+        assert!((sub.orb_used_percent - 3.0).abs() < f64::EPSILON);
+        assert_eq!(sub.resets_at, now + chrono::Duration::days(5));
     }
 
     #[test]

@@ -505,6 +505,7 @@ DetailPaceFarBehind = Muy atrasado
 DetailPaceRunsOutIn = Se agota en
 DetailPaceWillLastToReset = Durará hasta el reinicio
 DetailCostTitle = Costo
+ApiSpendTitle = Gasto de API
 DetailCostUsed = Usado
 DetailCostLimit = Límite
 DetailCostRemaining = Restante

@@ -3,7 +3,10 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+mod local_proto;
 pub mod local_sessions;
+mod local_sqlite;
+mod quota_summary;
 
 use async_trait::async_trait;
 use regex_lite::Regex;
@@ -20,6 +23,9 @@ use crate::core::{
 
 const NOT_RUNNING_MESSAGE: &str =
     "Antigravity language server not running. Start Google Antigravity and sign in, then retry.";
+const GET_USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
+const QUOTA_SUMMARY_PATH: &str =
+    "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 
 /// Antigravity provider
 pub struct AntigravityProvider {
@@ -303,14 +309,27 @@ impl AntigravityProvider {
         Vec::new()
     }
 
-    /// Fetch user status from Antigravity API
+    /// Fetch user status from Antigravity API.
+    ///
+    /// v0.56.0: prefer the quota-summary endpoint so the 5-hour and weekly
+    /// lanes can be resolved independently across model families. The legacy
+    /// model-quota payload remains the compatibility fallback.
+    fn with_cadence_labels(mut usage: UsageSnapshot) -> UsageSnapshot {
+        if usage
+            .secondary
+            .as_ref()
+            .is_some_and(|window| window.window_minutes == Some(7 * 24 * 60))
+        {
+            usage.secondary_label = Some("Weekly".to_string());
+        }
+        usage
+    }
+
     async fn fetch_user_status(&self) -> Result<UsageSnapshot, ProviderError> {
         let process_info = Self::detect_process_info()?;
         let api_port = Self::find_api_port(process_info.extension_port, process_info.pid).await?;
 
-        // SECURITY: TLS verification disabled for local language server (see find_api_port)
-        // The language server is a local loopback endpoint. Do not route it
-        // through the app-wide outbound proxy.
+        // SECURITY: TLS verification disabled only for this loopback language server.
         let client = crate::core::credentialed_http_client_builder()
             .no_proxy()
             .timeout(std::time::Duration::from_secs(8))
@@ -319,10 +338,55 @@ impl AntigravityProvider {
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
-        let url = format!(
-            "https://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/GetUserStatus",
-            api_port
-        );
+        let quota_body = serde_json::json!({ "forceRefresh": true });
+        match Self::fetch_local_payload(
+            &client,
+            &process_info,
+            api_port,
+            QUOTA_SUMMARY_PATH,
+            &quota_body,
+            std::time::Duration::from_secs(4),
+        )
+        .await
+        {
+            Ok(bytes) => match quota_summary::parse_usage_snapshot(&bytes) {
+                Ok(mut snapshot) => {
+                    // Identity is best-effort enrichment and must not displace a
+                    // successful quota-summary result.
+                    let identity_body = serde_json::json!({
+                        "metadata": {
+                            "ideName": "antigravity",
+                            "extensionName": "antigravity",
+                            "ideVersion": "unknown",
+                            "locale": "en"
+                        }
+                    });
+                    if let Ok(identity_bytes) = Self::fetch_local_payload(
+                        &client,
+                        &process_info,
+                        api_port,
+                        GET_USER_STATUS_PATH,
+                        &identity_body,
+                        std::time::Duration::from_secs(1),
+                    )
+                    .await
+                        && let Ok(identity) =
+                            serde_json::from_slice::<UserStatusResponse>(&identity_bytes)
+                    {
+                        Self::apply_user_identity(&mut snapshot, &identity);
+                    }
+                    return Ok(snapshot);
+                }
+                Err(error) => tracing::debug!(
+                    %error,
+                    "Antigravity quota summary unusable; falling back to model quotas"
+                ),
+            },
+            Err(error) => tracing::debug!(
+                %error,
+                "Antigravity quota summary unavailable; falling back to model quotas"
+            ),
+        }
 
         let body = serde_json::json!({
             "metadata": {
@@ -332,78 +396,106 @@ impl AntigravityProvider {
                 "locale": "en"
             }
         });
+        let bytes = Self::fetch_local_payload(
+            &client,
+            &process_info,
+            api_port,
+            GET_USER_STATUS_PATH,
+            &body,
+            std::time::Duration::from_secs(8),
+        )
+        .await?;
+        let response: UserStatusResponse = serde_json::from_slice(&bytes)
+            .map_err(|e| ProviderError::Parse(format!("Failed to parse response: {e}")))?;
+        self.parse_user_status(response)
+    }
 
-        // The `agy` CLI serves the quota endpoints without a CSRF token; the
-        // desktop IDE/app server requires one. Only attach the CSRF header when
-        // the matched process is the desktop server (and a token was found).
+    async fn fetch_local_payload(
+        client: &reqwest::Client,
+        process_info: &ProcessInfo,
+        api_port: u16,
+        path: &str,
+        body: &serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<u8>, ProviderError> {
+        let url = format!("https://127.0.0.1:{api_port}{path}");
         let requires_csrf = process_info.source == ProcessSource::Ide;
-        let csrf_token = if requires_csrf {
-            process_info
-                .extension_server_csrf_token
-                .as_deref()
-                .unwrap_or(&process_info.csrf_token)
-        } else {
-            ""
-        };
+        let csrf_token = process_info
+            .extension_server_csrf_token
+            .as_deref()
+            .unwrap_or(&process_info.csrf_token);
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Connect-Protocol-Version", "1")
-            .json(&body);
+            .timeout(timeout)
+            .json(body);
         if requires_csrf {
             request = request.header("X-Codeium-Csrf-Token", csrf_token);
         }
-        let resp = request
+        let response = request
             .send()
             .await
-            .map_err(|e| ProviderError::Other(format!("API request failed: {}", e)))?;
-
-        if !resp.status().is_success() {
-            // Retry with language server CSRF token if extension server token failed
-            if process_info.extension_server_csrf_token.is_some() {
-                let retry_resp = client
-                    .post(&url)
-                    .header("Content-Type", "application/json")
-                    .header("Connect-Protocol-Version", "1")
-                    .header("X-Codeium-Csrf-Token", &process_info.csrf_token)
-                    .json(&body)
-                    .send()
-                    .await;
-
-                if let Ok(retry) = retry_resp
-                    && retry.status().is_success()
-                {
-                    let json: UserStatusResponse = retry
-                        .json()
-                        .await
-                        .map_err(|e| ProviderError::Parse(e.to_string()))?;
-                    return self.parse_user_status(json);
-                }
-            }
-
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            if process_info.source == ProcessSource::Cli
-                && (status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::FORBIDDEN
-                    || text.to_ascii_lowercase().contains("not logged")
-                    || text.to_ascii_lowercase().contains("login method")
-                    || text.to_ascii_lowercase().contains("keyring"))
-            {
-                return Err(ProviderError::AuthRequired);
-            }
-            return Err(ProviderError::Other(format!(
-                "API error {}: {}",
-                status, text
-            )));
+            .map_err(|e| ProviderError::Other(format!("API request failed: {e}")))?;
+        if response.status().is_success() {
+            return response
+                .bytes()
+                .await
+                .map(|bytes| bytes.to_vec())
+                .map_err(|e| ProviderError::Other(format!("Failed to read response: {e}")));
         }
 
-        let json: UserStatusResponse = resp
-            .json()
-            .await
-            .map_err(|e| ProviderError::Other(format!("Failed to parse response: {}", e)))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if requires_csrf && process_info.extension_server_csrf_token.is_some() {
+            let retry = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("Connect-Protocol-Version", "1")
+                .header("X-Codeium-Csrf-Token", &process_info.csrf_token)
+                .timeout(timeout)
+                .json(body)
+                .send()
+                .await;
+            if let Ok(retry) = retry
+                && retry.status().is_success()
+            {
+                return retry
+                    .bytes()
+                    .await
+                    .map(|bytes| bytes.to_vec())
+                    .map_err(|e| ProviderError::Other(format!("Failed to read response: {e}")));
+            }
+        }
 
-        self.parse_user_status(json)
+        if process_info.source == ProcessSource::Cli
+            && (status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+                || text.to_ascii_lowercase().contains("not logged")
+                || text.to_ascii_lowercase().contains("login method")
+                || text.to_ascii_lowercase().contains("keyring"))
+        {
+            return Err(ProviderError::AuthRequired);
+        }
+        Err(ProviderError::Other(format!("API error {status}: {text}")))
+    }
+
+    fn apply_user_identity(snapshot: &mut UsageSnapshot, response: &UserStatusResponse) {
+        let Some(status) = response.user_status.as_ref() else {
+            return;
+        };
+        snapshot.account_email = status
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        snapshot.login_method = status
+            .plan_status
+            .as_ref()
+            .and_then(|plan_status| plan_status.plan_info.as_ref())
+            .and_then(|plan| plan.plan_display_name.as_ref().or(plan.plan_name.as_ref()))
+            .cloned();
     }
 
     fn parse_user_status(
@@ -538,7 +630,10 @@ impl Provider for AntigravityProvider {
         tracing::debug!("Fetching Antigravity usage via local probe");
 
         match self.fetch_user_status().await {
-            Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
+            Ok(usage) => Ok(ProviderFetchResult::new(
+                Self::with_cadence_labels(usage),
+                "local",
+            )),
             Err(e) => {
                 let count = local_sessions::offline_conversation_count();
                 if count > 0 {

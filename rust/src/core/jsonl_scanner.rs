@@ -9,7 +9,7 @@
 )]
 
 use crate::core::{CostUsagePricing, ProviderId};
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -17,6 +17,53 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Default)]
+pub struct CachedCostReadStatus {
+    pub has_days: bool,
+    pub previous_report: Option<CachedCostReport>,
+}
+
+#[derive(Deserialize, Default)]
+struct CachedCostReadStatusProjection {
+    #[serde(
+        default,
+        rename = "days",
+        deserialize_with = "deserialize_nonempty_object"
+    )]
+    has_days: bool,
+    #[serde(default)]
+    previous_report: Option<CachedCostReport>,
+}
+
+fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{IgnoredAny, MapAccess, Visitor};
+
+    struct NonemptyObjectVisitor;
+
+    impl<'de> Visitor<'de> for NonemptyObjectVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut nonempty = false;
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {
+                nonempty = true;
+            }
+            Ok(nonempty)
+        }
+    }
+
+    deserializer.deserialize_map(NonemptyObjectVisitor)
+}
 /// Maximum retained Codex JSONL line size (upstream session-metadata bound).
 const CODEX_JSONL_MAX_LINE_BYTES: usize = 256 * 1024;
 
@@ -1059,6 +1106,101 @@ impl JsonlScanner {
         CostUsageCache::default()
     }
 
+    /// Read only the cache metadata needed by presentation surfaces.
+    ///
+    /// v0.56.0 performance parity: skip raw per-file scanner state and day
+    /// payloads when callers only need stale/catch-up status.
+    pub fn load_cache_status(
+        provider: ProviderId,
+        cache_root: Option<&Path>,
+    ) -> CachedCostReadStatus {
+        let cache_path = Self::cache_path(provider, cache_root);
+        if crate::core::is_bounded_provider(provider) {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "bounded artifacts fit usize on any supported target"
+            )]
+            let file_bytes = crate::core::artifact_file_size(&cache_path) as usize;
+            if file_bytes > crate::core::CostUsageCacheBudget::MAX_LOAD_BYTES {
+                return CachedCostReadStatus::default();
+            }
+        }
+
+        let Ok(file) = File::open(cache_path) else {
+            return CachedCostReadStatus::default();
+        };
+        let Ok(projection) =
+            serde_json::from_reader::<_, CachedCostReadStatusProjection>(BufReader::new(file))
+        else {
+            return CachedCostReadStatus::default();
+        };
+        CachedCostReadStatus {
+            has_days: projection.has_days,
+            previous_report: projection.previous_report,
+        }
+    }
+    fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {
+        let mut total_cost_usd = 0.0;
+        let mut input_tokens = 0_i32;
+        let mut cached_tokens = 0_i32;
+        let mut output_tokens = 0_i32;
+        let mut partial = false;
+
+        for (day_key, models) in &cache.days {
+            let pricing_day = NaiveDate::parse_from_str(day_key, "%Y-%m-%d").ok();
+            for (model, values) in models {
+                let input = values.first().copied().unwrap_or(0).max(0);
+                let cached = values.get(1).copied().unwrap_or(0).max(0);
+                let output = values.get(2).copied().unwrap_or(0).max(0);
+                input_tokens = input_tokens.saturating_add(input);
+                cached_tokens = cached_tokens.saturating_add(cached);
+                output_tokens = output_tokens.saturating_add(output);
+
+                if CostUsagePricing::is_codex_unattributed_model(model) {
+                    partial = true;
+                    continue;
+                }
+                if !CostUsagePricing::counts_toward_codex_subscription(model) {
+                    continue;
+                }
+                let priced = pricing_day
+                    .and_then(|day| {
+                        CostUsagePricing::codex_cost_usd_at_date(
+                            model,
+                            u64::try_from(input).unwrap_or(0),
+                            u64::try_from(cached).unwrap_or(0),
+                            u64::try_from(output).unwrap_or(0),
+                            day,
+                        )
+                    })
+                    .or_else(|| {
+                        CostUsagePricing::codex_cost_usd(
+                            model,
+                            u64::try_from(input).unwrap_or(0),
+                            u64::try_from(cached).unwrap_or(0),
+                            u64::try_from(output).unwrap_or(0),
+                        )
+                    });
+                if let Some(cost) = priced {
+                    total_cost_usd += cost;
+                } else {
+                    partial = true;
+                }
+            }
+        }
+
+        let sessions_count = i32::try_from(cache.files.len()).unwrap_or(i32::MAX);
+        CachedCostReport {
+            total_cost_usd,
+            input_tokens,
+            cached_tokens,
+            output_tokens,
+            sessions_count,
+            updated_at: Some(Utc::now().to_rfc3339()),
+            partial,
+        }
+    }
+
     /// Save cache to disk (temp sibling + copy into place).
     ///
     /// Before encoding, prunes the cache to the persistence budget so the
@@ -1097,6 +1239,14 @@ impl JsonlScanner {
         let _dir_created = fs::create_dir_all(parent);
 
         if crate::core::is_bounded_provider(provider) {
+            // v0.55.1 #3051: snapshot the fully validated report BEFORE persistence
+            // pruning. If budget trimming creates a catch-up cycle, this is the
+            // established spend/tokens users should keep seeing until replacement
+            // history finishes, not a zero-cost reconstruction of the trimmed cache.
+            let established_report = cache
+                .previous_report
+                .clone()
+                .unwrap_or_else(|| Self::cached_cost_report_from_days(cache));
             let pruned = crate::core::prune_out_of_window_for_budget(
                 &mut cache.files,
                 &mut cache.days,
@@ -1121,41 +1271,7 @@ impl JsonlScanner {
             // next refresh can signal catch-up is pending (and spend surfaces can show
             // the last-validated snapshot during the rescan).
             if (!pruned.is_empty() || !trimmed.is_empty()) && cache.previous_report.is_none() {
-                // Session counts are bounded by the cache budget (MAX_FILE_ENTRIES),
-                // far below i32::MAX, and are always non-negative.
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "session count is bounded by MAX_FILE_ENTRIES (25_000)"
-                )]
-                #[allow(
-                    clippy::cast_possible_wrap,
-                    reason = "session count is non-negative and bounded by MAX_FILE_ENTRIES"
-                )]
-                let sessions_count = cache.files.len() as i32;
-                cache.previous_report = Some(crate::core::CachedCostReport {
-                    total_cost_usd: 0.0, // cost not tracked in day aggregates
-                    input_tokens: cache
-                        .days
-                        .values()
-                        .flat_map(|m| m.values())
-                        .map(|v| v[0])
-                        .sum(),
-                    cached_tokens: cache
-                        .days
-                        .values()
-                        .flat_map(|m| m.values())
-                        .map(|v| v[1])
-                        .sum(),
-                    output_tokens: cache
-                        .days
-                        .values()
-                        .flat_map(|m| m.values())
-                        .map(|v| v[2])
-                        .sum(),
-                    sessions_count,
-                    updated_at: None,
-                    partial: false,
-                });
+                cache.previous_report = Some(established_report);
             }
         }
 
@@ -1739,6 +1855,45 @@ line2
         let path = root.path().join("nonexistent.jsonl");
         // offset > 0 so it doesn't short-circuit to true
         assert!(!JsonlScanner::is_line_boundary_offset(&path, 10));
+    }
+
+    #[test]
+    fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
+        let mut cache = CostUsageCache::default();
+        cache.files.insert(
+            "session.jsonl".to_string(),
+            CostUsageFileUsage {
+                mtime_unix_ms: 0,
+                size: 100,
+                days: HashMap::new(),
+                parsed_bytes: Some(100),
+                last_model: Some("gpt-5.6-sol".to_string()),
+                last_totals: None,
+            },
+        );
+        cache.days.insert(
+            "2026-08-20".to_string(),
+            HashMap::from([("gpt-5.6-sol".to_string(), vec![1_000, 250, 100])]),
+        );
+
+        let report = JsonlScanner::cached_cost_report_from_days(&cache);
+        let expected = CostUsagePricing::codex_cost_usd_at_date(
+            "gpt-5.6-sol",
+            1_000,
+            250,
+            100,
+            NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
+        )
+        .expect("known model price");
+
+        assert!((report.total_cost_usd - expected).abs() < 1e-12);
+        assert!(report.total_cost_usd > 0.0);
+        assert_eq!(report.input_tokens, 1_000);
+        assert_eq!(report.cached_tokens, 250);
+        assert_eq!(report.output_tokens, 100);
+        assert_eq!(report.sessions_count, 1);
+        assert!(!report.partial);
+        assert!(report.updated_at.is_some());
     }
 
     #[test]

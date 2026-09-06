@@ -172,7 +172,7 @@ impl FireworksSummary {
     fn to_cost_snapshot(&self) -> Option<CostSnapshot> {
         let spend = self.last_30_days_spend?;
         let currency = self.currency_code.as_deref().unwrap_or("USD");
-        Some(CostSnapshot::new(spend, currency, "Last 30 days"))
+        Some(CostSnapshot::new(spend, currency, "Last 30 days").always_visible())
     }
 }
 

@@ -492,6 +492,7 @@ DetailPaceFarBehind = 매우 느림
 DetailPaceRunsOutIn = 소진까지
 DetailPaceWillLastToReset = 초기화까지 유지 예상
 DetailCostTitle = 비용
+ApiSpendTitle = API 비용
 DetailCostUsed = 사용량
 DetailCostLimit = 한도
 DetailCostRemaining = 남음

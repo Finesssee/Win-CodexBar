@@ -37,7 +37,7 @@ pub(super) fn parse_activity_cost(
                     "OpenRouter activity.data[{index}] must be an object"
                 ))
             })?;
-            let day = object
+            let raw_day = object
                 .get("date")
                 .and_then(Value::as_str)
                 .map(str::trim)
@@ -47,9 +47,14 @@ pub(super) fn parse_activity_cost(
                         "OpenRouter activity.data[{index}].date is missing"
                     ))
                 })?;
+            let day = normalize_activity_day(raw_day).ok_or_else(|| {
+                ProviderError::Parse(format!(
+                    "OpenRouter activity.data[{index}].date must be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS"
+                ))
+            })?;
             let parsed_day = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").map_err(|_| {
                 ProviderError::Parse(format!(
-                    "OpenRouter activity.data[{index}].date must be YYYY-MM-DD"
+                    "OpenRouter activity.data[{index}].date must be a real calendar date"
                 ))
             })?;
             if parsed_day > latest_completed || parsed_day < cutoff {
@@ -137,6 +142,32 @@ pub(super) fn parse_activity_cost(
     )
 }
 
+fn normalize_activity_day(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    let shape_ok = match bytes.len() {
+        10 => true,
+        19 => {
+            bytes[10] == b' '
+                && bytes[13] == b':'
+                && bytes[16] == b':'
+                && bytes[11..13].iter().all(u8::is_ascii_digit)
+                && bytes[14..16].iter().all(u8::is_ascii_digit)
+                && bytes[17..19].iter().all(u8::is_ascii_digit)
+        }
+        _ => false,
+    };
+    if !shape_ok
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes[0..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    Some(&raw[..10])
+}
+
 fn nonnegative_integer(
     value: Option<&Value>,
     index: usize,
@@ -214,5 +245,27 @@ mod tests {
         ]});
         let cost = parse_activity_cost(&[payload], now()).unwrap();
         assert_eq!(cost.used, 1.0);
+    }
+
+    #[test]
+    fn accepts_timestamp_shaped_activity_dates_and_normalizes_to_the_utc_day() {
+        for date in ["2026-08-21", "2026-08-21 00:00:00"] {
+            let payload = serde_json::json!({"data":[
+                {"date":date,"model":"m","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
+            ]});
+            let cost = parse_activity_cost(&[payload], now()).unwrap();
+            assert_eq!(cost.daily.len(), 1);
+            assert_eq!(cost.daily[0].day, "2026-08-21");
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_or_impossible_activity_timestamp_dates() {
+        for date in ["2026-08-21T00:00:00", "2026-02-31 00:00:00"] {
+            let payload = serde_json::json!({"data":[
+                {"date":date,"model":"m","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
+            ]});
+            assert!(parse_activity_cost(&[payload], now()).is_err());
+        }
     }
 }

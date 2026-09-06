@@ -1079,6 +1079,7 @@ mod tests {
                 balance: None,
                 formatted_balance: None,
                 daily: Vec::new(),
+                always_visible: false,
             }),
             plan_name: None,
             account_email: None,

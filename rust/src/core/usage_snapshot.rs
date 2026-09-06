@@ -85,6 +85,11 @@ pub struct UsageSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary: Option<RateWindow>,
 
+    /// Provider-resolved label for the secondary rate window when metadata
+    /// describes a model family rather than this snapshot's cadence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_label: Option<String>,
+
     /// Model-specific rate window (e.g., Opus quota for Claude)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_specific: Option<RateWindow>,
@@ -120,6 +125,7 @@ impl UsageSnapshot {
             primary,
             primary_label: None,
             secondary: None,
+            secondary_label: None,
             model_specific: None,
             tertiary: None,
             extra_rate_windows: Vec::new(),
@@ -139,6 +145,12 @@ impl UsageSnapshot {
     /// Builder pattern: set secondary window
     pub fn with_secondary(mut self, secondary: RateWindow) -> Self {
         self.secondary = Some(secondary);
+        self
+    }
+
+    /// Builder pattern: override the secondary window label for this snapshot.
+    pub fn with_secondary_label(mut self, label: impl Into<String>) -> Self {
+        self.secondary_label = Some(label.into());
         self
     }
 
@@ -273,6 +285,11 @@ pub struct CostSnapshot {
     /// Exact daily spend points when the provider supplies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub daily: Vec<CostDailyPoint>,
+
+    /// Provider-owned presentation hint for spend that is itself a primary
+    /// usage signal and must remain visible when optional local summaries are hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_visible: bool,
 }
 
 impl CostSnapshot {
@@ -288,6 +305,7 @@ impl CostSnapshot {
             updated_at: Utc::now(),
             balance: None,
             daily: Vec::new(),
+            always_visible: false,
         }
     }
 
@@ -305,6 +323,12 @@ impl CostSnapshot {
 
     pub fn with_daily(mut self, daily: Vec<CostDailyPoint>) -> Self {
         self.daily = daily;
+        self
+    }
+
+    /// Keep this provider-metered spend visible even when optional local cost summaries are hidden.
+    pub fn always_visible(mut self) -> Self {
+        self.always_visible = true;
         self
     }
 

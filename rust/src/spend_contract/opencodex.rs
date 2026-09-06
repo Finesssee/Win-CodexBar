@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,13 +28,7 @@ struct OpenCodexEntry {
     total_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CacheFile {
-    source_path: String,
-    source_len: u64,
-    source_modified_ms: u64,
-    entries: Vec<OpenCodexEntry>,
-}
+mod cache;
 
 #[derive(Default)]
 struct ModelAccumulator {
@@ -103,7 +95,7 @@ pub(super) fn load_for_subscription(
     custom: &CustomPricing,
 ) -> Option<ImportedSpendSource> {
     let source_path = usage_path()?;
-    let entries = load_entries(&source_path)?;
+    let entries = cache::load_entries(&source_path)?;
     let entries = entries
         .into_iter()
         .filter(|entry| matches!(route_entry(entry), RouteTarget::Subscription(id) if id == provider_id))
@@ -350,71 +342,6 @@ fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
     }
 }
 
-fn load_entries(source_path: &Path) -> Option<Vec<OpenCodexEntry>> {
-    let metadata = fs::metadata(source_path).ok()?;
-    let source_len = metadata.len();
-    // Modified time is clamped to u64::MAX before casting.
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "clamped to u64::MAX before casting"
-    )]
-    let source_modified_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0);
-    let source_path_text = source_path.to_string_lossy().to_string();
-
-    if let Some(cache) = read_cache()
-        && cache.source_path == source_path_text
-        && cache.source_len == source_len
-        && cache.source_modified_ms == source_modified_ms
-    {
-        return Some(cache.entries);
-    }
-
-    let text = fs::read_to_string(source_path).ok()?;
-    let entries: Vec<_> = text.lines().filter_map(parse_line).collect();
-    write_cache(&CacheFile {
-        source_path: source_path_text,
-        source_len,
-        source_modified_ms,
-        entries: entries.clone(),
-    });
-    Some(entries)
-}
-
-fn cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|root| {
-        root.join("openCodexBar")
-            .join("opencodex")
-            .join("usage-cache.json")
-    })
-}
-
-fn read_cache() -> Option<CacheFile> {
-    let bytes = fs::read(cache_path()?).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn write_cache(cache: &CacheFile) {
-    let Some(path) = cache_path() else {
-        return;
-    };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let Ok(bytes) = serde_json::to_vec(cache) else {
-        return;
-    };
-    // Best-effort cache write; a failed write is non-fatal.
-    let _written = fs::write(path, bytes);
-}
-
 fn usage_path() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("OPENCODEX_HOME") {
         let trimmed = home.trim();
@@ -558,7 +485,9 @@ fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use super::cache::{load_entries_with_cache, read_cache};
     use super::*;
+    use std::fs;
 
     #[test]
     fn aggregate_deduplicates_requests_and_applies_history_window() {
@@ -722,6 +651,135 @@ mod tests {
         ] {
             assert!(parse_line(malformed).is_none(), "rejected: {malformed}");
         }
+    }
+
+    #[test]
+    fn incremental_cache_appends_only_newline_terminated_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("usage.jsonl");
+        let cache = dir.path().join("cache.sqlite");
+        let row = |id: &str, input: u64| {
+            format!(
+                r#"{{"requestId":"{id}","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z","usageStatus":"reported","usage":{{"inputTokens":{input}}}}}"#
+            )
+        };
+
+        fs::write(&log, format!("{}\n{}\n", row("a", 1), row("b", 2))).unwrap();
+        let first = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        let first_cursor = read_cache(&cache).unwrap().cursor;
+
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        use std::io::Write as _;
+        writeln!(file, "{}", row("c", 3)).unwrap();
+        drop(file);
+
+        let second = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        let second_cursor = read_cache(&cache).unwrap().cursor;
+        assert!(second_cursor.parsed_offset > first_cursor.parsed_offset);
+    }
+
+    #[test]
+    fn incomplete_trailing_opencodex_record_waits_for_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("usage.jsonl");
+        let cache = dir.path().join("cache.sqlite");
+        let complete = r#"{"requestId":"a","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        let pending = r#"{"requestId":"b","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        let split = pending.len() / 2;
+        fs::write(&log, format!("{complete}\n{}", &pending[..split])).unwrap();
+
+        let first = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        let cursor = read_cache(&cache).unwrap().cursor;
+        assert_eq!(
+            cursor.parsed_offset,
+            u64::try_from(complete.len() + 1).unwrap()
+        );
+
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        use std::io::Write as _;
+        writeln!(file, "{}", &pending[split..]).unwrap();
+        drop(file);
+        let second = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn later_request_id_replaces_cached_entry_without_full_cache_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("usage.jsonl");
+        let cache = dir.path().join("cache.sqlite");
+        let row = |id: &str, input: u64| {
+            format!(
+                r#"{{"requestId":"{id}","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z","usageStatus":"reported","usage":{{"inputTokens":{input}}}}}"#
+            )
+        };
+        fs::write(&log, format!("{}\n{}\n", row("dup", 1), row("keep", 2))).unwrap();
+        let _ = load_entries_with_cache(&log, &cache).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        use std::io::Write as _;
+        writeln!(file, "{}", row("dup", 9)).unwrap();
+        drop(file);
+
+        let entries = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.request_id == "dup")
+                .unwrap()
+                .input_tokens,
+            Some(9)
+        );
+        assert!(entries.iter().any(|entry| entry.request_id == "keep"));
+    }
+
+    #[test]
+    fn truncation_invalidates_opencodex_cursor_and_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("usage.jsonl");
+        let cache = dir.path().join("cache.sqlite");
+        let old = r#"{"requestId":"old","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        let replacement =
+            r#"{"requestId":"new","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        fs::write(&log, format!("{old}\n{old}\n")).unwrap();
+        let _ = load_entries_with_cache(&log, &cache).unwrap();
+        fs::write(&log, format!("{replacement}\n")).unwrap();
+
+        let rebuilt = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            rebuilt
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new"]
+        );
     }
 
     #[test]

@@ -102,6 +102,8 @@ pub struct CostSnapshotBridge {
     pub formatted_balance: Option<String>,
     #[serde(default)]
     pub daily: Vec<CostDailyPointBridge>,
+    #[serde(default)]
+    pub always_visible: bool,
 }
 
 fn default_currency() -> String {
@@ -333,10 +335,12 @@ impl ProviderUsageSnapshot {
                     .unwrap_or_else(|| metadata.session_label.to_string()),
             ),
             secondary: secondary_snap,
-            secondary_label: usage
-                .secondary
-                .as_ref()
-                .map(|_| metadata.weekly_label.to_string()),
+            secondary_label: usage.secondary.as_ref().map(|_| {
+                usage
+                    .secondary_label
+                    .clone()
+                    .unwrap_or_else(|| metadata.weekly_label.to_string())
+            }),
             model_specific: usage
                 .model_specific
                 .as_ref()
@@ -385,6 +389,7 @@ impl ProviderUsageSnapshot {
                         amount: point.amount,
                     })
                     .collect(),
+                always_visible: c.always_visible,
             }),
             plan_name: usage.login_method.clone(),
             account_email: usage.account_email.clone(),

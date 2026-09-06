@@ -453,7 +453,9 @@ export function describeCard(
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
   const hasMetrics = visibleMetrics.length > 0;
-  const hasCost = !!provider.cost && costSummaryDisplayStyle !== "hidden";
+  const hasCost =
+    !!provider.cost &&
+    (costSummaryDisplayStyle !== "hidden" || provider.cost.alwaysVisible === true);
   const hasPace = showPace && !!provider.pace;
   const hasDetails =
     !provider.error &&
@@ -538,13 +540,15 @@ export default function MenuCardDetails({
         />
       )}
 
-      {hasMetrics && hasCost && costStyle !== "hidden" && <div className="menu-card__divider" />}
+      {hasMetrics && hasCost && <div className="menu-card__divider" />}
 
-      {provider.cost && costStyle !== "hidden" && (
+      {hasCost && provider.cost && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
-            {provider.cost.balance != null && provider.cost.limit == null
-              ? provider.cost.period || t("CreditsLabel")
+            {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
+              ? t("ApiSpendTitle")
+              : provider.cost.balance != null && provider.cost.limit == null
+                ? provider.cost.period || t("CreditsLabel")
               : `${t("DetailCostTitle")} — ${provider.cost.period}`}
           </div>
           {provider.cost.balance != null && provider.cost.limit == null ? (

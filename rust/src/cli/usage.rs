@@ -576,7 +576,10 @@ fn append_usage_window_lines(
     append_secondary_window_line(
         lines,
         usage.secondary.as_ref(),
-        metadata.weekly_label,
+        usage
+            .secondary_label
+            .as_deref()
+            .unwrap_or(metadata.weekly_label),
         use_color,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
@@ -671,7 +674,10 @@ pub fn render_brief_text(provider: ProviderId, result: &ProviderFetchResult) -> 
     if let Some(secondary) = &usage.secondary {
         parts.push(format!(
             "{} {}",
-            metadata.weekly_label,
+            usage
+                .secondary_label
+                .as_deref()
+                .unwrap_or(metadata.weekly_label),
             format_percent(secondary.used_percent)
         ));
     }
@@ -810,6 +816,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn secondary_label_override_is_shared_by_full_and_brief_renderers() {
+        let result = fetch_result(
+            UsageSnapshot::new(RateWindow::new(10.0))
+                .with_secondary(RateWindow::new(20.0))
+                .with_secondary_label("Weekly"),
+        );
+        let full = render_text_with_status(ProviderId::Antigravity, &result, None, false);
+        let brief = render_brief_text(ProviderId::Antigravity, &result);
+        assert!(full.contains("Weekly:"));
+        assert!(brief.contains("Weekly 20%"));
+    }
     #[test]
     fn primary_label_override_is_shared_by_full_and_brief_renderers() {
         let result =

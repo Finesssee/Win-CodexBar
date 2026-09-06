@@ -723,7 +723,7 @@ export interface AppInfoBridge {
 
 export interface DailyCostPoint {
   date: string;
-  value: number | null;
+  value: number;
 }
 
 /** Exact local token totals per day (upstream 0.50.0 #2930). */

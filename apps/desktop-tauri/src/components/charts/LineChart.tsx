@@ -12,7 +12,7 @@ import { useChartAnimation } from "./useChartAnimation";
 
 export interface LineChartPoint {
   label: string;
-  value: number | null;
+  value: number;
 }
 
 export interface LineChartProps {
@@ -58,10 +58,9 @@ export function LineChart({
     );
   }
 
-  const values = data.flatMap((p) => (p.value == null ? [] : [p.value]));
-  const hasKnownValues = values.length > 0;
-  const max = hasKnownValues ? Math.max(...values, 0.0001) : 0.0001;
-  const min = hasKnownValues ? Math.min(...values, 0) : 0;
+  const values = data.map((p) => p.value);
+  const max = Math.max(...values, 0.0001);
+  const min = Math.min(...values, 0);
   const range = Math.max(max - min, 0.0001);
 
   const plotHeight = Math.max(1, height - 4);
@@ -75,29 +74,26 @@ export function LineChart({
   const step = data.length > 1 ? usableWidth / (data.length - 1) : 0;
   const coords = data.map((p, i) => {
     const x = pad + i * step;
-    if (p.value == null) return null;
     const finalY = pad + plotHeight - ((p.value - min) / range) * plotHeight;
     const t = anim.barProgress(i);
     const y = baselineY + (finalY - baselineY) * t;
-    return { x, y };
+    return { x, y, finalY };
   });
 
-  const segments: Array<Array<{ x: number; y: number }>> = [];
-  let segment: Array<{ x: number; y: number }> = [];
-  for (const coord of coords) {
-    if (coord) {
-      segment.push(coord);
-    } else if (segment.length > 0) {
-      segments.push(segment);
-      segment = [];
-    }
+  if (coords.length === 1) {
+    coords.push({ x: pad + usableWidth, y: coords[0].y, finalY: coords[0].finalY });
   }
-  if (segment.length > 0) segments.push(segment);
 
-  if (data.length === 1 && segments[0]?.length === 1) {
-    const point = segments[0][0];
-    segments[0].push({ x: pad + usableWidth, y: point.y });
-  }
+  const polyline = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+
+  const areaPath = area
+    ? [
+        `M ${coords[0].x.toFixed(1)} ${baselineY.toFixed(1)}`,
+        ...coords.map((c) => `L ${c.x.toFixed(1)} ${c.y.toFixed(1)}`),
+        `L ${coords[coords.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)}`,
+        "Z",
+      ].join(" ")
+    : null;
 
   const onPointMove = (e: React.MouseEvent<SVGCircleElement>, i: number) => {
     const host = containerRef.current;
@@ -106,7 +102,6 @@ export function LineChart({
     setHover({ i, x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
   const onLeave = () => setHover(null);
-  const hoveredPoint = hover ? data[hover.i] : null;
 
   return (
     <div className="chart chart--line" ref={containerRef}>
@@ -118,76 +113,49 @@ export function LineChart({
         role="img"
         aria-label={ariaLabel}
       >
-        {area &&
-          segments.map((points, i) => {
-            if (points.length < 2) return null;
-            const path = [
-              `M ${points[0].x.toFixed(1)} ${baselineY.toFixed(1)}`,
-              ...points.map((point) => `L ${point.x.toFixed(1)} ${point.y.toFixed(1)}`),
-              `L ${points[points.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)}`,
-              "Z",
-            ].join(" ");
-            return (
-              <path
-                key={`area-${i}`}
-                d={path}
-                fill={color}
-                opacity={0.18}
-                className="chart__area"
-              />
-            );
-          })}
-        {segments.map((points, i) =>
-          points.length < 2 ? null : (
-            <polyline
-              key={`line-${i}`}
-              points={points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ")}
-              fill="none"
-              stroke={color}
-              strokeWidth={1.5}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              opacity={0.95}
-              className="chart__line"
-            />
-          ),
+        {areaPath && (
+          <path d={areaPath} fill={color} opacity={0.18} className="chart__area" />
         )}
-        {data.map((p, i) => {
-          const coord = coords[i];
-          if (p.value == null || !coord) return null;
-          return (
-            <circle
-              key={`${p.label}-${i}`}
-              cx={coord.x}
-              cy={coord.y}
-              r={hover?.i === i ? 3 : 1.8}
-              fill={color}
-              className="chart__point"
-              onMouseMove={(e) => onPointMove(e, i)}
-              onMouseLeave={onLeave}
-            >
-              <title>
-                {p.label}: {fmt(p.value)}
-              </title>
-            </circle>
-          );
-        })}
+        <polyline
+          points={polyline}
+          fill="none"
+          stroke={color}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          opacity={0.95}
+          className="chart__line"
+        />
+        {data.map((p, i) => (
+          <circle
+            key={`${p.label}-${i}`}
+            cx={coords[i].x}
+            cy={coords[i].y}
+            r={hover?.i === i ? 3 : 1.8}
+            fill={color}
+            className="chart__point"
+            onMouseMove={(e) => onPointMove(e, i)}
+            onMouseLeave={onLeave}
+          >
+            <title>
+              {p.label}: {fmt(p.value)}
+            </title>
+          </circle>
+        ))}
       </svg>
       <div className="chart__axis">
         <span style={{ left: `${pad}px` }}>{data[0].label.slice(-5)}</span>
-        <span className="chart__axis-max" style={{ left: `${SVG_WIDTH / 2}px` }}>
-          {hasKnownValues ? fmt(max) : ""}
-        </span>
+        <span className="chart__axis-max" style={{ left: `${SVG_WIDTH / 2}px` }}>{fmt(max)}</span>
         <span style={{ left: `${SVG_WIDTH - pad}px` }}>{data[data.length - 1].label.slice(-5)}</span>
       </div>
-      {hover && hoveredPoint?.value != null && !anim.running && (
+      {hover && !anim.running && (
         <div
           className="chart__tooltip"
           style={{ left: hover.x, top: hover.y }}
           role="tooltip"
         >
-          <span className="chart__tooltip-label">{hoveredPoint.label}</span>
-          <strong>{fmt(hoveredPoint.value)}</strong>
+          <span className="chart__tooltip-label">{data[hover.i].label}</span>
+          <strong>{fmt(data[hover.i].value)}</strong>
         </div>
       )}
     </div>

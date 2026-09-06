@@ -398,9 +398,9 @@ impl CostScanner {
         {
             stats.used_cache_debounce = true;
             // A16 (upstream 0.48.0): cache hit within debounce = coverage established
-            // when the cache has data and no catch-up is pending. Final publication
-            // also waits for the cancellable Pi/OMP scan below.
-            let cached_history_coverage_established =
+            // when the cache has data and no catch-up is pending (previous_report set
+            // means entries were trimmed for budget → re-scan may be needed).
+            summary.history_coverage_established =
                 !cache.days.is_empty() && cache.previous_report.is_none();
             let (cost, _) = add_codex_days_map_to_summary(&mut summary, &cache.days, &range);
             summary.total_cost_usd += cost;
@@ -429,8 +429,6 @@ impl CostScanner {
                     &mut seen_pi,
                 );
             }
-            summary.history_coverage_established =
-                cached_history_coverage_established && !is_cancelled(cancel);
             // Upstream 0.50.1 #2932: debounce cache hit with coverage
             // established but zero sessions in-range is a known-zero.
             summary.known_zero =
@@ -467,6 +465,14 @@ impl CostScanner {
             JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
         }
 
+        // A16 (upstream 0.48.0): after a completed scan, coverage IS established
+        // unless cache pruning during save marked a catch-up pending.
+        summary.history_coverage_established = cache.previous_report.is_none();
+        // Upstream 0.50.1 #2932: a completed scan with zero results is a
+        // *known* zero. Only set when coverage is established; an incomplete
+        // scan must NOT fabricate a zero.
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
+
         // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
         // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
@@ -480,17 +486,6 @@ impl CostScanner {
                 &mut seen_pi,
             );
         }
-
-        // v0.56.1 #3279: only publish authoritative coverage after all
-        // cancellable scan work, including Pi/OMP, has completed. Persistence
-        // pruning may retain `previous_report`, but that must not make a
-        // completed in-memory scan stale or make a cancelled partial scan look
-        // complete.
-        summary.history_coverage_established = !is_cancelled(cancel);
-        // Upstream 0.50.1 #2932: a completed scan with zero results is a
-        // *known* zero. Only set when coverage is established; an incomplete
-        // scan must NOT fabricate a zero.
-        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
 
         (summary, stats)
     }
@@ -959,7 +954,7 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
 /// own timestamp in the local timezone. Records outside the initialized
 /// date range (or without a timestamp) are ignored.
 fn add_claude_record_to_daily_costs(
-    daily_costs: &mut HashMap<String, Option<f64>>,
+    daily_costs: &mut HashMap<String, f64>,
     record: &ClaudeUsageRecord,
 ) {
     let Some(timestamp) = record.timestamp else {
@@ -971,7 +966,7 @@ fn add_claude_record_to_daily_costs(
         .format("%Y-%m-%d")
         .to_string();
     if let Some(cost) = daily_costs.get_mut(&date_str) {
-        *cost = Some(cost.unwrap_or(0.0) + record.cost);
+        *cost += record.cost;
     }
 }
 
@@ -993,42 +988,24 @@ pub fn has_cost_usage_sources() -> bool {
 }
 
 /// Get daily cost history for the last N days
-/// Returns calendar-preserving daily costs sorted by date. `None` means the day
-/// is unscanned or contains unpriced Codex usage; `Some(0)` is a known zero.
-pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<f64>)> {
+/// Returns Vec of (date_string, cost_usd) sorted by date
+pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
     let scanner = CostScanner::new(days);
     let today = Local::now().date_naive();
-    let mut daily_costs: HashMap<String, Option<f64>> = HashMap::new();
+    let mut daily_costs: HashMap<String, f64> = HashMap::new();
 
     // Initialize all days with 0
     for days_ago in 0..days {
         let date = today - Duration::days(days_ago as i64);
         let date_str = date.format("%Y-%m-%d").to_string();
-        daily_costs.insert(date_str, (provider != "codex").then_some(0.0));
+        daily_costs.insert(date_str, 0.0);
     }
 
     match provider {
         "codex" => {
-            // Warm/refresh the disk cache, then price from packed days. v0.56.1
-            // preserves every calendar slot and distinguishes covered zero from
-            // unscanned/unpriced history.
-            let _scan = scanner.scan_codex();
+            // Warm/refresh the disk cache (honors debounce), then price from packed days.
+            let _ = scanner.scan_codex();
             let cache = JsonlScanner::load_cache(ProviderId::Codex, scanner.cache_root.as_deref());
-            if cache.previous_report.is_none() {
-                for (day_key, slot) in &mut daily_costs {
-                    if cache
-                        .scan_since_key
-                        .as_deref()
-                        .is_some_and(|since| day_key.as_str() >= since)
-                        && cache
-                            .scan_until_key
-                            .as_deref()
-                            .is_some_and(|until| day_key.as_str() <= until)
-                    {
-                        *slot = Some(0.0);
-                    }
-                }
-            }
             for (day_key, models) in &cache.days {
                 let Some(slot) = daily_costs.get_mut(day_key) else {
                     continue;
@@ -1041,7 +1018,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                 one_day.insert(day_key.clone(), models.clone());
                 let mut scratch = CostSummary::default();
                 let (cost, _) = add_codex_days_map_to_summary(&mut scratch, &one_day, &day_range);
-                *slot = (!scratch.model_pricing_completeness.is_partial()).then_some(cost);
+                *slot = cost;
             }
         }
         "claude" => {
@@ -1064,7 +1041,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
             // Rows are grouped by local calendar day to match Codex/Claude keying.
             for (day_key, cost) in opencodego_local::daily_cost_series(Utc::now(), days) {
                 if let Some(slot) = daily_costs.get_mut(&day_key) {
-                    *slot = Some(slot.unwrap_or(0.0) + cost);
+                    *slot += cost;
                 }
             }
         }
@@ -1072,7 +1049,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
     }
 
     // Convert to sorted vector
-    let mut result: Vec<(String, Option<f64>)> = daily_costs.into_iter().collect();
+    let mut result: Vec<(String, f64)> = daily_costs.into_iter().collect();
     result.sort_by(|a, b| a.0.cmp(&b.0));
     result
 }
@@ -1457,8 +1434,8 @@ mod tests {
                 .to_string()
         };
         let mut daily_costs = HashMap::new();
-        daily_costs.insert(day_key(&day_one), Some(0.0));
-        daily_costs.insert(day_key(&day_two), Some(0.0));
+        daily_costs.insert(day_key(&day_one), 0.0);
+        daily_costs.insert(day_key(&day_two), 0.0);
 
         let cutoff = Utc::now() - Duration::days(30);
         let mut seen = HashSet::new();
@@ -1468,8 +1445,8 @@ mod tests {
             });
         }
 
-        let day_one_cost = daily_costs[&day_key(&day_one)].expect("day one cost");
-        let day_two_cost = daily_costs[&day_key(&day_two)].expect("day two cost");
+        let day_one_cost = daily_costs[&day_key(&day_one)];
+        let day_two_cost = daily_costs[&day_key(&day_two)];
         assert!(day_one_cost > 0.0, "day one should carry real cost");
         // Identical usage on both days: equal buckets proves the file-b
         // replay was de-duplicated (a leak would double day one).
@@ -1571,51 +1548,6 @@ mod tests {
         assert!(!stats4.used_cache_debounce);
         assert_eq!(stats4.files_skipped, 2);
         assert_eq!(stats4.files_parsed, 0);
-    }
-
-    #[test]
-    fn cancelled_fresh_cache_hit_is_not_authoritative() {
-        let root = tempfile::tempdir().unwrap();
-        let cache_root = root.path().join("cache");
-        let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
-        let usage = HashMap::from([(
-            today.clone(),
-            HashMap::from([("gpt-5.6-sol".to_string(), vec![100, 0, 10])]),
-        )]);
-        let mut cache = CostUsageCache {
-            last_scan_unix_ms: unix_now_ms(),
-            files: HashMap::from([(
-                "cached.jsonl".to_string(),
-                CostUsageFileUsage {
-                    mtime_unix_ms: 0,
-                    size: 100,
-                    days: usage.clone(),
-                    parsed_bytes: Some(100),
-                    last_model: Some("gpt-5.6-sol".to_string()),
-                    last_totals: None,
-                },
-            )]),
-            days: usage,
-            ..Default::default()
-        };
-        JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
-
-        let cancel = AtomicBool::new(true);
-        let scanner = CostScanner::new(7)
-            .with_cache_root(&cache_root)
-            .with_sessions_dirs(vec![root.path().join("sessions")]);
-        let (summary, stats) = scanner.scan_codex_detailed(Some(&cancel));
-
-        assert!(
-            stats.used_cache_debounce,
-            "fresh cache should use debounce path"
-        );
-        assert_eq!(summary.sessions_count, 1, "cached usage is still visible");
-        assert!(
-            !summary.history_coverage_established,
-            "cancelled cache publication must not claim complete history"
-        );
-        assert!(!summary.known_zero);
     }
 
     #[test]

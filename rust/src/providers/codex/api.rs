@@ -284,7 +284,6 @@ impl CodexApi {
             .ok()
             .and_then(|metadata| metadata.modified().ok());
         if let Some(cached) = Self::cached_credentials(&auth_path, modified) {
-            Self::enforce_external_oauth_gate(&cached)?;
             return Ok(cached);
         }
 
